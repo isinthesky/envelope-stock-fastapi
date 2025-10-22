@@ -136,10 +136,22 @@ class StrategyEngine:
 
         current_price = prices[-1]
 
-        # 3. 시그널 생성
-        signal = self.indicators.generate_bollinger_signal(
-            current_price, bb["upper"], bb["lower"]
+        # 3. 시그널 생성 (볼린저 밴드 + 엔벨로프 결합)
+        signal = self.indicators.generate_combined_signal(
+            current_price, bb, envelope, threshold=0.001, use_strict_mode=True
         )
+
+        # 시그널 강도 계산 (디버깅/로깅용)
+        signal_strength = self.indicators.get_signal_strength(current_price, bb, envelope)
+
+        if signal != "hold":
+            print(
+                f"📊 {symbol} Signal: {signal.upper()} | "
+                f"Price: {current_price:.0f} | "
+                f"BB: [{bb['lower']:.0f}, {bb['middle']:.0f}, {bb['upper']:.0f}] | "
+                f"ENV: [{envelope['lower']:.0f}, {envelope['middle']:.0f}, {envelope['upper']:.0f}] | "
+                f"Strength: BB={signal_strength['bb_position']:.2f}, ENV={signal_strength['env_position']:.2f}"
+            )
 
         # 4. 포지션 확인 및 주문 실행
         await self._handle_signal(strategy, symbol, signal, current_price, config, session)

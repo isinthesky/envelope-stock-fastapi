@@ -228,3 +228,127 @@ class TechnicalIndicators:
             bool: 스퀴즈 여부
         """
         return bandwidth < threshold
+
+    @classmethod
+    def generate_combined_signal(
+        cls,
+        current_price: float,
+        bb_bands: dict[str, float | None],
+        envelope_bands: dict[str, float | None],
+        threshold: float = 0.001,
+        use_strict_mode: bool = True,
+    ) -> str:
+        """
+        볼린저 밴드 + 엔벨로프 결합 시그널 생성
+
+        두 지표를 함께 활용하여 더 신뢰도 높은 매매 시그널 생성
+
+        매수 조건:
+        - 볼린저 밴드 하단 돌파 (과매도)
+        - AND (strict mode) / OR (loose mode) 엔벨로프 하단 근처
+
+        매도 조건:
+        - 볼린저 밴드 상단 돌파 (과매수)
+        - AND (strict mode) / OR (loose mode) 엔벨로프 상단 근처
+
+        Args:
+            current_price: 현재가
+            bb_bands: 볼린저 밴드 {"upper", "middle", "lower"}
+            envelope_bands: 엔벨로프 {"upper", "middle", "lower"}
+            threshold: 돌파 판정 임계값 (기본: 0.1%)
+            use_strict_mode: 엄격 모드 (두 지표 모두 만족해야 시그널 생성)
+
+        Returns:
+            str: "buy" (매수), "sell" (매도), "hold" (보유)
+        """
+        if (
+            bb_bands["upper"] is None
+            or bb_bands["lower"] is None
+            or envelope_bands["upper"] is None
+            or envelope_bands["lower"] is None
+        ):
+            return "hold"
+
+        bb_upper: float = bb_bands["upper"]
+        bb_lower: float = bb_bands["lower"]
+        env_upper: float = envelope_bands["upper"]
+        env_lower: float = envelope_bands["lower"]
+
+        # 볼린저 밴드 시그널
+        bb_oversold = current_price < bb_lower * (1 - threshold)
+        bb_overbought = current_price > bb_upper * (1 + threshold)
+
+        # 엔벨로프 시그널
+        env_oversold = current_price < env_lower * (1 + threshold)
+        env_overbought = current_price > env_upper * (1 - threshold)
+
+        # 결합 시그널 생성
+        if use_strict_mode:
+            # 엄격 모드: 두 지표 모두 만족
+            if bb_oversold and env_oversold:
+                return "buy"
+            if bb_overbought and env_overbought:
+                return "sell"
+        else:
+            # 완화 모드: 하나라도 만족
+            if bb_oversold or env_oversold:
+                return "buy"
+            if bb_overbought or env_overbought:
+                return "sell"
+
+        return "hold"
+
+    @classmethod
+    def get_signal_strength(
+        cls,
+        current_price: float,
+        bb_bands: dict[str, float | None],
+        envelope_bands: dict[str, float | None],
+    ) -> dict[str, float]:
+        """
+        시그널 강도 계산
+
+        현재가가 밴드에서 얼마나 벗어났는지 비율로 계산
+
+        Args:
+            current_price: 현재가
+            bb_bands: 볼린저 밴드
+            envelope_bands: 엔벨로프
+
+        Returns:
+            dict: {"bb_position": 볼린저 위치 (-1~1), "env_position": 엔벨로프 위치 (-1~1)}
+        """
+        if (
+            bb_bands["upper"] is None
+            or bb_bands["middle"] is None
+            or bb_bands["lower"] is None
+            or envelope_bands["upper"] is None
+            or envelope_bands["middle"] is None
+            or envelope_bands["lower"] is None
+        ):
+            return {"bb_position": 0.0, "env_position": 0.0}
+
+        bb_middle: float = bb_bands["middle"]
+        bb_upper: float = bb_bands["upper"]
+        bb_lower: float = bb_bands["lower"]
+
+        env_middle: float = envelope_bands["middle"]
+        env_upper: float = envelope_bands["upper"]
+        env_lower: float = envelope_bands["lower"]
+
+        # 볼린저 밴드 포지션 (-1: 하단, 0: 중간, 1: 상단)
+        if current_price >= bb_middle:
+            bb_position = (current_price - bb_middle) / (bb_upper - bb_middle) if bb_upper != bb_middle else 0
+        else:
+            bb_position = (current_price - bb_middle) / (bb_middle - bb_lower) if bb_middle != bb_lower else 0
+
+        # 엔벨로프 포지션
+        if current_price >= env_middle:
+            env_position = (current_price - env_middle) / (env_upper - env_middle) if env_upper != env_middle else 0
+        else:
+            env_position = (current_price - env_middle) / (env_middle - env_lower) if env_middle != env_lower else 0
+
+        return {
+            "bb_position": max(-2.0, min(2.0, bb_position)),  # -2 ~ 2 범위로 제한
+            "env_position": max(-2.0, min(2.0, env_position)),
+        }
