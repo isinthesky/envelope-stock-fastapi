@@ -280,3 +280,27 @@ class EnvironmentError(ConfigurationError):
 
     def __init__(self, variable: str):
         super().__init__(message=f"Missing or invalid environment variable: {variable}")
+
+
+# ==================== Backtest Exceptions ====================
+
+
+class BacktestError(BusinessLogicError):
+    """백테스팅 관련 예외"""
+
+    def __init__(self, message: str, details: dict[str, Any] | None = None):
+        super().__init__(message=f"Backtest error: {message}", details=details)
+
+
+class BacktestDataError(BacktestError):
+    """백테스팅 데이터 오류 예외"""
+
+    def __init__(self, message: str):
+        super().__init__(message=f"Data error: {message}")
+
+
+class BacktestConfigError(BacktestError):
+    """백테스팅 설정 오류 예외"""
+
+    def __init__(self, message: str):
+        super().__init__(message=f"Configuration error: {message}")
