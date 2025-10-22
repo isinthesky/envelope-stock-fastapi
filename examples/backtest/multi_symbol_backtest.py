@@ -34,11 +34,7 @@ async def main():
     print("=" * 80)
 
     # 1. 의존성 초기화
-    kis_client = KISAPIClient(
-        app_key=settings.kis_app_key,
-        app_secret=settings.kis_app_secret,
-        base_url=settings.kis_base_url
-    )
+    kis_client = KISAPIClient()
     redis_client = await get_redis_client()
 
     # 2. 서비스 초기화
