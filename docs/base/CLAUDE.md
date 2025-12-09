@@ -25,6 +25,15 @@
 - ✅ **계좌 관리** - 잔고, 포지션, 손익 분석
 - ✅ **리스크 관리** - 손실 제한, 포지션 관리
 - ✅ **대시보드** - 실시간 모니터링 및 관리
+- ✅ **차트 데이터 캐싱** - PostgreSQL `ohlcv_cache` 테이블에 일봉 데이터 저장 (API 호출 최소화)
+
+### 🆕 최근 업데이트 (2025-02)
+
+- 백테스트 도메인에 **OHLCV DB 캐시** 도입, 장기간 데이터 재사용으로 호출량 절감
+- `MarketDataService.get_chart_data`가 **기간 기반 API**(`inquire-daily-itemchartprice`)를 사용해 누락 구간을 최소화
+- `BacktestService`가 실제 수집 구간을 보고하도록 개선, 트렁케이션 여부와 커버리지 비율 확인 가능
+- `examples/backtest/simple_backtest.py`가 **DB 세션과 Redis 캐시**를 동시에 초기화하여 실전 실행 플로우 예시 제공
+- `scripts/init_db_tables.py` 추가: `python scripts/init_db_tables.py`로 `ohlcv_cache` 포함 테이블 일괄 생성
 
 ---
 
@@ -40,31 +49,27 @@
 │   ├── SERVICE.md              # 서비스 구현 가이드
 │   └── convention.md           # 코딩 컨벤션
 │
-├── 📂 examples_llm/            # LLM용 기능 단위 샘플 코드
-│   ├── kis_auth.py             # 인증 공통 함수
-│   ├── domestic_stock/         # 국내주식 (74개 API)
-│   ├── overseas_stock/         # 해외주식 (34개 API)
-│   ├── etfetn/                 # ETF/ETN (2개 API)
-│
-├── 📂 examples_user/           # 사용자용 통합 예제
-│   ├── kis_auth.py             # 인증 공통 함수
-│   └── [카테고리]/
-│       ├── [카테고리]_functions.py     # REST API 통합 함수
-│       ├── [카테고리]_examples.py      # REST API 사용 예제
-│       ├── [카테고리]_functions_ws.py  # WebSocket 통합 함수
-│       └── [카테고리]_examples_ws.py   # WebSocket 사용 예제
+├── 📂 examples/                # 실행 가능한 예제 모음
+│   ├── examples_llm/           # LLM 연동용 API 단위 샘플
+│   ├── examples_user/          # 사용자용 통합 예제
+│   └── backtest/               # 백테스트 런너 및 전략 샘플
 │
 ├── 📂 MCP/                     # MCP 서버 (Claude Desktop 연동)
 │   └── Kis_Trading_MCP/        # Docker 기반 MCP 서버
 │
-├── 📂 src/ (예정)              # FastAPI 서버 소스
-│   ├── adapters/               # 외부 시스템 연동
-│   ├── application/            # 비즈니스 로직
-│   └── settings/               # 환경 설정
+├── 📂 scripts/                 # 운영 스크립트 (DB 초기화 등)
+│   └── init_db_tables.py       # OHLCV 캐시 포함 테이블 생성
 │
-├── 📂 stock_info/             # 종목 정보 파일
-├── kis_devlp.yaml             # API 설정 파일
-└── pyproject.toml             # 프로젝트 의존성
+├── 📂 src/                     # FastAPI 서버 소스
+│   ├── adapters/               # 외부 시스템 연동 (DB, Cache, KIS API 등)
+│   ├── application/            # 도메인 서비스 및 유즈케이스
+│   ├── settings/               # Pydantic 기반 환경 설정
+│   └── main.py                 # ASGI 엔트리포인트
+│
+├── 📂 static/                  # 대시보드 정적 자산
+├── 📂 tests/                   # 도메인 단위 Pytest 스위트
+├── alembic/                    # DB 마이그레이션 스크립트
+└── pyproject.toml              # 프로젝트 의존성 및 스크립트 정의
 ```
 
 ### 핵심 아키텍처 패턴
@@ -126,11 +131,20 @@ my_acct_stock: "증권계좌 8자리"
 my_prod: "01"  # 종합계좌
 ```
 
-### 3. 샘플 코드 실행
+### 3. 데이터베이스 초기화
+
+OHLCV 캐시를 포함한 모든 테이블을 생성하려면 다음 스크립트를 실행합니다.
+
+```bash
+uv run python scripts/init_db_tables.py
+```
+> `.env` 또는 환경 변수에 `DATABASE_URL`이 설정되어 있어야 하며, Postgres 인스턴스가 실행 중이어야 합니다.
+
+### 4. 샘플 코드 실행
 
 **examples_user 방식 (통합 예제):**
 ```bash
-cd examples_user/domestic_stock
+cd examples/examples_user/domestic_stock
 
 # REST API 예제
 python domestic_stock_examples.py
@@ -141,11 +155,21 @@ python domestic_stock_examples_ws.py
 
 **examples_llm 방식 (기능 단위):**
 ```bash
-cd examples_llm/domestic_stock/inquire_price
+cd examples/examples_llm/domestic_stock/inquire_price
 
 # 특정 API 테스트
 python chk_inquire_price.py
 ```
+
+---
+
+## 🧠 백테스팅 데이터 파이프라인 & 캐시 전략
+
+- **실행 흐름**: `examples/backtest/simple_backtest.py`가 Redis와 함께 비동기 DB 세션을 열고 `BacktestService`에 주입합니다.
+- **캐시 우선 로드**: `BacktestDataLoader.load_ohlcv_data`는 `OHLCVRepository`를 통해 `ohlcv_cache` 테이블을 조회하고, 요청 구간이 완전히 채워져 있을 때 DataFrame을 즉시 반환합니다.
+- **API 수집 개선**: 캐시 미스 시 `MarketDataService.get_chart_data`가 `inquire-daily-itemchartprice` 엔드포인트를 사용해 최대 90일 단위로 과거 데이터를 역순 탐색합니다.
+- **DB 저장**: 수집된 캔들은 `save_candles_bulk`로 일괄 업서트되며, 재실행 시 중복 호출 없이 재사용됩니다.
+- **데이터 품질**: 실제 수집 구간(`actual_start`, `actual_end`)과 커버리지 비율이 로그에 기록되어 KIS API 제한으로 인한 절단 여부를 확인할 수 있습니다.
 
 ---
 
@@ -208,11 +232,11 @@ python chk_inquire_price.py
 
 ### 환경 요구사항
 - Python 3.9+
-- PostgreSQL 14+ (예정)
-- Redis 7+ (예정)
+- PostgreSQL 14+
+- Redis 7+
 - UV Package Manager
 
-### 개발 명령어 (예정)
+### 개발 명령어
 ```bash
 # 개발 서버 실행
 uvicorn src.main:app --reload --port 8000
@@ -231,7 +255,7 @@ black src/
 isort src/
 ```
 
-### 환경 변수 (.env) (예정)
+### 환경 변수 (.env)
 ```env
 # Database
 DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/kis_trading
@@ -304,6 +328,13 @@ kws = ka.KISWebSocket(api_url="/tryitout")
 kws.subscribe(request=asking_price_krx, data=["005930"])
 ```
 
+**백테스트 실행 (examples/backtest):**
+```bash
+uv run python examples/backtest/simple_backtest.py
+```
+- 최초 실행 시 KIS API에서 데이터를 내려받아 `ohlcv_cache` 테이블에 적재합니다.
+- 이후 동일 구간 재실행 시 DB 캐시를 사용해 호출 시간을 단축합니다.
+
 ---
 
 ## 🔧 MCP 서버 (Claude Desktop 연동)
@@ -360,27 +391,28 @@ docker run -d \
 
 ## 🎯 다음 개발 단계
 
-### Phase 1: 기본 아키텍처 구축 (예정)
-- [ ] FastAPI 프로젝트 초기 설정
-- [ ] 헥사고날 아키텍처 폴더 구조 생성
-- [ ] BaseRepository + Mixin 패턴 구현
-- [ ] 의존성 주입 시스템 구축
+### Phase 1: 기본 아키텍처 구축 (완료)
+- [x] FastAPI 프로젝트 초기 설정
+- [x] 헥사고날 아키텍처 폴더 구조 정비
+- [x] BaseRepository + Mixin 패턴 구현
+- [x] 의존성 주입 및 비동기 세션 관리 구성
 
-### Phase 2: 핵심 도메인 구현 (예정)
-- [ ] Auth Domain (토큰 발급/갱신)
+### Phase 2: 핵심 도메인 구현 (진행 중)
+- [x] MarketData Domain (기간 기반 차트 API 연동 및 Redis 캐시)
+- [x] Backtest Domain (OHLCV 로더, DB 캐시, 전략 엔진 연동)
 - [ ] Order Domain (주문 생성/조회)
 - [ ] Account Domain (잔고/포지션)
-- [ ] MarketData Domain (시세 조회)
+- [ ] Auth Domain (토큰 발급/갱신)
 
-### Phase 3: 실시간 시스템 (예정)
+### Phase 3: 실시간 시스템 (준비)
 - [ ] WebSocket Domain (실시간 시세)
 - [ ] 이벤트 핸들링 시스템
 - [ ] 실시간 대시보드
 
-### Phase 4: 자동매매 전략 (예정)
-- [ ] Strategy Domain (전략 실행)
+### Phase 4: 자동매매 전략 (준비)
+- [ ] Strategy Domain (전략 실행 고도화)
 - [ ] 리스크 관리 시스템
-- [ ] 백테스팅 기능
+- [ ] 실거래 연동 자동화
 
 ---
 
@@ -397,9 +429,9 @@ docker run -d \
 ## 📞 문의 및 지원
 
 - **프로젝트**: KIS Trading API Service
-- **문서 위치**: `/docs/CLAUDE.md`
-- **최종 업데이트**: 2025년 10월 6일
-- **문서 버전**: 1.0 (초기 설계)
+- **문서 위치**: `docs/base/CLAUDE.md`
+- **최종 업데이트**: 2025년 02월 (OHLCV 캐시 반영)
+- **문서 버전**: 1.1
 
 ---
 

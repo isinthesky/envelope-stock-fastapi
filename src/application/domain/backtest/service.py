@@ -7,6 +7,8 @@ Backtest Service - 백테스팅 서비스
 
 from datetime import datetime
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.application.common.exceptions import BacktestDataError, BacktestError
 from src.application.domain.backtest.data_loader import BacktestDataLoader
 from src.application.domain.backtest.dto import (
@@ -22,13 +24,19 @@ from src.application.domain.market_data.service import MarketDataService
 class BacktestService:
     """백테스팅 서비스"""
 
-    def __init__(self, market_data_service: MarketDataService):
+    def __init__(
+        self,
+        market_data_service: MarketDataService,
+        db_session: AsyncSession | None = None,
+    ):
         """
         Args:
             market_data_service: 시세 데이터 서비스
+            db_session: DB 세션 (캐싱 사용 시 필수)
         """
         self.market_data_service = market_data_service
-        self.data_loader = BacktestDataLoader(market_data_service)
+        self.db_session = db_session
+        self.data_loader = BacktestDataLoader(market_data_service, db_session)
 
     async def run_backtest(
         self,
@@ -51,17 +59,22 @@ class BacktestService:
             # 1. 데이터 로드
             print(f"📥 데이터 수집 중: {request.symbol} ({request.start_date.date()} ~ {request.end_date.date()})")
 
-            data = await self.data_loader.load_ohlcv_data(
+            data, actual_start, actual_end = await self.data_loader.load_ohlcv_data(
                 symbol=request.symbol,
                 start_date=request.start_date,
                 end_date=request.end_date
             )
 
             print(f"✅ 데이터 수집 완료: {len(data)}건")
-
-            # 데이터 요약 출력
             summary = self.data_loader.get_data_summary(data)
-            print(f"  - 기간: {summary['start_date'].date()} ~ {summary['end_date'].date()}")
+
+            if actual_start > request.start_date or actual_end < request.end_date:
+                print(
+                    "⚠️ 요청한 기간 전체가 제공되지 않았습니다. "
+                    f"KIS API 제한으로 {actual_start.date()} ~ {actual_end.date()} 범위만 사용합니다."
+                )
+
+            print(f"  - 기간: {actual_start.date()} ~ {actual_end.date()}")
             print(f"  - 가격 범위: {summary['price_min']:,.0f} ~ {summary['price_max']:,.0f}")
             print(f"  - 평균 거래량: {summary['avg_volume']:,}")
 
@@ -77,8 +90,8 @@ class BacktestService:
 
             result = await engine.run(
                 data=data,
-                start_date=request.start_date,
-                end_date=request.end_date
+                start_date=actual_start,
+                end_date=actual_end
             )
 
             print(f"✅ 백테스팅 완료")
@@ -167,15 +180,16 @@ class BacktestService:
         """
         try:
             # 데이터 로드
-            data = await self.data_loader.load_ohlcv_data(
+            data, actual_start, actual_end = await self.data_loader.load_ohlcv_data(
                 symbol=symbol,
                 start_date=start_date,
                 end_date=end_date
             )
 
             # 결측일 검증
+            coverage_start = max(start_date, actual_start)
             missing_result = self.data_loader.validate_missing_dates(
-                data, start_date, end_date
+                data, coverage_start, actual_end
             )
 
             # 데이터 요약
@@ -185,10 +199,13 @@ class BacktestService:
                 "symbol": symbol,
                 "data_quality": {
                     "total_rows": summary["total_rows"],
-                    "start_date": summary["start_date"],
-                    "end_date": summary["end_date"],
+                    "requested_start": start_date,
+                    "requested_end": end_date,
+                    "start_date": actual_start,
+                    "end_date": actual_end,
                     "coverage_rate": missing_result["coverage_rate"],
-                    "missing_count": missing_result["missing_count"]
+                    "missing_count": missing_result["missing_count"],
+                    "is_truncated": actual_start > start_date or actual_end < end_date,
                 },
                 "price_stats": {
                     "min": float(summary["price_min"]),

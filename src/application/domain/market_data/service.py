@@ -3,7 +3,7 @@
 MarketData Service - 시세 데이터 조회 서비스
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from src.adapters.cache.redis_client import RedisClient
@@ -11,6 +11,7 @@ from src.adapters.external.kis_api.client import KISAPIClient
 from src.application.common.decorators import cache
 from src.application.common.exceptions import KISAPIServiceError
 from src.application.domain.market_data.dto import (
+    CandleDTO,
     ChartResponseDTO,
     OrderbookResponseDTO,
     PriceResponseDTO,
@@ -206,28 +207,29 @@ class MarketDataService:
             KISAPIServiceError: API 호출 실패
         """
         try:
-            # KIS API 국내주식 일봉 조회
-            path = "/uapi/domestic-stock/v1/quotations/inquire-daily-price"
-
-            # 날짜 포맷팅 (YYYYMMDD)
-            end_dt = end_date or datetime.now()
-            params = {
-                "FID_COND_MRKT_DIV_CODE": "J",
-                "FID_INPUT_ISCD": symbol,
-                "FID_PERIOD_DIV_CODE": "D",  # D: 일봉, W: 주봉, M: 월봉
-                "FID_ORG_ADJ_PRC": "0",  # 0: 수정주가, 1: 원주가
+            interval_map = {
+                "1d": "D",
+                "1w": "W",
+                "1m": "M",
+                "1y": "Y",
             }
-            headers = {"tr_id": "FHKST01010400"}
 
-            response = await self.kis_client.get(path, params=params, headers=headers)
-            output_list = response.get("output", [])
+            if interval not in interval_map:
+                # 기본 엔드포인트로 최신 일봉 데이터만 제공
+                legacy_path = "/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+                params = {
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_INPUT_ISCD": symbol,
+                    "FID_PERIOD_DIV_CODE": "D",
+                    "FID_ORG_ADJ_PRC": "0",
+                }
+                headers = {"tr_id": "FHKST01010400"}
+                legacy_response = await self.kis_client.get(
+                    legacy_path, params=params, headers=headers
+                )
+                legacy_output = legacy_response.get("output", [])
 
-            # 캔들 데이터 파싱
-            from src.application.domain.market_data.dto import CandleDTO
-
-            candles = []
-            for item in output_list:
-                candles.append(
+                candles = [
                     CandleDTO(
                         timestamp=datetime.strptime(item.get("stck_bsop_date", ""), "%Y%m%d"),
                         open=Decimal(item.get("stck_oprc", "0")),
@@ -236,10 +238,58 @@ class MarketDataService:
                         close=Decimal(item.get("stck_clpr", "0")),
                         volume=int(item.get("acml_vol", "0")),
                     )
+                    for item in legacy_output
+                ]
+
+                candles.sort(key=lambda c: c.timestamp)
+
+                return ChartResponseDTO(
+                    symbol=symbol,
+                    symbol_name=None,
+                    interval=interval,
+                    candles=candles,
                 )
 
+            resolved_end = end_date or datetime.now()
+            resolved_start = start_date or (resolved_end - timedelta(days=90))
+
+            if resolved_start > resolved_end:
+                resolved_start, resolved_end = resolved_end, resolved_start
+
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_DATE_1": resolved_start.strftime("%Y%m%d"),
+                "FID_INPUT_DATE_2": resolved_end.strftime("%Y%m%d"),
+                "FID_PERIOD_DIV_CODE": interval_map[interval],
+                "FID_ORG_ADJ_PRC": "0",
+            }
+
+            headers = {"tr_id": "FHKST03010100"}
+            path = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+
+            response = await self.kis_client.get(path, params=params, headers=headers)
+            output_list = response.get("output2") or response.get("output", [])
+
+            candles = [
+                CandleDTO(
+                    timestamp=datetime.strptime(item.get("stck_bsop_date", ""), "%Y%m%d"),
+                    open=Decimal(item.get("stck_oprc", "0")),
+                    high=Decimal(item.get("stck_hgpr", "0")),
+                    low=Decimal(item.get("stck_lwpr", "0")),
+                    close=Decimal(item.get("stck_clpr", "0")),
+                    volume=int(item.get("acml_vol", "0")),
+                )
+                for item in output_list
+            ]
+
+            candles.sort(key=lambda c: c.timestamp)
+
             return ChartResponseDTO(
-                symbol=symbol, symbol_name=None, interval=interval, candles=candles
+                symbol=symbol,
+                symbol_name=None,
+                interval=interval,
+                candles=candles,
             )
 
         except Exception as e:

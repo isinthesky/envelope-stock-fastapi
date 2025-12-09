@@ -8,6 +8,7 @@ from src.adapters.database.repositories.base_repository import (
     SearchableMixin,
     StatsMixin,
 )
+from src.adapters.database.repositories.ohlcv_repository import OHLCVRepository
 from src.adapters.database.repositories.order_repository import OrderRepository
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "SearchableMixin",
     "PaginationMixin",
     "StatsMixin",
+    "OHLCVRepository",
     "OrderRepository",
 ]
