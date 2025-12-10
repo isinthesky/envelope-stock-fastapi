@@ -50,8 +50,23 @@ class Settings(BaseSettings):
 
     # ==================== 캐시 TTL ====================
     cache_ttl_market_data: int = Field(default=5, ge=1, description="시세 데이터 캐시 TTL (초)")
+    cache_ttl_orderbook_snapshot: int = Field(
+        default=15, ge=1, description="호가 스냅샷 캐시 TTL (초)"
+    )
+    cache_ttl_daily_candles: int = Field(
+        default=86400, ge=1, description="일봉/주봉/월봉 캐시 TTL (초)"
+    )
+    cache_ttl_intraday_candles: int = Field(
+        default=900, ge=1, description="분봉 캐시 TTL (초)"
+    )
     cache_ttl_account: int = Field(default=30, ge=1, description="계좌 정보 캐시 TTL (초)")
     cache_ttl_token: int = Field(default=86400, ge=1, description="토큰 캐시 TTL (초)")
+    cache_retention_ticks_days: int = Field(
+        default=7, ge=1, description="틱/체결 데이터 보관 기간 (일)"
+    )
+    cache_retention_orders_days: int = Field(
+        default=365, ge=1, description="주문/체결 기록 보관 기간 (일)"
+    )
 
     # ==================== KIS API 설정 (실전투자) ====================
     kis_app_key: str = Field(default="", description="KIS 실전투자 앱키")
@@ -86,9 +101,50 @@ class Settings(BaseSettings):
     )
 
     # ==================== KIS API Rate Limit ====================
-    kis_api_rate_limit: int = Field(default=20, ge=1, description="KIS API 분당 호출 제한")
+    kis_api_rate_limit: int = Field(default=10, ge=1, description="KIS API 초당 호출 제한")
+    kis_api_rate_window_seconds: int = Field(default=1, ge=1, description="Rate Limit 윈도우 (초)")
     kis_api_retry_count: int = Field(default=3, ge=0, description="API 호출 실패 시 재시도 횟수")
     kis_api_timeout: int = Field(default=10, ge=1, description="API 호출 타임아웃 (초)")
+    kis_api_backoff_sequence: list[int] = Field(
+        default_factory=lambda: [5, 10, 20],
+        description="429/5xx 연속 발생 시 대기 시간 시퀀스 (초)",
+    )
+    kis_api_backoff_trigger_errors: int = Field(
+        default=3, ge=1, description="Backoff 발동 전 연속 오류 수"
+    )
+    kis_api_cooldown_seconds: int = Field(
+        default=120, ge=1, description="Backoff 시퀀스 반복 후 쿨다운 시간 (초)"
+    )
+    kis_api_backoff_cycles_before_cooldown: int = Field(
+        default=3, ge=1, description="쿨다운 전 backoff 시퀀스 반복 횟수"
+    )
+    order_min_interval_ms: int = Field(
+        default=150, ge=0, description="주문 간 최소 간격 (ms)"
+    )
+    order_same_symbol_interval_ms: int = Field(
+        default=300, ge=0, description="동일 종목 연속 주문 최소 간격 (ms)"
+    )
+    order_response_timeout: float = Field(
+        default=2.5, ge=0.5, description="주문/정정/취소 응답 타임아웃 (초)"
+    )
+    order_retry_delay_seconds: float = Field(
+        default=5.0, ge=0.0, description="주문 실패 시 재시도 대기 시간 (초)"
+    )
+    order_max_amendments_per_order: int = Field(
+        default=5, ge=1, description="단일 주문번호당 정정/취소 최대 횟수"
+    )
+    risk_max_exposure_per_symbol: float = Field(
+        default=0.08, ge=0.0, le=1.0, description="종목당 최대 계좌 노출 비율"
+    )
+    risk_max_risk_per_trade: float = Field(
+        default=0.02, ge=0.0, le=1.0, description="단일 트레이드 리스크 한도 (계좌 대비)"
+    )
+    risk_max_concurrent_positions: int = Field(
+        default=3, ge=1, description="동시 보유 최대 종목 수"
+    )
+    risk_daily_loss_stop: float = Field(
+        default=0.04, ge=0.0, le=1.0, description="일일 손실 중단 한도 (계좌 대비)"
+    )
 
     # ==================== 자동매매 설정 ====================
     trading_environment: Literal["prod", "vps"] = Field(
@@ -142,8 +198,8 @@ class Settings(BaseSettings):
 
     # ==================== WebSocket 설정 ====================
     ws_max_connections: int = Field(default=100, ge=1, description="WebSocket 최대 연결 수")
-    ws_ping_interval: int = Field(default=30, ge=1, description="WebSocket Ping 간격 (초)")
-    ws_ping_timeout: int = Field(default=10, ge=1, description="WebSocket Ping 타임아웃 (초)")
+    ws_ping_interval: int = Field(default=20, ge=1, description="WebSocket Ping 간격 (초)")
+    ws_ping_timeout: int = Field(default=5, ge=1, description="WebSocket Pong 대기 시간 (초)")
 
     # ==================== 개발 도구 ====================
     uvicorn_reload: bool = Field(default=True, description="Uvicorn 자동 리로드")

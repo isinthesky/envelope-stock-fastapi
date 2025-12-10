@@ -355,6 +355,38 @@ class RedisClient:
         key = f"account:{account_no}"
         return await self.get(key)
 
+    async def cache_chart_data(
+        self, symbol: str, interval: str, data: dict[str, Any], ttl: int
+    ) -> bool:
+        """
+        차트 데이터 캐싱
+
+        Args:
+            symbol: 종목코드
+            interval: 차트 간격 (예: 1d, 1w)
+            data: 차트 데이터
+            ttl: TTL (초)
+
+        Returns:
+            bool: 성공 여부
+        """
+        key = f"chart:{interval}:{symbol}"
+        return await self.set(key, data, ttl=ttl)
+
+    async def get_chart_data(self, symbol: str, interval: str) -> dict[str, Any] | None:
+        """
+        차트 데이터 조회
+
+        Args:
+            symbol: 종목코드
+            interval: 차트 간격
+
+        Returns:
+            dict[str, Any] | None: 차트 데이터 또는 None
+        """
+        key = f"chart:{interval}:{symbol}"
+        return await self.get(key)
+
 
 # ==================== 싱글톤 인스턴스 ====================
 

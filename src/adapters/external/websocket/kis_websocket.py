@@ -35,6 +35,7 @@ class KISWebSocket:
         self.decrypt_keys: dict[str, tuple[str, str]] = {}  # tr_id -> (iv, key)
         self.on_message_callback: Callable[[str, dict[str, Any]], None] | None = None
         self.is_running = False
+        self.last_message_at: float | None = None
 
     # ==================== 연결 관리 ====================
 
@@ -47,6 +48,7 @@ class KISWebSocket:
                 ping_interval=settings.ws_ping_interval,
                 ping_timeout=settings.ws_ping_timeout,
             )
+            self.last_message_at = asyncio.get_event_loop().time()
             self.is_running = True
         except Exception as e:
             raise KISWebSocketError(f"WebSocket connection failed: {e}")
@@ -145,6 +147,7 @@ class KISWebSocket:
         Args:
             raw_message: 원본 메시지
         """
+        self._mark_activity()
         # 실시간 데이터 (0|1로 시작)
         if raw_message[0] in ("0", "1"):
             await self._handle_realtime_data(raw_message)
@@ -206,6 +209,10 @@ class KISWebSocket:
 
         except json.JSONDecodeError:
             pass
+
+    def _mark_activity(self) -> None:
+        """마지막 수신 시각 기록"""
+        self.last_message_at = asyncio.get_event_loop().time()
 
     # ==================== 유틸리티 ====================
 

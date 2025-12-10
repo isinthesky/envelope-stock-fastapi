@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stock API Admin</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 24px; }
+    h1 { margin-bottom: 12px; }
+    section { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+    label { font-weight: 600; margin-right: 6px; }
+    input, select, textarea { padding: 6px; width: 220px; }
+    textarea { width: 100%; min-height: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    button { padding: 8px 12px; cursor: pointer; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 6px; max-height: 320px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Stock API Admin Dashboard</h1>
+  <p>도메인 API를 빠르게 조회/제어하는 Jinja 페이지입니다. 모든 상태 변경은 API 호출로 이루어집니다.</p>
+
+  <section>
+    <h2>Auth</h2>
+    <div class="row">
+      <button onclick="postJson('/api/v1/auth/token', {force: false}, 'auth_output')">토큰 발급</button>
+      <button onclick="postJson('/api/v1/auth/token/refresh', {}, 'auth_output')">토큰 갱신</button>
+      <button onclick="getJson('/api/v1/auth/token/status', 'auth_output')">토큰 상태</button>
+      <button onclick="getJson('/api/v1/auth/environment', 'auth_output')">거래 환경</button>
+      <button onclick="postJson('/api/v1/auth/websocket/approval', {}, 'auth_output')">WS 승인 키</button>
+    </div>
+    <pre id="auth_output">결과 출력</pre>
+  </section>
+
+  <section>
+    <h2>Market Data</h2>
+    <div class="row">
+      <label>Symbol</label><input id="market_symbol" value="005930" />
+      <label>Interval</label><input id="market_interval" value="1d" />
+    </div>
+    <div class="row">
+      <button onclick="getMarketPrice()">현재가</button>
+      <button onclick="getOrderbook()">호가</button>
+      <button onclick="getChart()">차트</button>
+    </div>
+    <pre id="market_output">결과 출력</pre>
+  </section>
+
+  <section>
+    <h2>Account</h2>
+    <div class="row">
+      <label>Account No</label><input id="account_no" placeholder="선택" />
+    </div>
+    <div class="row">
+      <button onclick="getAccountBalance()">잔고</button>
+      <button onclick="getPositions()">포지션</button>
+    </div>
+    <pre id="account_output">결과 출력</pre>
+  </section>
+
+  <section>
+    <h2>Order</h2>
+    <div class="row">
+      <label>Symbol</label><input id="order_symbol" value="005930" />
+      <label>Side</label>
+      <select id="order_side">
+        <option value="buy">buy</option>
+        <option value="sell">sell</option>
+      </select>
+      <label>Price Type</label>
+      <select id="order_price_type">
+        <option value="market">market</option>
+        <option value="limit">limit</option>
+      </select>
+      <label>Price</label><input id="order_price" value="70000" />
+      <label>Qty</label><input id="order_qty" value="1" />
+      <label>Account No</label><input id="order_account_no" placeholder="선택" />
+    </div>
+    <div class="row">
+      <button onclick="createOrder()">주문 생성</button>
+      <button onclick="listOrders()">주문 목록</button>
+    </div>
+    <div class="row">
+      <label>Order ID</label><input id="order_id" />
+      <label>Order No</label><input id="order_no" />
+      <label>Cancel Qty</label><input id="cancel_qty" />
+      <label>New Price</label><input id="new_price" />
+      <label>New Qty</label><input id="new_qty" />
+    </div>
+    <div class="row">
+      <button onclick="getOrderStatus()">상태 조회</button>
+      <button onclick="cancelOrder()">취소</button>
+      <button onclick="modifyOrder()">정정</button>
+      <button onclick="refreshOrderStatus()">체결 업데이트</button>
+    </div>
+    <pre id="order_output">결과 출력</pre>
+  </section>
+
+  <section>
+    <h2>Strategy</h2>
+    <p>기본 샘플 JSON을 수정해 전략을 생성/관리합니다.</p>
+    <textarea id="strategy_json">{
+  "name": "mean-reversion-sample",
+  "description": "샘플 전략",
+  "strategy_type": "mean_reversion",
+  "account_no": "",
+  "symbols": ["005930", "000660"],
+  "config": {
+    "bollinger_band": {"period": 20, "std_multiplier": 2.0},
+    "envelope": {"period": 20, "percentage": 2.0},
+    "position": {"allocation_ratio": 0.1, "max_position_count": 5},
+    "risk_management": {
+      "use_stop_loss": false,
+      "stop_loss_ratio": -0.03,
+      "use_take_profit": true,
+      "take_profit_ratio": 0.05
+    },
+    "check_interval": 60
+  }
+}</textarea>
+    <div class="row">
+      <button onclick="createStrategy()">전략 생성</button>
+      <button onclick="listStrategies()">전략 목록</button>
+    </div>
+    <div class="row">
+      <label>Strategy ID</label><input id="strategy_id" />
+      <button onclick="getStrategy()">상세</button>
+      <button onclick="startStrategy()">시작</button>
+      <button onclick="pauseStrategy()">일시정지</button>
+      <button onclick="stopStrategy()">중지</button>
+    </div>
+    <pre id="strategy_output">결과 출력</pre>
+  </section>
+
+  <section>
+    <h2>Backtest</h2>
+    <textarea id="backtest_json">{
+  "symbol": "005930",
+  "start_date": "2024-01-01",
+  "end_date": "2024-06-30",
+  "strategy_config": {"type": "mean_reversion"},
+  "backtest_config": {"initial_cash": 1000000}
+}</textarea>
+    <div class="row">
+      <button onclick="runBacktest()">단일 종목 실행</button>
+      <button onclick="runMultiBacktest()">다중 종목 실행</button>
+    </div>
+    <pre id="backtest_output">결과 출력</pre>
+  </section>
+
+  <section>
+    <h2>WebSocket</h2>
+    <div class="row">
+      <button onclick="getJson('/ws/info', 'ws_output')">WS 상태</button>
+    </div>
+    <pre id="ws_output">결과 출력</pre>
+  </section>
+
+  <script>
+    const parseJson = (text) => {
+      try { return JSON.parse(text); } catch (e) { return text; }
+    };
+
+    async function request(method, url, body, outputId) {
+      const opts = { method, headers: { "Content-Type": "application/json" } };
+      if (body && (method === "POST" || method === "PATCH")) {
+        opts.body = JSON.stringify(body);
+      }
+      const res = await fetch(url, opts);
+      const raw = await res.text();
+      const data = parseJson(raw);
+      document.getElementById(outputId).textContent = JSON.stringify(data, null, 2);
+    }
+
+    const getJson = (url, outputId) => request("GET", url, null, outputId);
+    const postJson = (url, body, outputId) => request("POST", url, body, outputId);
+    const patchJson = (url, body, outputId) => request("PATCH", url, body, outputId);
+
+    // Market
+    const getMarketPrice = () => {
+      const symbol = document.getElementById("market_symbol").value;
+      getJson(`/api/v1/market/price/${symbol}`, "market_output");
+    };
+    const getOrderbook = () => {
+      const symbol = document.getElementById("market_symbol").value;
+      getJson(`/api/v1/market/orderbook/${symbol}`, "market_output");
+    };
+    const getChart = () => {
+      const symbol = document.getElementById("market_symbol").value;
+      const interval = document.getElementById("market_interval").value;
+      getJson(`/api/v1/market/chart/${symbol}?interval=${interval}`, "market_output");
+    };
+
+    // Account
+    const getAccountBalance = () => {
+      const account = document.getElementById("account_no").value;
+      const qs = account ? `?account_no=${account}` : "";
+      getJson(`/api/v1/accounts/balance${qs}`, "account_output");
+    };
+    const getPositions = () => {
+      const account = document.getElementById("account_no").value;
+      const qs = account ? `?account_no=${account}` : "";
+      getJson(`/api/v1/accounts/positions${qs}`, "account_output");
+    };
+
+    // Order
+    const createOrder = () => {
+      const payload = {
+        symbol: document.getElementById("order_symbol").value,
+        order_type: document.getElementById("order_side").value,
+        price_type: document.getElementById("order_price_type").value,
+        price: Number(document.getElementById("order_price").value),
+        quantity: Number(document.getElementById("order_qty").value),
+        account_no: document.getElementById("order_account_no").value || null
+      };
+      postJson("/api/v1/orders", payload, "order_output");
+    };
+    const listOrders = () => {
+      const account = document.getElementById("order_account_no").value;
+      const qs = account ? `?account_no=${account}` : "";
+      getJson(`/api/v1/orders${qs}`, "order_output");
+    };
+    const getOrderStatus = () => {
+      const orderId = document.getElementById("order_id").value;
+      if (!orderId) return alert("order_id 입력");
+      getJson(`/api/v1/orders/${orderId}`, "order_output");
+    };
+    const cancelOrder = () => {
+      const orderId = document.getElementById("order_id").value;
+      if (!orderId) return alert("order_id 입력");
+      const payload = {
+        order_id: orderId,
+        order_no: document.getElementById("order_no").value || null,
+        quantity: Number(document.getElementById("cancel_qty").value) || null
+      };
+      postJson(`/api/v1/orders/${orderId}/cancel`, payload, "order_output");
+    };
+    const modifyOrder = () => {
+      const orderId = document.getElementById("order_id").value;
+      if (!orderId) return alert("order_id 입력");
+      const newPrice = document.getElementById("new_price").value;
+      const newQty = document.getElementById("new_qty").value;
+      const qs = `?new_price=${newPrice || ""}&new_quantity=${newQty || ""}`;
+      patchJson(`/api/v1/orders/${orderId}${qs}`, {}, "order_output");
+    };
+    const refreshOrderStatus = () => {
+      const orderId = document.getElementById("order_id").value;
+      if (!orderId) return alert("order_id 입력");
+      postJson(`/api/v1/orders/${orderId}/refresh-status`, {}, "order_output");
+    };
+
+    // Strategy
+    const createStrategy = () => {
+      const text = document.getElementById("strategy_json").value;
+      postJson("/api/v1/strategies", parseJson(text), "strategy_output");
+    };
+    const listStrategies = () => getJson("/api/v1/strategies", "strategy_output");
+    const getStrategy = () => {
+      const id = document.getElementById("strategy_id").value;
+      if (!id) return alert("strategy_id 입력");
+      getJson(`/api/v1/strategies/${id}`, "strategy_output");
+    };
+    const startStrategy = () => {
+      const id = document.getElementById("strategy_id").value;
+      if (!id) return alert("strategy_id 입력");
+      postJson(`/api/v1/strategies/${id}/start`, {}, "strategy_output");
+    };
+    const pauseStrategy = () => {
+      const id = document.getElementById("strategy_id").value;
+      if (!id) return alert("strategy_id 입력");
+      postJson(`/api/v1/strategies/${id}/pause`, {}, "strategy_output");
+    };
+    const stopStrategy = () => {
+      const id = document.getElementById("strategy_id").value;
+      if (!id) return alert("strategy_id 입력");
+      postJson(`/api/v1/strategies/${id}/stop`, {}, "strategy_output");
+    };
+
+    // Backtest
+    const runBacktest = () => {
+      const payload = parseJson(document.getElementById("backtest_json").value);
+      postJson("/api/v1/backtest/run", payload, "backtest_output");
+    };
+    const runMultiBacktest = () => {
+      const payload = parseJson(document.getElementById("backtest_json").value);
+      postJson("/api/v1/backtest/run-multi", payload, "backtest_output");
+    };
+  </script>
+</body>
+</html>
+

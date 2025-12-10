@@ -174,7 +174,7 @@ class MarketDataService:
                 await self.redis_client.set(
                     cache_key,
                     orderbook_data.model_dump(),
-                    ttl=settings.cache_ttl_market_data,
+                    ttl=settings.cache_ttl_orderbook_snapshot,
                 )
 
             return orderbook_data
@@ -190,6 +190,7 @@ class MarketDataService:
         interval: str = "1d",
         start_date: datetime | None = None,
         end_date: datetime | None = None,
+        use_cache: bool = True,
     ) -> ChartResponseDTO:
         """
         차트 데이터 조회
@@ -199,6 +200,7 @@ class MarketDataService:
             interval: 시간 간격 (1d, 1h 등)
             start_date: 시작일
             end_date: 종료일
+            use_cache: 캐시 사용 여부
 
         Returns:
             ChartResponseDTO: 차트 데이터
@@ -207,6 +209,16 @@ class MarketDataService:
             KISAPIServiceError: API 호출 실패
         """
         try:
+            can_use_cache = use_cache and not start_date and not end_date
+            cache_interval_key = interval
+
+            if can_use_cache:
+                cached_chart = await self.redis_client.get_chart_data(
+                    symbol, cache_interval_key
+                )
+                if cached_chart:
+                    return ChartResponseDTO(**cached_chart)
+
             interval_map = {
                 "1d": "D",
                 "1w": "W",
@@ -243,12 +255,22 @@ class MarketDataService:
 
                 candles.sort(key=lambda c: c.timestamp)
 
-                return ChartResponseDTO(
+                chart_response = ChartResponseDTO(
                     symbol=symbol,
                     symbol_name=None,
                     interval=interval,
                     candles=candles,
                 )
+
+                if can_use_cache:
+                    await self.redis_client.cache_chart_data(
+                        symbol,
+                        cache_interval_key,
+                        chart_response.model_dump(),
+                        ttl=settings.cache_ttl_daily_candles,
+                    )
+
+                return chart_response
 
             resolved_end = end_date or datetime.now()
             resolved_start = start_date or (resolved_end - timedelta(days=90))
@@ -285,12 +307,27 @@ class MarketDataService:
 
             candles.sort(key=lambda c: c.timestamp)
 
-            return ChartResponseDTO(
+            chart_response = ChartResponseDTO(
                 symbol=symbol,
                 symbol_name=None,
                 interval=interval,
                 candles=candles,
             )
+
+            if can_use_cache:
+                ttl = (
+                    settings.cache_ttl_daily_candles
+                    if interval in ("1d", "1w", "1m", "1y")
+                    else settings.cache_ttl_intraday_candles
+                )
+                await self.redis_client.cache_chart_data(
+                    symbol,
+                    cache_interval_key,
+                    chart_response.model_dump(),
+                    ttl=ttl,
+                )
+
+            return chart_response
 
         except Exception as e:
             raise KISAPIServiceError(f"Failed to get chart data for {symbol}: {e}")

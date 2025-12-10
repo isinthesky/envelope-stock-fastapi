@@ -3,16 +3,20 @@
 Order Service - 주문 처리 서비스
 """
 
+import asyncio
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.order import OrderModel, OrderStatus, OrderType, PriceType
 from src.adapters.database.repositories.order_repository import OrderRepository
 from src.adapters.external.kis_api.client import KISAPIClient
+from src.adapters.external.kis_api.exceptions import KISAPIError, KISRateLimitError
 from src.application.common.decorators import transaction
-from src.application.common.exceptions import KISAPIServiceError, OrderError
+from src.application.common.exceptions import OrderError
 from src.application.domain.order.dto import (
     OrderCancelRequestDTO,
     OrderCreateRequestDTO,
@@ -37,6 +41,10 @@ class OrderService:
         self.session = session
         if session:
             self.order_repo = OrderRepository(session)
+        self._order_lock = asyncio.Lock()
+        self._last_order_at: float | None = None
+        self._last_order_at_by_symbol: dict[str, float] = {}
+        self._amend_counts: dict[str, int] = {}
 
     # ==================== 주문 생성 ====================
 
@@ -57,6 +65,8 @@ class OrderService:
         account_no = request.account_no or settings.current_kis_account_no
 
         try:
+            await self._enforce_order_pacing(request.symbol)
+
             # KIS API 주문 요청
             path = "/uapi/domestic-stock/v1/trading/order-cash"
 
@@ -89,7 +99,7 @@ class OrderService:
 
             headers = {"tr_id": tr_id}
 
-            response = await self.kis_client.post(path, json=payload, headers=headers)
+            response = await self._post_with_retry(path, payload, headers)
             output = response.get("output", {})
 
             # 주문 저장
@@ -147,6 +157,9 @@ class OrderService:
             raise OrderError(f"Cannot cancel order with status: {order.status}")
 
         try:
+            self._enforce_amend_limit(order.order_id)
+            await self._enforce_order_pacing(order.symbol)
+
             # KIS API 주문 취소 요청
             path = "/uapi/domestic-stock/v1/trading/order-cancel"
 
@@ -178,7 +191,7 @@ class OrderService:
             tr_id = "VTTC0803U" if settings.is_paper_trading else "TTTC0803U"
             headers = {"tr_id": tr_id}
 
-            response = await self.kis_client.post(path, json=payload, headers=headers)
+            response = await self._post_with_retry(path, payload, headers)
 
             # 주문 상태 업데이트
             await order_repo.update(
@@ -243,6 +256,9 @@ class OrderService:
             raise OrderError(f"Cannot modify order with status: {order.status}")
 
         try:
+            self._enforce_amend_limit(order.order_id)
+            await self._enforce_order_pacing(order.symbol)
+
             # KIS API 주문 정정 요청
             path = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
 
@@ -274,7 +290,7 @@ class OrderService:
             tr_id = "VTTC0803U" if settings.is_paper_trading else "TTTC0803U"
             headers = {"tr_id": tr_id}
 
-            response = await self.kis_client.post(path, json=payload, headers=headers)
+            response = await self._post_with_retry(path, payload, headers)
 
             # 주문 정보 업데이트
             update_data = {"status_message": response.get("msg1", "Modified")}
@@ -456,6 +472,79 @@ class OrderService:
             order_time=order.order_time,
             filled_time=order.filled_time,
         )
+
+    # ==================== 내부 유틸리티 ====================
+
+    async def _enforce_order_pacing(self, symbol: str) -> None:
+        """주문 요청 간 최소 간격을 보장한다."""
+        loop = asyncio.get_event_loop()
+        min_gap = settings.order_min_interval_ms / 1000.0
+        same_symbol_gap = settings.order_same_symbol_interval_ms / 1000.0
+
+        while True:
+            async with self._order_lock:
+                now = loop.time()
+                wait_global = (
+                    (self._last_order_at + min_gap - now)
+                    if self._last_order_at is not None
+                    else 0
+                )
+                last_symbol_at = self._last_order_at_by_symbol.get(symbol)
+                wait_symbol = (
+                    (last_symbol_at + same_symbol_gap - now)
+                    if last_symbol_at is not None
+                    else 0
+                )
+
+                wait_for = max(wait_global, wait_symbol, 0)
+                if wait_for <= 0:
+                    self._last_order_at = now
+                    self._last_order_at_by_symbol[symbol] = now
+                    return
+
+            await asyncio.sleep(wait_for)
+
+    def _enforce_amend_limit(self, order_id: str) -> None:
+        """정정/취소 시도 횟수를 제한한다."""
+        count = self._amend_counts.get(order_id, 0) + 1
+        if count > settings.order_max_amendments_per_order:
+            raise OrderError("Amendment/cancel limit exceeded for this order")
+        self._amend_counts[order_id] = count
+
+    async def _post_with_retry(
+        self, path: str, payload: dict[str, str], headers: dict[str, str]
+    ) -> dict[str, Any]:
+        """
+        주문/정정/취소 요청용 POST 래퍼 (타임아웃 단축 + 1회 재시도)
+        """
+        try:
+            return await self.kis_client.post(
+                path,
+                json=payload,
+                headers=headers,
+                timeout=settings.order_response_timeout,
+            )
+        except Exception as e:
+            if not self._is_retryable_order_error(e):
+                raise
+            await asyncio.sleep(settings.order_retry_delay_seconds)
+            return await self.kis_client.post(
+                path,
+                json=payload,
+                headers=headers,
+                timeout=settings.order_response_timeout,
+            )
+
+    def _is_retryable_order_error(self, error: Exception) -> bool:
+        """주문 재시도 대상 오류인지 판정한다."""
+        if isinstance(error, (asyncio.TimeoutError, httpx.TimeoutException, KISRateLimitError)):
+            return True
+        if isinstance(error, KISAPIError) and error.error_code:
+            if error.error_code.isdigit() and int(error.error_code) >= 500:
+                return True
+            if error.error_code == "429":
+                return True
+        return False
 
     async def get_order_list(
         self, account_no: str | None = None, status: str | None = None

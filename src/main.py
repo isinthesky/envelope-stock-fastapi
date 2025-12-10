@@ -198,21 +198,23 @@ async def global_exception_handler(request, exc: Exception) -> JSONResponse:
 
 # ==================== Router 등록 ====================
 
-from src.application.interface.account_router import router as account_router
-from src.application.interface.auth_router import router as auth_router
-from src.application.interface.backtest_router import router as backtest_router
-from src.application.interface.market_data_router import router as market_data_router
-from src.application.interface.order_router import router as order_router
-from src.application.interface.strategy_router import router as strategy_router
-from src.application.interface.websocket_router import router as websocket_router
+from src.application.interface.api.account_router import router as account_router
+from src.application.interface.api.auth_router import router as auth_router
+from src.application.interface.api.backtest_router import router as backtest_router
+from src.application.interface.api.market_data_router import router as market_data_router
+from src.application.interface.api.order_router import router as order_router
+from src.application.interface.api.strategy_router import router as strategy_router
+from src.application.interface.api.websocket_router import router as websocket_router
+from src.application.interface.page.admin_page import router as admin_page_router
 
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(market_data_router, prefix="/api/v1/market", tags=["MarketData"])
 app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
 app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
 app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
-app.include_router(backtest_router, prefix="/api/v1/backtest", tags=["Backtest"])
+app.include_router(backtest_router)
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
+app.include_router(admin_page_router)
 
 
 if __name__ == "__main__":
