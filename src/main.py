@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         print(f"⚠️  KIS API token issue failed (will retry on first request): {e}")
 
-    # 4. 전략 실행 엔진 시작
+    # 4. 전략 실행 엔진 시작 (레거시 볼린저 밴드)
     strategy_engine = None
     try:
         from src.application.domain.strategy.engine import get_strategy_engine
@@ -88,6 +88,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await strategy_engine.start()
     except Exception as e:
         print(f"⚠️  Strategy engine start failed: {e}")
+
+    # 5. 골든크로스 전략 스케줄러 시작
+    gc_scheduler = None
+    try:
+        from src.application.domain.strategy.scheduler import get_strategy_scheduler
+
+        gc_scheduler = get_strategy_scheduler()
+        await gc_scheduler.start()
+        print("✅ Golden Cross strategy scheduler started")
+    except Exception as e:
+        print(f"⚠️  Golden Cross scheduler start failed: {e}")
 
     print("=" * 60)
     print("🎉 Application startup complete!")
@@ -101,6 +112,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     print("=" * 60)
 
     # 백그라운드 태스크 중지
+    try:
+        if gc_scheduler:
+            await gc_scheduler.stop()
+        print("✅ Golden Cross scheduler stopped")
+    except Exception as e:
+        print(f"⚠️  Golden Cross scheduler stop error: {e}")
+
     try:
         if strategy_engine:
             await strategy_engine.stop()

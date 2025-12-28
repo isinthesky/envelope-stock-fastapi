@@ -6,8 +6,12 @@ Bollinger Band, Envelope, 이동평균 등 기술적 지표 계산
 """
 
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    pass
 
 
 class TechnicalIndicators:
@@ -352,3 +356,198 @@ class TechnicalIndicators:
             "bb_position": max(-2.0, min(2.0, bb_position)),  # -2 ~ 2 범위로 제한
             "env_position": max(-2.0, min(2.0, env_position)),
         }
+
+    # ==================== Golden Cross Strategy Indicators ====================
+
+    @staticmethod
+    def calculate_stochastic(
+        df: pd.DataFrame,
+        k_period: int = 14,
+        d_period: int = 3,
+    ) -> tuple[pd.Series, pd.Series]:
+        """
+        Stochastic Oscillator 계산
+
+        Args:
+            df: OHLCV 데이터프레임 (high, low, close 컬럼 필요)
+            k_period: %K 계산 기간 (기본: 14)
+            d_period: %D 계산 기간 (기본: 3)
+
+        Returns:
+            tuple[pd.Series, pd.Series]: (stoch_k, stoch_d)
+        """
+        low_min = df["low"].rolling(window=k_period).min()
+        high_max = df["high"].rolling(window=k_period).max()
+
+        price_range = high_max - low_min
+        price_range = price_range.where(price_range != 0)
+
+        # %K = (현재가 - 최저가) / (최고가 - 최저가) * 100
+        stoch_k = 100 * ((df["close"] - low_min) / price_range)
+        stoch_k = stoch_k.fillna(50.0)
+
+        # %D = %K의 이동평균
+        stoch_d = stoch_k.rolling(window=d_period).mean()
+
+        return stoch_k, stoch_d
+
+    @staticmethod
+    def calculate_stochastic_from_prices(
+        closes: list[float],
+        highs: list[float],
+        lows: list[float],
+        k_period: int = 14,
+        d_period: int = 3,
+    ) -> tuple[float | None, float | None]:
+        """
+        리스트 기반 Stochastic Oscillator 계산 (단일 값 반환)
+
+        Args:
+            closes: 종가 리스트
+            highs: 고가 리스트
+            lows: 저가 리스트
+            k_period: %K 계산 기간 (기본: 14)
+            d_period: %D 계산 기간 (기본: 3)
+
+        Returns:
+            tuple[float | None, float | None]: (stoch_k, stoch_d)
+        """
+        if len(closes) < k_period + d_period:
+            return None, None
+
+        df = pd.DataFrame({"close": closes, "high": highs, "low": lows})
+        stoch_k, stoch_d = TechnicalIndicators.calculate_stochastic(df, k_period, d_period)
+
+        return stoch_k.iloc[-1], stoch_d.iloc[-1]
+
+    @staticmethod
+    def detect_golden_cross(
+        short_ma: pd.Series, long_ma: pd.Series
+    ) -> pd.Series:
+        """
+        골든크로스 감지 (단기 MA가 장기 MA를 상향 돌파)
+
+        Args:
+            short_ma: 단기 이동평균 시리즈 (e.g., MA60)
+            long_ma: 장기 이동평균 시리즈 (e.g., MA200)
+
+        Returns:
+            pd.Series: 골든크로스 발생 시점 True
+        """
+        prev_short = short_ma.shift(1)
+        prev_long = long_ma.shift(1)
+
+        # 전일: 단기 <= 장기 AND 금일: 단기 > 장기
+        golden_cross = (prev_short <= prev_long) & (short_ma > long_ma)
+
+        return golden_cross
+
+    @staticmethod
+    def detect_dead_cross(
+        short_ma: pd.Series, long_ma: pd.Series
+    ) -> pd.Series:
+        """
+        데드크로스 감지 (단기 MA가 장기 MA를 하향 돌파)
+
+        Args:
+            short_ma: 단기 이동평균 시리즈 (e.g., MA60)
+            long_ma: 장기 이동평균 시리즈 (e.g., MA200)
+
+        Returns:
+            pd.Series: 데드크로스 발생 시점 True
+        """
+        prev_short = short_ma.shift(1)
+        prev_long = long_ma.shift(1)
+
+        # 전일: 단기 >= 장기 AND 금일: 단기 < 장기
+        dead_cross = (prev_short >= prev_long) & (short_ma < long_ma)
+
+        return dead_cross
+
+    @staticmethod
+    def is_golden_cross_active(short_ma: float, long_ma: float) -> bool:
+        """
+        현재 골든크로스 상태 확인 (단기 MA > 장기 MA)
+
+        Args:
+            short_ma: 단기 이동평균 값
+            long_ma: 장기 이동평균 값
+
+        Returns:
+            bool: 골든크로스 활성 상태
+        """
+        return short_ma > long_ma
+
+    @staticmethod
+    def calculate_ma_series(
+        df: pd.DataFrame,
+        short_period: int = 60,
+        long_period: int = 200,
+    ) -> tuple[pd.Series, pd.Series]:
+        """
+        이동평균 시리즈 계산
+
+        Args:
+            df: OHLCV 데이터프레임 (close 컬럼 필요)
+            short_period: 단기 MA 기간 (기본: 60)
+            long_period: 장기 MA 기간 (기본: 200)
+
+        Returns:
+            tuple[pd.Series, pd.Series]: (short_ma, long_ma)
+        """
+        short_ma = df["close"].rolling(window=short_period).mean()
+        long_ma = df["close"].rolling(window=long_period).mean()
+
+        return short_ma, long_ma
+
+    @staticmethod
+    def prepare_golden_cross_indicators(
+        df: pd.DataFrame,
+        short_ma_period: int = 60,
+        long_ma_period: int = 200,
+        stoch_k_period: int = 14,
+        stoch_d_period: int = 3,
+    ) -> pd.DataFrame:
+        """
+        골든크로스 전략에 필요한 모든 지표 계산
+
+        Args:
+            df: OHLCV 데이터프레임 (timestamp, open, high, low, close, volume)
+            short_ma_period: 단기 MA 기간 (기본: 60)
+            long_ma_period: 장기 MA 기간 (기본: 200)
+            stoch_k_period: Stochastic %K 기간 (기본: 14)
+            stoch_d_period: Stochastic %D 기간 (기본: 3)
+
+        Returns:
+            pd.DataFrame: 지표가 추가된 데이터프레임
+                - ma_short: 단기 이동평균
+                - ma_long: 장기 이동평균
+                - stoch_k: Stochastic %K
+                - stoch_d: Stochastic %D
+                - is_gc_active: 골든크로스 활성 상태
+                - gc_signal: 골든크로스 발생 시그널
+                - dc_signal: 데드크로스 발생 시그널
+        """
+        result_df = df.copy()
+
+        # 이동평균 계산
+        result_df["ma_short"] = result_df["close"].rolling(window=short_ma_period).mean()
+        result_df["ma_long"] = result_df["close"].rolling(window=long_ma_period).mean()
+
+        # Stochastic 계산
+        stoch_k, stoch_d = TechnicalIndicators.calculate_stochastic(
+            result_df, stoch_k_period, stoch_d_period
+        )
+        result_df["stoch_k"] = stoch_k
+        result_df["stoch_d"] = stoch_d
+
+        # 골든크로스/데드크로스 상태 및 시그널
+        result_df["is_gc_active"] = result_df["ma_short"] > result_df["ma_long"]
+        result_df["gc_signal"] = TechnicalIndicators.detect_golden_cross(
+            result_df["ma_short"], result_df["ma_long"]
+        )
+        result_df["dc_signal"] = TechnicalIndicators.detect_dead_cross(
+            result_df["ma_short"], result_df["ma_long"]
+        )
+
+        return result_df

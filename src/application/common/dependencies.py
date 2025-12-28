@@ -139,3 +139,29 @@ def get_settings_dependency():
 
 # Type alias for Settings
 SettingsDep = Annotated[object, Depends(get_settings_dependency)]
+
+
+# ==================== Domain Services ====================
+
+
+async def get_market_data_service(
+    kis_client: KISClientDep,
+    redis_client: RedisDep,
+) -> "MarketDataService":
+    """
+    MarketData Service Dependency
+
+    Args:
+        kis_client: KIS API Client
+        redis_client: Redis Client
+
+    Returns:
+        MarketDataService: 시세 데이터 서비스
+    """
+    from src.application.domain.market_data.service import MarketDataService
+
+    return MarketDataService(kis_client, redis_client)
+
+
+# Type alias for Domain Services
+MarketDataServiceDep = Annotated["MarketDataService", Depends(get_market_data_service)]

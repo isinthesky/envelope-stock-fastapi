@@ -16,6 +16,9 @@ from src.adapters.database.models.account import AccountModel  # noqa: F401
 from src.adapters.database.models.order import OrderModel  # noqa: F401
 from src.adapters.database.models.position import PositionModel  # noqa: F401
 from src.adapters.database.models.strategy import StrategyModel  # noqa: F401
+from src.adapters.database.models.strategy_symbol_state import StrategySymbolStateModel  # noqa: F401
+from src.adapters.database.models.strategy_signal import StrategySignalModel  # noqa: F401
+from src.adapters.database.models.stock_universe import StockUniverseModel  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

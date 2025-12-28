@@ -29,6 +29,7 @@ class StrategyType(str, Enum):
     MEAN_REVERSION = "mean_reversion"  # 평균 회귀
     BREAKOUT = "breakout"  # 돌파
     GRID = "grid"  # 그리드
+    GOLDEN_CROSS = "golden_cross"  # 골든크로스
     CUSTOM = "custom"  # 커스텀
 
 

@@ -332,6 +332,17 @@ class MarketDataService:
         except Exception as e:
             raise KISAPIServiceError(f"Failed to get chart data for {symbol}: {e}")
 
+    # ==================== 자격 증명 확인 ====================
+
+    def has_valid_credentials(self) -> bool:
+        """
+        KIS API 자격 증명 확인
+
+        Returns:
+            bool: 자격 증명 유효 여부
+        """
+        return bool(settings.kis_app_key and settings.kis_app_secret)
+
     # ==================== 헬스체크 ====================
 
     async def health_check(self) -> dict[str, str]:
