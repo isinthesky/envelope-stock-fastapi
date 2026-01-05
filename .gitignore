@@ -76,8 +76,9 @@ dmypy.json
 
 # KIS Config (민감 정보)
 kis_devlp.yaml
-KIS*/
+/KIS/
 token_*
+!**/kis_api/
 
 # Temp files
 *.tmp

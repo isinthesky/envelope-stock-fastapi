@@ -13,7 +13,7 @@ from decimal import Decimal
 from src.adapters.database.connection import get_async_session
 from src.adapters.database.models.strategy import StrategyStatus
 from src.adapters.database.repositories.strategy_repository import StrategyRepository
-from src.adapters.external.kis_api.client import KISAPIClient
+from src.adapters.external.kis_api.client import get_kis_client
 from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.account.service import AccountService
 from src.application.domain.market_data.service import MarketDataService
@@ -159,7 +159,7 @@ class StrategyEngine:
     async def _fetch_price_data(self, symbol: str) -> list[float]:
         """차트 데이터 수집"""
         try:
-            kis_client = KISAPIClient()
+            kis_client = get_kis_client()
             market_data_service = MarketDataService(kis_client)
 
             # 일봉 데이터 조회 (최근 100일)
@@ -221,7 +221,7 @@ class StrategyEngine:
         """매수 주문 실행"""
         try:
             # 계좌 잔고 조회
-            kis_client = KISAPIClient()
+            kis_client = get_kis_client()
             account_service = AccountService(kis_client)
             balance = await account_service.get_balance(strategy.account_no)
 
@@ -264,7 +264,7 @@ class StrategyEngine:
         """매도 주문 실행 (청산)"""
         try:
             # 보유 수량 조회
-            kis_client = KISAPIClient()
+            kis_client = get_kis_client()
             account_service = AccountService(kis_client)
             positions = await account_service.get_positions(strategy.account_no)
 

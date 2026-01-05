@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from src.adapters.cache.redis_client import get_redis_client
     from src.adapters.database.connection import close_db, engine
     from src.adapters.external.kis_api.auth import get_kis_auth
+    from src.adapters.external.kis_api.client import get_kis_client
 
     # Startup
     print("=" * 60)
@@ -130,6 +131,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await token_refresh_task.stop()
     except Exception as e:
         print(f"⚠️  Token refresh task stop error: {e}")
+
+    # KIS API httpx.AsyncClient 리소스 정리
+    try:
+        kis_auth = get_kis_auth()
+        await kis_auth.aclose()
+        kis_client = get_kis_client()
+        await kis_client.aclose()
+        print("✅ KIS API connections closed")
+    except Exception as e:
+        print(f"⚠️  KIS API close error: {e}")
 
     # Database 연결 종료
     try:

@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from src.adapters.database.connection import get_async_session
 from src.adapters.database.models.strategy import StrategyStatus
 from src.adapters.database.repositories.strategy_repository import StrategyRepository
-from src.adapters.external.kis_api.client import KISAPIClient
+from src.adapters.external.kis_api.client import get_kis_client
 from src.application.domain.market_data.service import MarketDataService
 from src.application.domain.strategy.golden_cross_engine import GoldenCrossEngine
 
@@ -126,7 +126,7 @@ class StrategyScheduler:
                         logger.info("[Scheduler] No active strategies found.")
                         return
 
-                    kis_client = KISAPIClient()
+                    kis_client = get_kis_client()
                     engine = GoldenCrossEngine(session, kis_client)
 
                     for strategy in active_strategies:
@@ -190,7 +190,7 @@ class StrategyScheduler:
     async def _is_holiday(self) -> bool:
         """휴장일 체크"""
         try:
-            kis_client = KISAPIClient()
+            kis_client = get_kis_client()
             market_data_service = MarketDataService(kis_client)
 
             # is_holiday 메서드가 있는 경우 사용
@@ -259,7 +259,7 @@ class StrategyScheduler:
         """수동 실행 실제 처리"""
         try:
             async for session in get_async_session():
-                kis_client = KISAPIClient()
+                kis_client = get_kis_client()
                 engine = GoldenCrossEngine(session, kis_client)
 
                 result = await engine.execute(

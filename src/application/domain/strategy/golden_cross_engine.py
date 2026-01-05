@@ -30,7 +30,7 @@ from src.adapters.database.repositories.strategy_signal_repository import (
 from src.adapters.database.repositories.strategy_symbol_state_repository import (
     StrategySymbolStateRepository,
 )
-from src.adapters.external.kis_api.client import KISAPIClient
+from src.adapters.external.kis_api.client import KISAPIClient, get_kis_client
 from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.account.service import AccountService
 from src.application.domain.market_data.service import MarketDataService
@@ -70,7 +70,7 @@ class GoldenCrossEngine:
             kis_client: KIS API 클라이언트
         """
         self.session = session
-        self.kis_client = kis_client or KISAPIClient()
+        self.kis_client = kis_client or get_kis_client()
         self.indicators = TechnicalIndicators()
 
         # Repositories
