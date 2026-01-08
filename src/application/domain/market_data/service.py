@@ -72,10 +72,17 @@ class MarketDataService:
             response = await self.kis_client.get(path, params=params, headers=headers)
             output = response.get("output", {})
 
-            # 응답 파싱
+            # 응답 파싱 (종목명: hts_kor_isnm, bstp_kor_isnm, prdt_name 순으로 시도)
+            stock_name = (
+                output.get("hts_kor_isnm")
+                or output.get("bstp_kor_isnm")
+                or output.get("rprs_mrkt_kor_name")
+                or output.get("prdt_name")
+                or ""
+            )
             price_data = PriceResponseDTO(
                 symbol=symbol,
-                symbol_name=output.get("prdt_name", ""),
+                symbol_name=stock_name,
                 current_price=Decimal(output.get("stck_prpr", "0")),
                 open_price=Decimal(output.get("stck_oprc", "0")),
                 high_price=Decimal(output.get("stck_hgpr", "0")),
@@ -331,6 +338,64 @@ class MarketDataService:
 
         except Exception as e:
             raise KISAPIServiceError(f"Failed to get chart data for {symbol}: {e}")
+
+    # ==================== ETF 종목명 조회 ====================
+
+    async def get_stock_info(self, symbol: str) -> dict | None:
+        """
+        주식/ETF 기본정보 조회
+
+        주식기본조회 API를 사용하여 종목의 상세 정보를 조회합니다.
+        일반 주식, ETF, ETN 모두 지원합니다.
+
+        Args:
+            symbol: 종목코드
+
+        Returns:
+            dict | None: 종목 정보 (조회 실패 시 None)
+        """
+        try:
+            # 주식기본조회 API (주식, ETF, ETN, ELW 모두 지원)
+            path = "/uapi/domestic-stock/v1/quotations/search-stock-info"
+            params = {
+                "PRDT_TYPE_CD": "300",  # 300: 주식, ETF, ETN, ELW
+                "PDNO": symbol,
+            }
+            headers = {"tr_id": "CTPF1002R"}
+
+            response = await self.kis_client.get(path, params=params, headers=headers)
+            output = response.get("output", {})
+
+            if output:
+                return {
+                    "symbol": symbol,
+                    "name": output.get("prdt_name", ""),
+                    "name_abbr": output.get("prdt_abrv_name", ""),
+                    "name_eng": output.get("prdt_eng_name", ""),
+                    "market_id": output.get("mket_id_cd", ""),
+                    "etf_type": output.get("etf_type_cd", ""),
+                }
+            return None
+
+        except Exception:
+            return None
+
+    async def get_stock_name(self, symbol: str) -> str | None:
+        """
+        종목명 조회 (일반주식 + ETF 지원)
+
+        주식기본조회 API를 사용하여 정확한 종목명을 반환합니다.
+
+        Args:
+            symbol: 종목코드
+
+        Returns:
+            str | None: 종목명 (조회 실패 시 None)
+        """
+        stock_info = await self.get_stock_info(symbol)
+        if stock_info and stock_info.get("name"):
+            return stock_info["name"]
+        return None
 
     # ==================== 자격 증명 확인 ====================
 

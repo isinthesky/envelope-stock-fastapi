@@ -160,6 +160,7 @@ async def scan_golden_cross(
 async def analyze_sell_signal(
     symbol: str,
     session: DatabaseSession,
+    market_data_service: MarketDataServiceDep,
     stoch_overbought: float = Query(default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값"),
     rsi_overbought: float = Query(default=70.0, ge=50.0, le=90.0, description="RSI 과매수 임계값"),
 ) -> ResponseDTO[SellSignalAnalysisDTO]:
@@ -187,6 +188,25 @@ async def analyze_sell_signal(
         stoch_overbought=stoch_overbought,
         rsi_overbought=rsi_overbought,
     )
+
+    # 종목명 조회 및 추가 (DB 우선, API 폴백 - ETF 지원)
+    if result.name is None:
+        from src.adapters.database.repositories.stock_universe_repository import (
+            StockUniverseRepository,
+        )
+        try:
+            universe_repo = StockUniverseRepository(session)
+            stock = await universe_repo.get_by_symbol(symbol)
+            if stock and stock.name:
+                result.name = stock.name
+            else:
+                # DB에 없으면 API로 조회 (일반주식 + ETF 지원)
+                stock_name = await market_data_service.get_stock_name(symbol)
+                if stock_name:
+                    result.name = stock_name
+        except Exception:
+            pass  # 종목명 조회 실패 시 무시
+
     return ResponseDTO.success_response(result, "Sell signal analysis completed")
 
 
@@ -259,11 +279,12 @@ async def get_analysis_history(
     description="활성 추적 중인 종목들의 분석 이력을 일괄 갱신",
 )
 async def refresh_analysis_history(
+    market_data_service: MarketDataServiceDep,
     analysis_type: str = Query(..., description="분석 유형 (buy/sell)"),
 ) -> ResponseDTO[AnalysisHistoryRefreshResultDTO]:
     """분석 이력 일괄 갱신 - @transaction이 세션을 관리"""
     service = StrategyService()
-    result = await service.refresh_analysis_history(analysis_type)
+    result = await service.refresh_analysis_history(analysis_type, market_data_service)
     return ResponseDTO.success_response(result, "Analysis history refresh completed")
 
 

@@ -27,6 +27,10 @@ from src.adapters.external.kis_api.client import get_kis_client
 from src.application.common.decorators import transaction
 from src.application.common.exceptions import StrategyError
 from src.application.domain.strategy.dto import (
+    AnalysisHistoryCreateDTO,
+    AnalysisHistoryDTO,
+    AnalysisHistoryListDTO,
+    AnalysisHistoryRefreshResultDTO,
     GoldenCrossConfigDTO,
     GoldenCrossScanListDTO,
     SellSignalAnalysisDTO,
@@ -577,4 +581,264 @@ class StrategyService:
             symbol=symbol,
             stoch_overbought=stoch_overbought,
             rsi_overbought=rsi_overbought,
+        )
+
+    # ==================== Analysis History Methods ====================
+
+    @transaction
+    async def save_analysis_history(
+        self, session: AsyncSession, dto: AnalysisHistoryCreateDTO
+    ) -> AnalysisHistoryDTO:
+        """분석 이력 저장"""
+        from src.adapters.database.repositories import AnalysisHistoryRepository
+
+        history_repo = AnalysisHistoryRepository(session)
+
+        # sell_reasons를 JSON 문자열로 변환
+        sell_reasons_json = None
+        if dto.sell_reasons:
+            sell_reasons_json = json.dumps(dto.sell_reasons, ensure_ascii=False)
+
+        model = await history_repo.create(
+            analysis_type=dto.analysis_type,
+            symbol=dto.symbol,
+            name=dto.name,
+            current_price=dto.current_price,
+            ma_short=dto.ma_short,
+            ma_long=dto.ma_long,
+            ma_gap_ratio=dto.ma_gap_ratio,
+            stoch_k=dto.stoch_k,
+            stoch_d=dto.stoch_d,
+            gc_state=dto.gc_state,
+            is_gc_active=dto.is_gc_active,
+            rsi=dto.rsi,
+            is_death_cross=dto.is_death_cross,
+            is_stoch_overbought=dto.is_stoch_overbought,
+            is_rsi_overbought=dto.is_rsi_overbought,
+            sell_signal_strength=dto.sell_signal_strength,
+            sell_recommendation=dto.sell_recommendation,
+            sell_reasons=sell_reasons_json,
+            analyzed_at=datetime.now(),
+            is_active=dto.is_active if dto.is_active is not None else True,
+        )
+
+        return self._history_to_dto(model)
+
+    async def get_analysis_history(self, history_id: int) -> AnalysisHistoryDTO:
+        """분석 이력 상세 조회"""
+        from fastapi import HTTPException, status
+        from src.adapters.database.repositories import AnalysisHistoryRepository
+
+        if not self.session:
+            raise StrategyError("Database session not provided")
+
+        history_repo = AnalysisHistoryRepository(self.session)
+        model = await history_repo.get_by_id(history_id)
+
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Analysis history not found: {history_id}",
+            )
+
+        return self._history_to_dto(model)
+
+    async def list_analysis_history(
+        self,
+        analysis_type: str,
+        is_active: bool | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> AnalysisHistoryListDTO:
+        """분석 이력 목록 조회"""
+        from src.adapters.database.repositories import AnalysisHistoryRepository
+
+        if not self.session:
+            raise StrategyError("Database session not provided")
+
+        history_repo = AnalysisHistoryRepository(self.session)
+        histories = await history_repo.get_by_type(
+            analysis_type=analysis_type,
+            is_active=is_active,
+            limit=limit,
+            offset=offset,
+        )
+        total_count = await history_repo.count_by_type(analysis_type, is_active)
+
+        items = [self._history_to_dto(h) for h in histories]
+
+        return AnalysisHistoryListDTO(
+            items=items,
+            total_count=total_count,
+        )
+
+    @transaction
+    async def delete_analysis_history(self, session: AsyncSession, history_id: int) -> bool:
+        """분석 이력 삭제"""
+        from src.adapters.database.repositories import AnalysisHistoryRepository
+
+        history_repo = AnalysisHistoryRepository(session)
+        return await history_repo.delete_by_id(history_id)
+
+    @transaction
+    async def set_analysis_history_active(
+        self, session: AsyncSession, history_id: int, is_active: bool
+    ) -> AnalysisHistoryDTO:
+        """분석 이력 활성 추적 상태 변경"""
+        from fastapi import HTTPException, status
+        from src.adapters.database.repositories import AnalysisHistoryRepository
+
+        history_repo = AnalysisHistoryRepository(session)
+        updated = await history_repo.set_active(history_id, is_active)
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Analysis history not found: {history_id}",
+            )
+        return self._history_to_dto(updated)
+
+    @transaction
+    async def refresh_analysis_history(
+        self, session: AsyncSession, analysis_type: str, market_data_service=None
+    ) -> AnalysisHistoryRefreshResultDTO:
+        """활성 추적 종목 분석 갱신"""
+        import logging
+        from src.adapters.database.repositories import AnalysisHistoryRepository
+
+        logger = logging.getLogger(__name__)
+        errors: list[str] = []
+        updated_items: list[AnalysisHistoryDTO] = []
+
+        history_repo = AnalysisHistoryRepository(session)
+        active_symbols = await history_repo.get_active_symbols(analysis_type)
+
+        if not active_symbols:
+            return AnalysisHistoryRefreshResultDTO(
+                updated_count=0,
+                items=[],
+                errors=["No active tracking items found"],
+            )
+
+        logger.info(f"[Refresh] Refreshing {len(active_symbols)} {analysis_type} items")
+
+        # 종목명 조회를 위한 유니버스 레포지토리
+        universe_repo = StockUniverseRepository(session)
+
+        for symbol in active_symbols:
+            try:
+                # 종목명 조회 (DB에 없는 경우)
+                stock_name = None
+                latest = await history_repo.get_latest_by_symbol(symbol, analysis_type)
+                if latest and not latest.name:
+                    # DB 유니버스에서 조회
+                    universe_stock = await universe_repo.get_by_symbol(symbol)
+                    if universe_stock and universe_stock.name:
+                        stock_name = universe_stock.name
+                    elif market_data_service:
+                        # API 폴백 (일반주식 + ETF 지원)
+                        try:
+                            stock_name = await market_data_service.get_stock_name(symbol)
+                        except Exception:
+                            pass
+
+                if analysis_type == "sell":
+                    sell_result = await self.analyze_sell_signal(symbol)
+                    sell_reasons_json = json.dumps(sell_result.sell_reasons, ensure_ascii=False)
+
+                    if latest:
+                        update_kwargs = {
+                            "current_price": sell_result.current_price,
+                            "ma_short": sell_result.ma_short,
+                            "ma_long": sell_result.ma_long,
+                            "ma_gap_ratio": sell_result.ma_gap_ratio,
+                            "stoch_k": sell_result.stoch_k,
+                            "stoch_d": sell_result.stoch_d,
+                            "rsi": sell_result.rsi,
+                            "is_death_cross": sell_result.is_death_cross,
+                            "is_stoch_overbought": sell_result.is_stoch_overbought,
+                            "is_rsi_overbought": sell_result.is_rsi_overbought,
+                            "sell_signal_strength": sell_result.sell_signal_strength,
+                            "sell_recommendation": sell_result.sell_recommendation,
+                            "sell_reasons": sell_reasons_json,
+                            "analyzed_at": datetime.now(),
+                        }
+                        if stock_name:
+                            update_kwargs["name"] = stock_name
+
+                        await history_repo.update_by_id(latest.id, **update_kwargs)
+                        updated = await history_repo.get_by_id(latest.id)
+                        if updated:
+                            updated_items.append(self._history_to_dto(updated))
+
+                elif analysis_type == "buy":
+                    from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
+                    buy_service = BuyStrategyService(session)
+                    scan_result = await buy_service.scan_golden_cross_candidates(gc_only=False)
+
+                    stock_data = next((s for s in scan_result.stocks if s.symbol == symbol), None)
+                    if stock_data and latest:
+                        update_kwargs = {
+                            "current_price": stock_data.current_price,
+                            "ma_short": stock_data.ma_short,
+                            "ma_long": stock_data.ma_long,
+                            "ma_gap_ratio": stock_data.ma_gap_ratio,
+                            "stoch_k": stock_data.stoch_k,
+                            "stoch_d": stock_data.stoch_d,
+                            "gc_state": stock_data.gc_state,
+                            "is_gc_active": stock_data.is_gc_active,
+                            "analyzed_at": datetime.now(),
+                        }
+                        if stock_name:
+                            update_kwargs["name"] = stock_name
+
+                        await history_repo.update_by_id(latest.id, **update_kwargs)
+                        updated = await history_repo.get_by_id(latest.id)
+                        if updated:
+                            updated_items.append(self._history_to_dto(updated))
+
+            except Exception as e:
+                error_msg = f"{symbol}: {str(e)}"
+                logger.warning(f"[Refresh] Error: {error_msg}")
+                errors.append(error_msg)
+
+        return AnalysisHistoryRefreshResultDTO(
+            updated_count=len(updated_items),
+            items=updated_items,
+            errors=errors,
+        )
+
+    def _history_to_dto(self, model) -> AnalysisHistoryDTO:
+        """AnalysisHistoryModel을 DTO로 변환"""
+        sell_reasons = None
+        if model.sell_reasons:
+            try:
+                sell_reasons = json.loads(model.sell_reasons)
+            except (json.JSONDecodeError, TypeError):
+                sell_reasons = [model.sell_reasons] if model.sell_reasons else None
+
+        return AnalysisHistoryDTO(
+            id=model.id,
+            analysis_type=model.analysis_type,
+            symbol=model.symbol,
+            name=model.name,
+            current_price=model.current_price,
+            ma_short=model.ma_short,
+            ma_long=model.ma_long,
+            ma_gap_ratio=model.ma_gap_ratio,
+            stoch_k=model.stoch_k,
+            stoch_d=model.stoch_d,
+            gc_state=model.gc_state,
+            is_gc_active=model.is_gc_active,
+            rsi=model.rsi,
+            is_death_cross=model.is_death_cross,
+            is_stoch_overbought=model.is_stoch_overbought,
+            is_rsi_overbought=model.is_rsi_overbought,
+            sell_signal_strength=model.sell_signal_strength,
+            sell_recommendation=model.sell_recommendation,
+            sell_reasons=sell_reasons,
+            analyzed_at=model.analyzed_at,
+            note=model.note,
+            is_active=model.is_active,
+            created_at=model.created_at,
+            updated_at=model.updated_at,
         )

@@ -554,7 +554,7 @@ class AnalysisHistoryDTO(BaseDTO):
     is_rsi_overbought: bool | None = Field(default=None, description="RSI 과매수 여부")
     sell_signal_strength: int | None = Field(default=None, description="매도 시그널 강도 (0-5)")
     sell_recommendation: str | None = Field(default=None, description="매도 추천")
-    sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
+    sell_reasons: list[str] | None = Field(default=None, description="매도 근거")
 
     # 메타데이터
     analyzed_at: datetime = Field(description="분석 시각")
@@ -600,8 +600,7 @@ class AnalysisHistoryCreateDTO(BaseDTO):
     sell_recommendation: str | None = Field(default=None, description="매도 추천")
     sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
 
-    # 메타데이터
-    analyzed_at: datetime = Field(description="분석 시각")
+    # 메타데이터 (analyzed_at은 서버에서 자동 설정)
     note: str | None = Field(default=None, description="사용자 메모")
     is_active: bool = Field(default=True, description="활성 추적 여부")
     candle_count: int | None = Field(default=None, description="분석에 사용된 캔들 수")
