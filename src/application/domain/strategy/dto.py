@@ -522,3 +522,94 @@ class SellSignalRequestDTO(BaseDTO):
     symbol: str = Field(description="종목코드")
     stoch_overbought: float = Field(default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값")
     rsi_overbought: float = Field(default=70.0, ge=50.0, le=90.0, description="RSI 과매수 임계값")
+
+
+# ==================== Analysis History DTOs ====================
+
+
+class AnalysisHistoryDTO(BaseDTO):
+    """분석 이력 DTO"""
+
+    id: int = Field(description="ID")
+    analysis_type: str = Field(description="분석 유형 (buy/sell)")
+    symbol: str = Field(description="종목코드")
+    name: str | None = Field(default=None, description="종목명")
+    current_price: Decimal = Field(description="현재가")
+
+    # 공통 지표
+    ma_short: Decimal | None = Field(default=None, description="단기 MA (40일)")
+    ma_long: Decimal | None = Field(default=None, description="장기 MA (160일)")
+    ma_gap_ratio: float | None = Field(default=None, description="MA 갭 비율 (%)")
+    stoch_k: float | None = Field(default=None, description="Stochastic K")
+    stoch_d: float | None = Field(default=None, description="Stochastic D")
+
+    # 매수 분석용 (골든크로스)
+    gc_state: str | None = Field(default=None, description="골든크로스 상태")
+    is_gc_active: bool | None = Field(default=None, description="골든크로스 활성 여부")
+
+    # 매도 분석용
+    rsi: float | None = Field(default=None, description="RSI (14일)")
+    is_death_cross: bool | None = Field(default=None, description="데드크로스 여부")
+    is_stoch_overbought: bool | None = Field(default=None, description="Stochastic 과매수 여부")
+    is_rsi_overbought: bool | None = Field(default=None, description="RSI 과매수 여부")
+    sell_signal_strength: int | None = Field(default=None, description="매도 시그널 강도 (0-5)")
+    sell_recommendation: str | None = Field(default=None, description="매도 추천")
+    sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
+
+    # 메타데이터
+    analyzed_at: datetime = Field(description="분석 시각")
+    note: str | None = Field(default=None, description="사용자 메모")
+    is_active: bool = Field(description="활성 추적 여부")
+    candle_count: int | None = Field(default=None, description="분석에 사용된 캔들 수")
+    created_at: datetime | None = Field(default=None, description="생성 시각")
+    updated_at: datetime | None = Field(default=None, description="수정 시각")
+
+
+class AnalysisHistoryListDTO(BaseDTO):
+    """분석 이력 목록 DTO"""
+
+    items: list[AnalysisHistoryDTO] = Field(description="분석 이력 목록")
+    total_count: int = Field(description="전체 개수")
+
+
+class AnalysisHistoryCreateDTO(BaseDTO):
+    """분석 이력 생성 요청 DTO"""
+
+    analysis_type: str = Field(description="분석 유형 (buy/sell)")
+    symbol: str = Field(description="종목코드")
+    name: str | None = Field(default=None, description="종목명")
+    current_price: Decimal = Field(description="현재가")
+
+    # 공통 지표
+    ma_short: Decimal | None = Field(default=None, description="단기 MA")
+    ma_long: Decimal | None = Field(default=None, description="장기 MA")
+    ma_gap_ratio: float | None = Field(default=None, description="MA 갭 비율")
+    stoch_k: float | None = Field(default=None, description="Stochastic K")
+    stoch_d: float | None = Field(default=None, description="Stochastic D")
+
+    # 매수 분석용
+    gc_state: str | None = Field(default=None, description="골든크로스 상태")
+    is_gc_active: bool | None = Field(default=None, description="골든크로스 활성 여부")
+
+    # 매도 분석용
+    rsi: float | None = Field(default=None, description="RSI")
+    is_death_cross: bool | None = Field(default=None, description="데드크로스 여부")
+    is_stoch_overbought: bool | None = Field(default=None, description="Stochastic 과매수 여부")
+    is_rsi_overbought: bool | None = Field(default=None, description="RSI 과매수 여부")
+    sell_signal_strength: int | None = Field(default=None, description="매도 시그널 강도")
+    sell_recommendation: str | None = Field(default=None, description="매도 추천")
+    sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
+
+    # 메타데이터
+    analyzed_at: datetime = Field(description="분석 시각")
+    note: str | None = Field(default=None, description="사용자 메모")
+    is_active: bool = Field(default=True, description="활성 추적 여부")
+    candle_count: int | None = Field(default=None, description="분석에 사용된 캔들 수")
+
+
+class AnalysisHistoryRefreshResultDTO(BaseDTO):
+    """분석 이력 갱신 결과 DTO"""
+
+    updated_count: int = Field(description="갱신된 항목 수")
+    items: list[AnalysisHistoryDTO] = Field(description="갱신된 분석 이력 목록")
+    errors: list[str] = Field(default_factory=list, description="오류 메시지")

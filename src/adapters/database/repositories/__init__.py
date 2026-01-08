@@ -2,6 +2,9 @@
 Database Repositories - 데이터베이스 접근 계층
 """
 
+from src.adapters.database.repositories.analysis_history_repository import (
+    AnalysisHistoryRepository,
+)
 from src.adapters.database.repositories.base_repository import (
     BaseRepository,
     PaginationMixin,
@@ -27,6 +30,7 @@ __all__ = [
     "PaginationMixin",
     "StatsMixin",
     # Repositories
+    "AnalysisHistoryRepository",
     "OHLCVRepository",
     "OrderRepository",
     "StrategySymbolStateRepository",

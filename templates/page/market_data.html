@@ -4,23 +4,136 @@
 
 {% block content %}
 <h1>Market Data</h1>
-<p>시세 데이터 조회 (현재가, 호가, 차트)</p>
+<p>시세 데이터 조회와 고급 종목 필터링을 제공합니다.</p>
 
-<section>
-  <h2>시세 조회</h2>
-  <div class="row">
-    <label>Symbol</label>
-    <input id="market_symbol" value="005930" placeholder="종목코드" />
-    <label>Interval</label>
-    <input id="market_interval" value="1d" placeholder="1m, 5m, 1d 등" />
-  </div>
-  <div class="row">
-    <button onclick="getMarketPrice()">현재가</button>
-    <button onclick="getOrderbook()">호가</button>
-    <button onclick="getChart()">차트</button>
-  </div>
-  <pre id="market_output">결과 출력</pre>
-</section>
+<div class="tabs">
+  <button class="tab-button active" data-target="tab-basic">기본 조회</button>
+  <button class="tab-button" data-target="tab-advanced">고급 필터</button>
+</div>
+
+<div id="tab-basic" class="tab-panel active">
+  <section>
+    <h2>시세 조회</h2>
+    <div class="row">
+      <label>Symbol</label>
+      <input id="market_symbol" value="005930" placeholder="종목코드" />
+      <label>Interval</label>
+      <input id="market_interval" value="1d" placeholder="1m, 5m, 1d 등" />
+    </div>
+    <div class="row">
+      <button onclick="getMarketPrice()">현재가</button>
+      <button onclick="getOrderbook()">호가</button>
+      <button onclick="getChart()">차트</button>
+    </div>
+    <pre id="market_output">결과 출력</pre>
+  </section>
+</div>
+
+<div id="tab-advanced" class="tab-panel">
+  <section>
+    <h2>고급 종목 필터</h2>
+    <p>조건에 맞는 종목을 필터링합니다. 이 탭은 입력된 데이터 기준으로만 동작합니다.</p>
+    <div class="note-box">
+      <strong>필터 조건</strong>
+      <ul>
+        <li>대한민국에 알려진 대기업은 아니다.</li>
+        <li>재무상태표에 이익잉여금이 많이 쌓여있다.</li>
+        <li>이익잉여금이 대부분 현금이다.</li>
+        <li>대주주 지분률이 50% 이상.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>데이터 입력</h2>
+    <div class="row">
+      <button onclick="loadAdvancedSample()">예시 데이터 채우기</button>
+      <button class="secondary" onclick="clearAdvancedData()">입력 초기화</button>
+    </div>
+    <div class="row">
+      <label>JSON</label>
+      <textarea id="advanced_dataset" placeholder='[
+  {
+    "symbol": "000001",
+    "name": "샘플테크",
+    "is_major_corp": false,
+    "retained_earnings": 1800,
+    "retained_cash_ratio": 82,
+    "major_holder_ratio": 55
+  }
+]'></textarea>
+    </div>
+    <div class="row">
+      <label>CSV</label>
+      <input id="advanced_file" type="file" accept=".csv,.json" />
+      <span class="hint">CSV 컬럼: symbol,name,is_major_corp,retained_earnings,retained_cash_ratio,major_holder_ratio</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>필터 조건</h2>
+    <div class="row">
+      <label>키워드</label>
+      <input id="filter_keyword" placeholder="종목명/종목코드" />
+      <label>대기업 제외</label>
+      <select id="filter_exclude_major">
+        <option value="true">예</option>
+        <option value="false">아니오</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>이익잉여금(억원)</label>
+      <input id="filter_retained_min" type="number" value="1000" min="0" />
+      <label>현금 비중(%)</label>
+      <input id="filter_cash_ratio_min" type="number" value="70" min="0" max="100" />
+      <label>대주주 지분(%)</label>
+      <input id="filter_holder_min" type="number" value="50" min="0" max="100" />
+    </div>
+    <div class="row">
+      <button onclick="applyAdvancedFilters()">필터 실행</button>
+      <button class="secondary" onclick="resetAdvancedFilters()">필터 초기화</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>검색 결과</h2>
+    <div class="result-meta" id="advanced_result_meta">결과: 0건</div>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>종목명</th>
+            <th>대기업 여부</th>
+            <th>이익잉여금(억원)</th>
+            <th>현금 비중(%)</th>
+            <th>대주주 지분(%)</th>
+          </tr>
+        </thead>
+        <tbody id="advanced_results">
+          <tr><td colspan="6">데이터를 입력하고 필터를 실행하세요.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block extra_styles %}
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tab-button { padding: 8px 14px; border-radius: 20px; border: 1px solid #cbd5e1; background: #e2e8f0; color: #334155; cursor: pointer; font-size: 13px; }
+.tab-button.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+.note-box { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 12px 16px; color: #475569; }
+.note-box ul { margin-top: 8px; padding-left: 18px; }
+.note-box li { margin-bottom: 4px; font-size: 13px; }
+.hint { font-size: 12px; color: #64748b; }
+.table-wrapper { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { border: 1px solid #e2e8f0; padding: 8px; text-align: left; }
+th { background: #f1f5f9; color: #334155; }
+.result-meta { font-size: 13px; color: #475569; margin-bottom: 8px; }
 {% endblock %}
 
 {% block extra_scripts %}
@@ -39,4 +152,187 @@ const getChart = () => {
   const interval = document.getElementById("market_interval").value;
   getJson(`/api/v1/market/chart/${symbol}?interval=${interval}`, "market_output");
 };
+
+const tabButtons = document.querySelectorAll(".tab-button");
+const tabPanels = document.querySelectorAll(".tab-panel");
+tabButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    tabButtons.forEach((b) => b.classList.remove("active"));
+    tabPanels.forEach((p) => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(btn.dataset.target).classList.add("active");
+  });
+});
+
+let advancedData = [];
+
+const normalizeBool = (value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (!value) return false;
+  const str = String(value).toLowerCase();
+  return ["true", "1", "y", "yes"].includes(str);
+};
+
+const normalizeNumber = (value) => {
+  const num = Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(num) ? num : 0;
+};
+
+const setAdvancedData = (items) => {
+  advancedData = Array.isArray(items) ? items : [];
+};
+
+const loadAdvancedSample = () => {
+  const sample = [
+    {
+      symbol: "000001",
+      name: "샘플테크",
+      is_major_corp: false,
+      retained_earnings: 1800,
+      retained_cash_ratio: 82,
+      major_holder_ratio: 55,
+    },
+    {
+      symbol: "000002",
+      name: "예시홀딩스",
+      is_major_corp: true,
+      retained_earnings: 4200,
+      retained_cash_ratio: 65,
+      major_holder_ratio: 38,
+    },
+  ];
+  document.getElementById("advanced_dataset").value = JSON.stringify(sample, null, 2);
+  setAdvancedData(sample);
+  renderAdvancedResults(sample, "예시 데이터를 불러왔습니다.");
+};
+
+const clearAdvancedData = () => {
+  document.getElementById("advanced_dataset").value = "";
+  setAdvancedData([]);
+  renderAdvancedResults([], "입력 데이터가 없습니다.");
+};
+
+const parseCsv = (text) => {
+  const lines = text.trim().split(/\\r?\\n/);
+  if (!lines.length) return [];
+  const headers = lines[0].split(",").map((h) => h.trim());
+  return lines.slice(1).map((line) => {
+    const values = line.split(",").map((v) => v.trim());
+    const item = {};
+    headers.forEach((key, idx) => {
+      item[key] = values[idx] ?? "";
+    });
+    return item;
+  });
+};
+
+const loadAdvancedFromTextarea = () => {
+  const raw = document.getElementById("advanced_dataset").value.trim();
+  if (!raw) return [];
+  try {
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    alert("JSON 형식이 올바르지 않습니다.");
+    return [];
+  }
+};
+
+const applyAdvancedFilters = () => {
+  const keyword = document.getElementById("filter_keyword").value.trim().toLowerCase();
+  const excludeMajor = document.getElementById("filter_exclude_major").value === "true";
+  const retainedMin = normalizeNumber(document.getElementById("filter_retained_min").value);
+  const cashRatioMin = normalizeNumber(document.getElementById("filter_cash_ratio_min").value);
+  const holderMin = normalizeNumber(document.getElementById("filter_holder_min").value);
+
+  if (!advancedData.length) {
+    const parsed = loadAdvancedFromTextarea();
+    setAdvancedData(parsed);
+  }
+
+  const results = advancedData.filter((item) => {
+    const symbol = String(item.symbol || "");
+    const name = String(item.name || "");
+    const isMajorCorp = normalizeBool(item.is_major_corp);
+    const retained = normalizeNumber(item.retained_earnings);
+    const cashRatio = normalizeNumber(item.retained_cash_ratio);
+    const holderRatio = normalizeNumber(item.major_holder_ratio);
+
+    if (keyword && !(symbol.includes(keyword) || name.toLowerCase().includes(keyword))) {
+      return false;
+    }
+    if (excludeMajor && isMajorCorp) return false;
+    if (retainedMin && retained < retainedMin) return false;
+    if (cashRatioMin && cashRatio < cashRatioMin) return false;
+    if (holderMin && holderRatio < holderMin) return false;
+    return true;
+  });
+
+  renderAdvancedResults(results);
+};
+
+const resetAdvancedFilters = () => {
+  document.getElementById("filter_keyword").value = "";
+  document.getElementById("filter_exclude_major").value = "true";
+  document.getElementById("filter_retained_min").value = 1000;
+  document.getElementById("filter_cash_ratio_min").value = 70;
+  document.getElementById("filter_holder_min").value = 50;
+  applyAdvancedFilters();
+};
+
+const renderAdvancedResults = (items, message) => {
+  const tbody = document.getElementById("advanced_results");
+  const meta = document.getElementById("advanced_result_meta");
+
+  if (!items.length) {
+    tbody.innerHTML = `<tr><td colspan="6">${message || "조건에 맞는 종목이 없습니다."}</td></tr>`;
+    meta.textContent = `결과: 0건`;
+    return;
+  }
+
+  tbody.innerHTML = items.map((item) => {
+    const isMajor = normalizeBool(item.is_major_corp) ? "대기업" : "비대기업";
+    const retained = normalizeNumber(item.retained_earnings).toLocaleString();
+    const cashRatio = normalizeNumber(item.retained_cash_ratio).toFixed(1);
+    const holderRatio = normalizeNumber(item.major_holder_ratio).toFixed(1);
+    return `
+      <tr>
+        <td>${item.symbol || "-"}</td>
+        <td>${item.name || "-"}</td>
+        <td>${isMajor}</td>
+        <td>${retained}</td>
+        <td>${cashRatio}</td>
+        <td>${holderRatio}</td>
+      </tr>
+    `;
+  }).join("");
+
+  meta.textContent = `결과: ${items.length}건`;
+};
+
+document.getElementById("advanced_file").addEventListener("change", (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const text = reader.result || "";
+    if (file.name.endsWith(".json")) {
+      try {
+        const data = JSON.parse(text);
+        setAdvancedData(Array.isArray(data) ? data : []);
+        document.getElementById("advanced_dataset").value = JSON.stringify(advancedData, null, 2);
+        renderAdvancedResults(advancedData, "데이터를 불러왔습니다.");
+      } catch (e) {
+        alert("JSON 파일 형식이 올바르지 않습니다.");
+      }
+      return;
+    }
+    const data = parseCsv(text);
+    setAdvancedData(data);
+    document.getElementById("advanced_dataset").value = JSON.stringify(advancedData, null, 2);
+    renderAdvancedResults(advancedData, "CSV 데이터를 불러왔습니다.");
+  };
+  reader.readAsText(file, "utf-8");
+});
 {% endblock %}

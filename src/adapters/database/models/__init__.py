@@ -3,6 +3,10 @@ Database Models - SQLAlchemy ORM 모델
 """
 
 from src.adapters.database.models.account import AccountModel
+from src.adapters.database.models.analysis_history import (
+    AnalysisHistoryModel,
+    AnalysisType,
+)
 from src.adapters.database.models.base import BaseModel, SoftDeleteMixin, TimestampMixin
 from src.adapters.database.models.ohlcv import OHLCVModel
 from src.adapters.database.models.order import (
@@ -63,4 +67,7 @@ __all__ = [
     # Stock Universe
     "StockUniverseModel",
     "MarketType",
+    # Analysis History
+    "AnalysisHistoryModel",
+    "AnalysisType",
 ]

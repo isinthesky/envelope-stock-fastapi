@@ -18,6 +18,7 @@
 .stock-table th { background: #f1f5f9; padding: 10px 12px; text-align: left; font-weight: 600; border-bottom: 2px solid #e2e8f0; }
 .stock-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
 .stock-table tr:hover { background: #f8fafc; }
+.stock-table tr.selected { background: #eff6ff; }
 
 .state-badge { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
 .state-waiting-gc { background: #fef3c7; color: #92400e; }
@@ -39,6 +40,23 @@
 .stat-card { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: center; }
 .stat-card .number { font-size: 28px; font-weight: 700; color: #1e293b; }
 .stat-card .label { font-size: 12px; color: #64748b; margin-top: 4px; }
+
+.btn-add { background: #dcfce7; color: #166534; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
+.btn-add:hover { background: #bbf7d0; }
+.btn-add.added { background: #e2e8f0; color: #64748b; cursor: default; }
+.btn-delete { background: #fecaca; color: #991b1b; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.btn-delete:hover { background: #fca5a5; }
+.btn-refresh { background: #dbeafe; color: #1e40af; }
+.btn-refresh:hover { background: #bfdbfe; }
+
+.history-section { margin-top: 24px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; }
+.history-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.history-header h3 { margin: 0; font-size: 16px; }
+.history-actions { display: flex; gap: 8px; }
+.active-toggle { cursor: pointer; }
+.active-toggle.active { color: #16a34a; }
+.active-toggle.inactive { color: #9ca3af; }
+.loading { opacity: 0.6; pointer-events: none; }
 {% endblock %}
 
 {% block content %}
@@ -52,11 +70,11 @@
 
   <div class="strategy-flow">
     <span class="step">MA60 > MA200<br><small>골든크로스</small></span>
-    <span class="arrow">→</span>
+    <span class="arrow">-></span>
     <span class="step">Stoch K < 25<br><small>눌림목 대기</small></span>
-    <span class="arrow">→</span>
+    <span class="arrow">-></span>
     <span class="step">Stoch K > 20 회복<br><small>매수 신호</small></span>
-    <span class="arrow">→</span>
+    <span class="arrow">-></span>
     <span class="step">포지션 보유<br><small>리스크 관리</small></span>
   </div>
 
@@ -91,7 +109,7 @@
 <section>
   <h2>종목 스크리닝</h2>
   <div class="row">
-    <button onclick="scanGoldenCross()">🔍 골든크로스 스캔</button>
+    <button onclick="scanGoldenCross()">골든크로스 스캔</button>
     <button onclick="scanStocks()" class="secondary">전체 종목 스캔</button>
     <button onclick="getSymbolStates()" class="secondary">전략 종목 상태</button>
     <button onclick="refreshUniverse()" class="secondary">유니버스 갱신</button>
@@ -139,6 +157,7 @@
     <table class="stock-table">
       <thead>
         <tr>
+          <th style="width: 40px;"></th>
           <th>종목코드</th>
           <th>종목명</th>
           <th>상태</th>
@@ -211,6 +230,35 @@
   <pre id="scan_output" style="margin-top: 12px;">종목 스캔 버튼을 클릭하세요</pre>
 </section>
 
+<!-- 분석 히스토리 섹션 -->
+<section class="history-section">
+  <div class="history-header">
+    <h3>관심 종목 히스토리</h3>
+    <div class="history-actions">
+      <button class="btn-refresh" onclick="refreshBuyHistory()">활성 종목 갱신</button>
+    </div>
+  </div>
+  <table class="stock-table" style="margin-top: 0;">
+    <thead>
+      <tr>
+        <th style="width: 30px;"></th>
+        <th>종목코드</th>
+        <th>종목명</th>
+        <th>상태</th>
+        <th>현재가</th>
+        <th>MA Gap</th>
+        <th>Stoch K</th>
+        <th>Stoch D</th>
+        <th>분석시간</th>
+        <th style="width: 60px;"></th>
+      </tr>
+    </thead>
+    <tbody id="buy_history_body">
+      <tr><td colspan="10" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
+    </tbody>
+  </table>
+</section>
+
 <section>
   <h2>전략 관리</h2>
   <div class="row">
@@ -276,9 +324,183 @@
 let allStocks = [];
 let universeStocks = [];
 let gcScanStocks = [];
+let buyHistory = [];
+let addedSymbols = new Set();
 let currentFilter = 'all';
 let universeFilter = 'all';
 let gcFilter = 'all';
+
+// 페이지 로드 시 히스토리 조회
+const loadBuyHistory = async () => {
+  try {
+    const response = await fetch('/api/v1/strategies/analysis-history?analysis_type=buy&limit=50');
+    const data = await response.json();
+
+    if (data.success && data.data) {
+      buyHistory = data.data.items;
+      addedSymbols = new Set(buyHistory.map(h => h.symbol));
+      renderBuyHistoryTable();
+    }
+  } catch (e) {
+    console.error('Failed to load buy history:', e);
+    document.getElementById("buy_history_body").innerHTML =
+      '<tr><td colspan="10" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
+  }
+};
+
+// 골든크로스 종목을 히스토리에 추가
+const addToHistory = async (stock, event) => {
+  event.stopPropagation();
+
+  if (addedSymbols.has(stock.symbol)) return;
+
+  try {
+    const payload = {
+      analysis_type: 'buy',
+      symbol: stock.symbol,
+      name: stock.name || null,
+      current_price: stock.current_price,
+      ma_short: stock.ma_short,
+      ma_long: stock.ma_long,
+      ma_gap_ratio: stock.ma_gap_ratio,
+      stoch_k: stock.stoch_k,
+      stoch_d: stock.stoch_d,
+      gc_state: stock.gc_state,
+      is_gc_active: stock.is_gc_active,
+      is_active: true
+    };
+
+    const response = await fetch('/api/v1/strategies/analysis-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await response.json();
+    if (result.success && result.data) {
+      buyHistory.unshift(result.data);
+      addedSymbols.add(stock.symbol);
+      renderBuyHistoryTable();
+      renderGcScanTable(gcScanStocks); // 버튼 상태 업데이트
+    }
+  } catch (e) {
+    console.error('Failed to add to history:', e);
+    alert('추가 실패');
+  }
+};
+
+// 히스토리 삭제
+const deleteBuyHistory = async (id, symbol, event) => {
+  event.stopPropagation();
+  if (!confirm('이 종목을 히스토리에서 삭제하시겠습니까?')) return;
+
+  try {
+    const response = await fetch(`/api/v1/strategies/analysis-history/${id}`, {
+      method: 'DELETE'
+    });
+
+    if (response.ok) {
+      buyHistory = buyHistory.filter(h => h.id !== id);
+      addedSymbols.delete(symbol);
+      renderBuyHistoryTable();
+      renderGcScanTable(gcScanStocks); // 버튼 상태 업데이트
+    }
+  } catch (e) {
+    console.error('Failed to delete history:', e);
+    alert('삭제 실패');
+  }
+};
+
+// 활성 상태 토글
+const toggleBuyActive = async (id, event) => {
+  event.stopPropagation();
+  const item = buyHistory.find(h => h.id === id);
+  if (!item) return;
+
+  const newActive = !item.is_active;
+
+  try {
+    const response = await fetch(`/api/v1/strategies/analysis-history/${id}/active?is_active=${newActive}`, {
+      method: 'PATCH'
+    });
+
+    const result = await response.json();
+    if (result.success && result.data) {
+      const idx = buyHistory.findIndex(h => h.id === id);
+      if (idx >= 0) {
+        buyHistory[idx] = result.data;
+        renderBuyHistoryTable();
+      }
+    }
+  } catch (e) {
+    console.error('Failed to toggle active:', e);
+  }
+};
+
+// 활성 종목 일괄 갱신
+const refreshBuyHistory = async () => {
+  const tbody = document.getElementById("buy_history_body");
+  tbody.classList.add('loading');
+
+  try {
+    const response = await fetch('/api/v1/strategies/analysis-history/refresh?analysis_type=buy', {
+      method: 'POST'
+    });
+
+    const result = await response.json();
+    if (result.success && result.data) {
+      // 갱신된 항목들로 기존 데이터 업데이트
+      result.data.items.forEach(updated => {
+        const idx = buyHistory.findIndex(h => h.symbol === updated.symbol && h.is_active);
+        if (idx >= 0) {
+          buyHistory[idx] = updated;
+        }
+      });
+      renderBuyHistoryTable();
+      alert(`${result.data.updated_count}개 종목 갱신 완료`);
+    }
+  } catch (e) {
+    console.error('Failed to refresh:', e);
+    alert('갱신 실패');
+  } finally {
+    tbody.classList.remove('loading');
+  }
+};
+
+// 매수 히스토리 테이블 렌더링
+const renderBuyHistoryTable = () => {
+  const tbody = document.getElementById("buy_history_body");
+
+  if (buyHistory.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #94a3b8;">추적 중인 종목이 없습니다. 골든크로스 스캔 후 + 버튼으로 추가하세요.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = buyHistory.map(item => {
+    const stateClass = getGcStateClass(item.gc_state);
+    const stateLabel = getGcStateLabel(item.gc_state);
+    const activeIcon = item.is_active ? '●' : '○';
+    const activeClass = item.is_active ? 'active' : 'inactive';
+    const maGapClass = item.ma_gap_ratio > 0 ? 'bullish' : 'bearish';
+
+    return `<tr>
+      <td>
+        <span class="active-toggle ${activeClass}" onclick="toggleBuyActive(${item.id}, event)" title="${item.is_active ? '활성 추적 중' : '추적 중지됨'}">${activeIcon}</span>
+      </td>
+      <td><strong>${item.symbol}</strong></td>
+      <td>${item.name || '-'}</td>
+      <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
+      <td class="indicator">${formatNumber(item.current_price)}</td>
+      <td class="indicator ${maGapClass}">${Number(item.ma_gap_ratio).toFixed(2)}%</td>
+      <td class="indicator">${Number(item.stoch_k).toFixed(1)}</td>
+      <td class="indicator">${Number(item.stoch_d).toFixed(1)}</td>
+      <td>${formatTime(item.analyzed_at)}</td>
+      <td>
+        <button class="btn-delete" onclick="deleteBuyHistory(${item.id}, '${item.symbol}', event)">삭제</button>
+      </td>
+    </tr>`;
+  }).join('');
+};
 
 const createStrategy = () => {
   const text = document.getElementById("strategy_json").value;
@@ -390,8 +612,15 @@ const renderGcScanTable = (stocks) => {
     const stateLabel = getGcStateLabel(stock.gc_state);
     const maGapClass = stock.ma_gap_ratio > 0 ? 'bullish' : 'bearish';
     const stochClass = stock.stoch_k < 30 ? 'bearish' : stock.stoch_k > 70 ? 'bullish' : '';
+    const isAdded = addedSymbols.has(stock.symbol);
+    const btnClass = isAdded ? 'btn-add added' : 'btn-add';
+    const btnText = isAdded ? '추가됨' : '+';
+    const stockJson = JSON.stringify(stock).replace(/'/g, "\\'");
 
     return `<tr>
+      <td>
+        <button class="${btnClass}" onclick='addToHistory(${stockJson}, event)' ${isAdded ? 'disabled' : ''}>${btnText}</button>
+      </td>
       <td><strong>${stock.symbol}</strong></td>
       <td>${stock.name}</td>
       <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
@@ -587,4 +816,7 @@ const formatVolume = (vol) => {
   if (num >= 1e3) return (num / 1e3).toFixed(0) + 'K';
   return num.toLocaleString();
 };
+
+// 페이지 로드 시 히스토리 로드
+document.addEventListener('DOMContentLoaded', loadBuyHistory);
 {% endblock %}

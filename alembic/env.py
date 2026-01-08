@@ -13,6 +13,7 @@ from src.adapters.database.connection import Base
 
 # Import all models for autogenerate
 from src.adapters.database.models.account import AccountModel  # noqa: F401
+from src.adapters.database.models.analysis_history import AnalysisHistoryModel  # noqa: F401
 from src.adapters.database.models.order import OrderModel  # noqa: F401
 from src.adapters.database.models.position import PositionModel  # noqa: F401
 from src.adapters.database.models.strategy import StrategyModel  # noqa: F401
