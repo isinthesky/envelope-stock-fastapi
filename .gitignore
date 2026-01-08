@@ -101,3 +101,6 @@ uv.lock
 .bmad/
 .claude/
 .cursor/
+
+# Claude Code local config
+CLAUDE.local.md

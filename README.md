@@ -156,6 +156,81 @@ hantwo-stock-fastapi/
 
 ---
 
+## 🐳 Docker 배포
+
+### Docker Compose로 실행
+
+```bash
+# 1. 환경 변수 설정
+cp .env.example .env
+# .env 파일 수정 (민감정보 변경 필수)
+
+# 2. Docker Compose 실행
+docker compose up -d
+
+# 3. 로그 확인
+docker compose logs -f api
+```
+
+### 외부 접속
+
+API 서버는 기본적으로 **포트 5001**로 외부에 노출됩니다.
+
+| 서비스 | 내부 포트 | 외부 포트 | 접속 URL |
+|--------|-----------|-----------|----------|
+| API Server | 8000 | 5001 | http://localhost:5001 |
+| PostgreSQL | 5432 | 5434 | localhost:5434 |
+| Redis | 6379 | 6379 | localhost:6379 |
+
+**API 문서 접속:**
+- Swagger UI: http://localhost:5001/docs
+- ReDoc: http://localhost:5001/redoc
+- Health Check: http://localhost:5001/health
+
+### 환경 변수 (Docker)
+
+`.env` 파일에서 다음 민감정보를 반드시 변경하세요:
+
+```env
+# PostgreSQL (필수 변경)
+POSTGRES_USER=kis_user
+POSTGRES_PASSWORD=your_secure_password  # 반드시 변경!
+POSTGRES_DB=kis_trading
+
+# Redis (선택)
+REDIS_PASSWORD=  # 필요시 설정
+
+# 포트 설정 (선택)
+API_PORT=5001       # API 외부 포트
+POSTGRES_PORT=5434  # PostgreSQL 외부 포트
+REDIS_PORT=6379     # Redis 외부 포트
+```
+
+### Docker 명령어
+
+```bash
+# 서비스 시작
+docker compose up -d
+
+# 서비스 중지
+docker compose down
+
+# 볼륨 포함 삭제 (데이터 초기화)
+docker compose down -v
+
+# 이미지 재빌드
+docker compose up -d --build
+
+# 특정 서비스 로그
+docker compose logs -f api
+docker compose logs -f postgres
+
+# 컨테이너 상태 확인
+docker compose ps
+```
+
+---
+
 ## 📚 개발 가이드
 
 ### 개발 명령어
