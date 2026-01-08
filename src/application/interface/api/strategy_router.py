@@ -12,6 +12,10 @@ from fastapi import APIRouter, HTTPException, Query, status
 from src.application.common.dependencies import DatabaseSession, MarketDataServiceDep
 from src.application.common.dto import ResponseDTO
 from src.application.domain.strategy.dto import (
+    AnalysisHistoryCreateDTO,
+    AnalysisHistoryDTO,
+    AnalysisHistoryListDTO,
+    AnalysisHistoryRefreshResultDTO,
     GoldenCrossConfigDTO,
     GoldenCrossScanListDTO,
     SellSignalAnalysisDTO,
@@ -26,7 +30,7 @@ from src.application.domain.strategy.dto import (
     StrategyUpdateRequestDTO,
     SymbolStateListDTO,
 )
-from src.application.domain.strategy.service import StrategyService
+from src.application.domain.strategy.strategy_service import StrategyService
 
 router = APIRouter()
 
@@ -184,6 +188,114 @@ async def analyze_sell_signal(
         rsi_overbought=rsi_overbought,
     )
     return ResponseDTO.success_response(result, "Sell signal analysis completed")
+
+
+# ==================== Analysis History Endpoints (정적 경로) ====================
+
+
+@router.post(
+    "/analysis-history",
+    response_model=ResponseDTO[AnalysisHistoryDTO],
+    status_code=status.HTTP_201_CREATED,
+    summary="분석 이력 저장",
+    description="매수/매도 분석 결과를 DB에 저장",
+)
+async def create_analysis_history(
+    request: AnalysisHistoryCreateDTO,
+) -> ResponseDTO[AnalysisHistoryDTO]:
+    """분석 이력 저장 - @transaction이 세션을 관리"""
+    service = StrategyService()
+    history = await service.save_analysis_history(request)
+    return ResponseDTO.success_response(history, "Analysis history saved successfully")
+
+
+@router.get(
+    "/analysis-history",
+    response_model=ResponseDTO[AnalysisHistoryListDTO],
+    status_code=status.HTTP_200_OK,
+    summary="분석 이력 목록 조회",
+    description="매수/매도 분석 이력 목록 조회",
+)
+async def get_analysis_history_list(
+    session: DatabaseSession,
+    analysis_type: str = Query(..., description="분석 유형 (buy/sell)"),
+    is_active: bool | None = Query(default=None, description="활성 추적 여부 필터"),
+    limit: int = Query(default=50, ge=1, le=200, description="최대 조회 개수"),
+    offset: int = Query(default=0, ge=0, description="시작 위치"),
+) -> ResponseDTO[AnalysisHistoryListDTO]:
+    """분석 이력 목록 조회"""
+    service = StrategyService(session)
+    history_list = await service.list_analysis_history(
+        analysis_type=analysis_type,
+        is_active=is_active,
+        limit=limit,
+        offset=offset,
+    )
+    return ResponseDTO.success_response(history_list, "Analysis history list retrieved successfully")
+
+
+@router.get(
+    "/analysis-history/{history_id}",
+    response_model=ResponseDTO[AnalysisHistoryDTO],
+    status_code=status.HTTP_200_OK,
+    summary="분석 이력 상세 조회",
+    description="분석 이력 ID로 상세 정보 조회",
+)
+async def get_analysis_history(
+    history_id: int,
+    session: DatabaseSession,
+) -> ResponseDTO[AnalysisHistoryDTO]:
+    """분석 이력 상세 조회"""
+    service = StrategyService(session)
+    history = await service.get_analysis_history(history_id)
+    return ResponseDTO.success_response(history, "Analysis history retrieved successfully")
+
+
+@router.post(
+    "/analysis-history/refresh",
+    response_model=ResponseDTO[AnalysisHistoryRefreshResultDTO],
+    status_code=status.HTTP_200_OK,
+    summary="분석 이력 일괄 갱신",
+    description="활성 추적 중인 종목들의 분석 이력을 일괄 갱신",
+)
+async def refresh_analysis_history(
+    analysis_type: str = Query(..., description="분석 유형 (buy/sell)"),
+) -> ResponseDTO[AnalysisHistoryRefreshResultDTO]:
+    """분석 이력 일괄 갱신 - @transaction이 세션을 관리"""
+    service = StrategyService()
+    result = await service.refresh_analysis_history(analysis_type)
+    return ResponseDTO.success_response(result, "Analysis history refresh completed")
+
+
+@router.patch(
+    "/analysis-history/{history_id}/active",
+    response_model=ResponseDTO[AnalysisHistoryDTO],
+    status_code=status.HTTP_200_OK,
+    summary="활성 추적 상태 변경",
+    description="분석 이력의 활성 추적 상태 변경",
+)
+async def update_analysis_history_active(
+    history_id: int,
+    is_active: bool = Query(..., description="활성 추적 여부"),
+) -> ResponseDTO[AnalysisHistoryDTO]:
+    """활성 추적 상태 변경 - @transaction이 세션을 관리"""
+    service = StrategyService()
+    history = await service.set_analysis_history_active(history_id, is_active)
+    return ResponseDTO.success_response(history, "Analysis history active status updated")
+
+
+@router.delete(
+    "/analysis-history/{history_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="분석 이력 삭제",
+    description="분석 이력 삭제",
+)
+async def delete_analysis_history(
+    history_id: int,
+) -> None:
+    """분석 이력 삭제 - @transaction이 세션을 관리"""
+    service = StrategyService()
+    await service.delete_analysis_history(history_id)
 
 
 # ==================== Scheduler Status (정적 경로) ====================
