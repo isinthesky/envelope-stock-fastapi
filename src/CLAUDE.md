@@ -1,155 +1,59 @@
 # CLAUDE.md - src 디렉토리 가이드
 
-> **소스 코드 루트**: FastAPI 서버의 모든 소스 코드가 위치하는 핵심 디렉토리
+> **소스 코드 루트**: FastAPI 애플리케이션의 핵심 모듈이 모이는 디렉터리
 
-## 📁 디렉토리 역할
-
-`src/` 디렉토리는 **헥사고날 아키텍처(Ports & Adapters)** 기반의 FastAPI 서버 소스 코드를 담고 있습니다. 각 하위 디렉토리는 명확한 책임과 역할을 가집니다.
+## ✅ 역할
+- FastAPI 엔트리포인트(`main.py`)와 전 레이어 모듈을 포함
+- 헥사고날 아키텍처의 레이어 경계를 유지
+- 환경 설정, 외부 연동, 비즈니스 로직을 명확히 분리
 
 ---
 
-## 📂 디렉토리 구조
-
+## 📂 구조
 ```
 src/
-├── main.py                 # ASGI 엔트리포인트
-├── __init__.py
-│
-├── settings/               # ⚙️ 환경 설정 계층
-│   ├── config.py           # Pydantic Settings 기반 설정
-│   └── __init__.py
-│
-├── adapters/               # 🔌 외부 시스템 연동 계층 (Infrastructure)
-│   ├── database/           # PostgreSQL + SQLAlchemy
-│   ├── cache/              # Redis 캐시
-│   └── external/           # KIS API, WebSocket 클라이언트
-│
-└── application/            # 💼 애플리케이션 계층
-    ├── interface/          # API Router (Presentation)
-    ├── domain/             # 도메인 서비스 (Business Logic)
-    └── common/             # 공통 유틸리티
+├── main.py                 # FastAPI 앱 생성/라우터 등록/라이프사이클
+├── settings/               # 환경 설정(Pydantic Settings)
+├── adapters/               # 외부 연동(DB/Redis/KIS/WebSocket)
+└── application/            # interface/domain/common 계층
 ```
 
 ---
 
-## 🏛️ 아키텍처 개요
-
-### 헥사고날 아키텍처 레이어
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Interface Layer                             │
-│              (application/interface/*_router.py)                 │
-│                   FastAPI Router, Request/Response               │
-├─────────────────────────────────────────────────────────────────┤
-│                      Domain Layer                                │
-│                (application/domain/*/service.py)                 │
-│               비즈니스 로직, 도메인 규칙, DTO                      │
-├─────────────────────────────────────────────────────────────────┤
-│                      Common Layer                                │
-│                   (application/common/*)                         │
-│          Decorators, Validators, Dependencies, DTO               │
-├─────────────────────────────────────────────────────────────────┤
-│                     Adapter Layer                                │
-│                      (adapters/*)                                │
-│         Database, Cache, External API 연동                       │
-├─────────────────────────────────────────────────────────────────┤
-│                    Settings Layer                                │
-│                     (settings/*)                                 │
-│               환경 설정, 상수, 시크릿 관리                         │
-└─────────────────────────────────────────────────────────────────┘
-```
+## 🧠 main.py 핵심 흐름
+- lifespan에서 다음을 순차적으로 수행합니다.
+  - DB 연결 확인
+  - Redis 연결 확인
+  - KIS 토큰 발급 및 토큰 갱신 백그라운드 태스크 시작
+  - 레거시 전략 엔진(볼린저/엔벨로프) 시작
+  - 골든크로스 전략 스케줄러 시작
+- 라우터 등록은 `main.py`에서 일괄 수행합니다.
+  - `/api/v1/*` REST 라우터
+  - `/ws` WebSocket 라우터
+  - `/page` 대시보드 라우터
 
 ---
 
-## 📋 핵심 파일 설명
-
-### main.py
-```python
-# ASGI 엔트리포인트
-# - FastAPI 앱 초기화
-# - Router 등록
-# - Middleware 설정
-# - Lifespan 이벤트 (startup/shutdown)
-```
-
-### settings/config.py
-- `Settings` 클래스: Pydantic Settings 기반 환경 변수 관리
-- `get_settings()`: 싱글톤 패턴으로 설정 인스턴스 반환
-- KIS API, Database, Redis, 리스크 관리 설정 포함
-
----
-
-## 🔗 계층 간 의존성 규칙
-
+## ✅ 레이어 의존성 규칙
 ```
 Interface → Domain → Adapters
-    ↘        ↓        ↗
-       Common/Settings
+         ↘ Common/Settings
 ```
-
-### 핵심 규칙
-
-1. **Interface → Domain**: Router는 Service만 호출
-2. **Domain → Adapters**: Service는 Repository/Client 사용
-3. **Adapters ↔ Settings**: 외부 연동은 Settings에서 설정 읽기
-4. **Common**: 모든 계층에서 사용 가능한 유틸리티
-
-### 금지 사항
-- ❌ Interface에서 Repository 직접 호출
-- ❌ Adapters에서 Domain 로직 구현
-- ❌ 순환 의존성 (A → B → A)
+- Interface는 Domain 서비스만 호출합니다.
+- Domain은 Repository/Client를 통해 외부 연동을 수행합니다.
+- Adapters는 비즈니스 로직을 포함하지 않습니다.
+- Common/Settings는 모든 레이어에서 공통으로 참조합니다.
 
 ---
 
-## 🎯 계층별 책임
-
-| 계층 | 위치 | 책임 |
-|------|------|------|
-| **Interface** | `application/interface/` | HTTP 요청/응답, 라우팅, 인증 |
-| **Domain** | `application/domain/` | 비즈니스 로직, 트랜잭션, 유효성 검증 |
-| **Common** | `application/common/` | 공통 DTO, 데코레이터, 의존성 주입 |
-| **Adapters** | `adapters/` | DB, 캐시, 외부 API 연동 |
-| **Settings** | `settings/` | 환경 설정, 상수 관리 |
-
----
-
-## 📚 도메인 목록
-
-| 도메인 | 위치 | 상태 | 설명 |
-|--------|------|------|------|
-| **Auth** | `domain/auth/` | ✅ 구현됨 | 토큰 발급/갱신 |
-| **MarketData** | `domain/market_data/` | ✅ 구현됨 | 시세 조회, 차트 데이터 |
-| **Account** | `domain/account/` | ✅ 구현됨 | 계좌 잔고, 포지션 |
-| **Order** | `domain/order/` | ✅ 구현됨 | 주문 생성/조회/취소 |
-| **Strategy** | `domain/strategy/` | ✅ 구현됨 | 전략 관리 |
-| **Backtest** | `domain/backtest/` | ✅ 구현됨 | 백테스팅 실행 |
-| **WebSocket** | `domain/websocket_domain/` | 🚧 준비 중 | 실시간 시세 |
-
----
-
-## 🛠️ 개발 가이드
-
-### 새 도메인 추가 시
-1. `application/domain/{domain_name}/` 생성
-2. `dto.py`: Pydantic DTO 정의
-3. `service.py`: 비즈니스 로직 구현
-4. `application/interface/{domain_name}_router.py` 생성
-5. `main.py`에 Router 등록
-
-### 새 어댑터 추가 시
-1. `adapters/{adapter_type}/` 생성
-2. Client/Repository 클래스 구현
-3. `application/common/dependencies.py`에 의존성 등록
+## 📝 추가 규칙
+- 새 API 라우터는 `application/interface/api`에 추가하고 `main.py`에서 등록합니다.
+- 비즈니스 로직은 반드시 `application/domain`에 위치시킵니다.
+- 환경 설정은 `settings/config.py`에만 추가합니다.
 
 ---
 
 ## 🔗 관련 문서
-
-- [아키텍처 상세](../docs/base/ARCHITECTURE.md)
-- [서비스 구현 가이드](../docs/base/SERVICE.md)
-- [코딩 컨벤션](../docs/base/convention.md)
-
----
-
-**💡 핵심**: 모든 코드는 **단일 책임 원칙(SRP)**을 준수하며, 각 계층은 자신의 역할에만 집중합니다.
+- `src/application/CLAUDE.md`
+- `src/adapters/CLAUDE.md`
+- `src/settings/CLAUDE.md`
