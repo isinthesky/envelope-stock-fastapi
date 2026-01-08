@@ -26,6 +26,9 @@ from src.application.common.decorators import transaction
 from src.application.common.exceptions import StrategyError
 from src.application.domain.strategy.dto import (
     GoldenCrossConfigDTO,
+    GoldenCrossScanItemDTO,
+    GoldenCrossScanListDTO,
+    SellSignalAnalysisDTO,
     SignalListDTO,
     SignalStatisticsDTO,
     StockUniverseItemDTO,
@@ -534,3 +537,540 @@ class StrategyService:
         result = await screener.refresh_universe([])
 
         return result
+
+    async def scan_golden_cross_candidates(
+        self,
+        market: str | None = None,
+        stoch_threshold: float = 30.0,
+        gc_only: bool = True,
+    ) -> GoldenCrossScanListDTO:
+        """
+        골든크로스 종목 스캔
+
+        기본 스크리닝 통과 종목에 대해 기술적 지표를 계산하여
+        골든크로스 전략 조건에 부합하는 종목을 필터링합니다.
+
+        - 2번의 API 호출로 약 160~170개 캔들 수집
+        - DB 캐싱을 통해 반복 호출 최소화
+        - MA40/MA160 지표 사용
+
+        Args:
+            market: 시장 필터 (KOSPI/KOSDAQ)
+            stoch_threshold: Stochastic 과매도 임계값 (기본 30)
+            gc_only: 골든크로스 활성 종목만 반환 (기본 True)
+
+        Returns:
+            GoldenCrossScanListDTO: 스캔 결과
+        """
+        if not self.session:
+            raise StrategyError("Database session not provided")
+
+        import asyncio
+        import logging
+        from datetime import timedelta
+
+        import pandas as pd
+
+        from src.application.common.indicators import TechnicalIndicators
+        from src.adapters.database.repositories.ohlcv_repository import OHLCVRepository
+        from src.application.domain.market_data.service import MarketDataService
+
+        logger = logging.getLogger(__name__)
+        scan_time = datetime.now()
+        errors: list[str] = []
+        results: list[GoldenCrossScanItemDTO] = []
+
+        # 1. 유니버스에서 스크리닝 통과 종목 조회
+        universe_repo = StockUniverseRepository(self.session)
+        market_type = MarketType(market) if market else None
+        stocks = await universe_repo.get_eligible_stocks(market=market_type)
+
+        if not stocks:
+            return GoldenCrossScanListDTO(
+                stocks=[],
+                total_scanned=0,
+                gc_active_count=0,
+                pullback_waiting_count=0,
+                ready_to_buy_count=0,
+                scan_time=scan_time,
+                errors=["No eligible stocks found in universe"],
+            )
+
+        logger.info(f"[GC Scan] Scanning {len(stocks)} eligible stocks with MA40/MA160")
+
+        # 2. MarketDataService 초기화
+        from src.adapters.cache.redis_client import get_redis_client
+
+        kis_client = KISAPIClient()
+        redis_client = await get_redis_client()
+        market_data_service = MarketDataService(kis_client, redis_client)
+
+        # 3. 날짜 범위 설정 (MA160을 위해 약 240일 필요)
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=240)
+        ohlcv_repo = OHLCVRepository(self.session) if self.session else None
+
+        # 4. 종목별 기술적 지표 계산
+        for stock in stocks:
+            try:
+                df = None
+
+                if ohlcv_repo:
+                    availability = await ohlcv_repo.check_data_availability(
+                        symbol=stock.symbol,
+                        start_date=start_date,
+                        end_date=end_date,
+                        interval="1d",
+                    )
+                    latest = availability.get("latest")
+                    can_use_cached = availability["is_complete"]
+                    if latest and availability.get("count", 0) >= 160:
+                        if (end_date - latest) <= timedelta(days=3):
+                            can_use_cached = True
+
+                    if can_use_cached:
+                        cached_df = await ohlcv_repo.get_candles_to_dataframe(
+                            symbol=stock.symbol,
+                            start_date=start_date,
+                            end_date=end_date,
+                            interval="1d",
+                        )
+                        if not cached_df.empty:
+                            df = cached_df
+
+                if df is None:
+                    # 2번의 API 호출로 약 240일 데이터 수집 (MA160용)
+                    all_candles: list = []
+
+                    # 첫 번째 호출: 최근 120일 (약 80 캔들)
+                    chart_data1 = await market_data_service.get_chart_data(
+                        symbol=stock.symbol,
+                        interval="1d",
+                        start_date=end_date - timedelta(days=120),
+                        end_date=end_date,
+                    )
+                    if chart_data1.candles:
+                        all_candles.extend(chart_data1.candles)
+
+                    # 두 번째 호출: 이전 120일
+                    if all_candles:
+                        earliest = min(c.timestamp for c in all_candles)
+                        chart_data2 = await market_data_service.get_chart_data(
+                            symbol=stock.symbol,
+                            interval="1d",
+                            start_date=earliest - timedelta(days=120),
+                            end_date=earliest - timedelta(days=1),
+                        )
+                        if chart_data2.candles:
+                            all_candles.extend(chart_data2.candles)
+
+                    if not all_candles:
+                        logger.debug(f"[GC Scan] {stock.symbol}: No candle data")
+                        continue
+
+                    candles_by_date = {c.timestamp: c for c in all_candles}
+                    all_candles = sorted(candles_by_date.values(), key=lambda c: c.timestamp)
+
+                    if ohlcv_repo:
+                        try:
+                            await ohlcv_repo.save_candles_bulk(
+                                symbol=stock.symbol,
+                                candles=all_candles,
+                                interval="1d",
+                                source="kis",
+                            )
+                            await self.session.commit()
+                        except Exception as cache_error:
+                            await self.session.rollback()
+                            logger.warning(
+                                "[GC Scan] Failed to cache %s candles: %s",
+                                stock.symbol,
+                                cache_error,
+                            )
+
+                    df = pd.DataFrame(
+                        [
+                            {
+                                "timestamp": c.timestamp,
+                                "open": float(c.open),
+                                "high": float(c.high),
+                                "low": float(c.low),
+                                "close": float(c.close),
+                                "volume": int(c.volume),
+                            }
+                            for c in all_candles
+                        ]
+                    )
+
+                df = (
+                    df.drop_duplicates(subset=["timestamp"])
+                    .sort_values("timestamp")
+                    .reset_index(drop=True)
+                )
+
+                candle_count = len(df)
+                # MA160 계산을 위해 최소 160개 필요
+                if candle_count < 160:
+                    logger.debug(f"[GC Scan] {stock.symbol}: Insufficient data, need 160, got {candle_count}")
+                    continue
+
+                # 지표 계산 (MA40/MA160)
+                df = TechnicalIndicators.prepare_golden_cross_indicators(
+                    df,
+                    short_ma_period=40,
+                    long_ma_period=160,
+                    stoch_k_period=14,
+                    stoch_d_period=3,
+                )
+
+                # 최신 행 추출
+                latest = df.iloc[-1]
+                ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
+                ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
+                stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
+                stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
+                close = float(latest["close"])
+
+                # 골든크로스 상태 판정
+                is_gc_active = ma_short > ma_long
+
+                # gc_only 필터
+                if gc_only and not is_gc_active:
+                    continue
+
+                # 상태 결정
+                gc_state = self._determine_gc_state(
+                    is_gc_active=is_gc_active,
+                    stoch_k=stoch_k,
+                    stoch_threshold=stoch_threshold,
+                )
+
+                # MA 갭 비율 계산
+                ma_gap_ratio = ((ma_short - ma_long) / ma_long) if ma_long > 0 else 0
+
+                # 결과 추가
+                results.append(
+                    GoldenCrossScanItemDTO(
+                        symbol=stock.symbol,
+                        name=stock.name,
+                        market=stock.market,
+                        current_price=Decimal(str(close)),
+                        ma_short=Decimal(str(round(ma_short, 2))),
+                        ma_long=Decimal(str(round(ma_long, 2))),
+                        ma_gap_ratio=round(ma_gap_ratio * 100, 2),  # 백분율
+                        stoch_k=round(stoch_k, 2),
+                        stoch_d=round(stoch_d, 2),
+                        is_gc_active=is_gc_active,
+                        gc_state=gc_state,
+                        market_cap=stock.market_cap,
+                        screening_score=stock.screening_score,
+                    )
+                )
+
+                # Rate limit 대응
+                await asyncio.sleep(0.05)
+
+            except Exception as e:
+                error_msg = f"{stock.symbol}: {str(e)}"
+                logger.warning(f"[GC Scan] Error processing {error_msg}")
+                errors.append(error_msg)
+
+        # 5. 결과 정렬 (READY_TO_BUY > WAITING_FOR_PULLBACK > 기타)
+        state_order = {"READY_TO_BUY": 0, "WAITING_FOR_PULLBACK": 1, "GC_ACTIVE": 2, "NOT_GC": 3}
+        results.sort(key=lambda x: (state_order.get(x.gc_state, 99), -float(x.screening_score or 0)))
+
+        # 6. 통계 계산
+        gc_active_count = sum(1 for r in results if r.is_gc_active)
+        pullback_waiting_count = sum(1 for r in results if r.gc_state == "WAITING_FOR_PULLBACK")
+        ready_to_buy_count = sum(1 for r in results if r.gc_state == "READY_TO_BUY")
+
+        logger.info(
+            f"[GC Scan] Complete: {len(results)} results, "
+            f"GC Active: {gc_active_count}, Pullback: {pullback_waiting_count}, "
+            f"Ready: {ready_to_buy_count}, Errors: {len(errors)}"
+        )
+
+        return GoldenCrossScanListDTO(
+            stocks=results,
+            total_scanned=len(stocks),
+            gc_active_count=gc_active_count,
+            pullback_waiting_count=pullback_waiting_count,
+            ready_to_buy_count=ready_to_buy_count,
+            scan_time=scan_time,
+            errors=errors,
+        )
+
+    def _determine_gc_state(
+        self,
+        is_gc_active: bool,
+        stoch_k: float,
+        stoch_threshold: float,
+    ) -> str:
+        """
+        골든크로스 상태 결정
+
+        Args:
+            is_gc_active: 골든크로스 활성 여부
+            stoch_k: 현재 Stochastic K 값
+            stoch_threshold: 과매도 임계값
+
+        Returns:
+            str: 상태 문자열
+        """
+        if not is_gc_active:
+            return "NOT_GC"
+
+        # 골든크로스 활성 상태에서 Stochastic 확인
+        if stoch_k < stoch_threshold:
+            # Stochastic이 과매도 구간에 있으면 매수 준비
+            return "READY_TO_BUY"
+        elif stoch_k < 50:
+            # 중간 구간이면 눌림목 대기
+            return "WAITING_FOR_PULLBACK"
+        else:
+            # Stochastic이 높으면 일반 골든크로스 활성
+            return "GC_ACTIVE"
+
+    # ==================== 매도 시그널 분석 ====================
+
+    async def analyze_sell_signal(
+        self,
+        symbol: str,
+        stoch_overbought: float = 70.0,
+        rsi_overbought: float = 70.0,
+    ) -> SellSignalAnalysisDTO:
+        """
+        매도 시그널 분석
+
+        종목의 기술적 지표를 분석하여 매도 시그널을 판단합니다.
+        - MA40/MA160 데드크로스 확인
+        - Stochastic 과매수 확인
+        - RSI 과매수 확인
+
+        Args:
+            symbol: 종목코드
+            stoch_overbought: Stochastic 과매수 임계값 (기본 70)
+            rsi_overbought: RSI 과매수 임계값 (기본 70)
+
+        Returns:
+            SellSignalAnalysisDTO: 매도 시그널 분석 결과
+        """
+        import logging
+        from datetime import timedelta
+
+        import pandas as pd
+
+        from src.adapters.cache.redis_client import get_redis_client
+        from src.adapters.database.repositories.ohlcv_repository import OHLCVRepository
+        from src.application.common.indicators import TechnicalIndicators
+        from src.application.domain.market_data.service import MarketDataService
+
+        logger = logging.getLogger(__name__)
+        analyzed_at = datetime.now()
+
+        # 1. MarketDataService 초기화
+        kis_client = KISAPIClient()
+        redis_client = await get_redis_client()
+        market_data_service = MarketDataService(kis_client, redis_client)
+
+        # 2. 날짜 범위 설정 (MA160 + RSI14 여유분 = 약 240일)
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=240)
+
+        ohlcv_repo = OHLCVRepository(self.session) if self.session else None
+
+        # 3. OHLCV 데이터 조회 (캐시 우선)
+        df = None
+
+        if ohlcv_repo:
+            try:
+                availability = await ohlcv_repo.check_data_availability(
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    interval="1d",
+                )
+                if availability.get("count", 0) >= 160:
+                    latest = availability.get("latest")
+                    if latest and (end_date - latest) <= timedelta(days=3):
+                        cached_df = await ohlcv_repo.get_candles_to_dataframe(
+                            symbol=symbol,
+                            start_date=start_date,
+                            end_date=end_date,
+                            interval="1d",
+                        )
+                        if not cached_df.empty:
+                            df = cached_df
+                            logger.info(f"[Sell Signal] {symbol}: Using cached data ({len(df)} candles)")
+            except Exception as cache_err:
+                logger.warning(f"[Sell Signal] Cache check failed for {symbol}: {cache_err}")
+
+        if df is None:
+            # API 2회 호출로 약 240일 데이터 수집
+            all_candles: list = []
+
+            # 첫 번째 호출: 최근 120일
+            chart_data1 = await market_data_service.get_chart_data(
+                symbol=symbol,
+                interval="1d",
+                start_date=end_date - timedelta(days=120),
+                end_date=end_date,
+            )
+            if chart_data1.candles:
+                all_candles.extend(chart_data1.candles)
+
+            # 두 번째 호출: 이전 120일
+            if all_candles:
+                earliest = min(c.timestamp for c in all_candles)
+                chart_data2 = await market_data_service.get_chart_data(
+                    symbol=symbol,
+                    interval="1d",
+                    start_date=earliest - timedelta(days=120),
+                    end_date=earliest - timedelta(days=1),
+                )
+                if chart_data2.candles:
+                    all_candles.extend(chart_data2.candles)
+
+            if not all_candles:
+                raise StrategyError(f"No candle data available for {symbol}")
+
+            # 중복 제거 및 정렬
+            candles_by_date = {c.timestamp: c for c in all_candles}
+            all_candles = sorted(candles_by_date.values(), key=lambda c: c.timestamp)
+
+            # DB 캐싱
+            if ohlcv_repo:
+                try:
+                    await ohlcv_repo.save_candles_bulk(
+                        symbol=symbol,
+                        candles=all_candles,
+                        interval="1d",
+                        source="kis",
+                    )
+                    await self.session.commit()
+                except Exception as cache_err:
+                    await self.session.rollback()
+                    logger.warning(f"[Sell Signal] Failed to cache {symbol}: {cache_err}")
+
+            df = pd.DataFrame([
+                {
+                    "timestamp": c.timestamp,
+                    "open": float(c.open),
+                    "high": float(c.high),
+                    "low": float(c.low),
+                    "close": float(c.close),
+                    "volume": int(c.volume),
+                }
+                for c in all_candles
+            ])
+
+        df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+        candle_count = len(df)
+
+        if candle_count < 160:
+            raise StrategyError(f"Insufficient data for {symbol}: need 160 candles, got {candle_count}")
+
+        # 4. 기술적 지표 계산 (MA40/MA160 + Stochastic + RSI)
+        df = TechnicalIndicators.prepare_golden_cross_indicators(
+            df,
+            short_ma_period=40,
+            long_ma_period=160,
+            stoch_k_period=14,
+            stoch_d_period=3,
+        )
+
+        # RSI 계산 추가
+        close_prices = df["close"].tolist()
+        rsi_value = TechnicalIndicators.calculate_rsi(close_prices, period=14)
+        df["rsi"] = rsi_value if rsi_value is not None else 50.0
+
+        # 5. 최신 값 추출
+        latest = df.iloc[-1]
+        close = float(latest["close"])
+        ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
+        ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
+        stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
+        stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
+        rsi = float(latest["rsi"]) if pd.notna(latest["rsi"]) else 50
+
+        # 6. 매도 시그널 판단
+        is_death_cross = ma_short < ma_long
+        is_stoch_overbought = stoch_k > stoch_overbought
+        is_rsi_overbought = rsi > rsi_overbought
+        ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
+
+        # 매도 근거 수집
+        sell_reasons: list[str] = []
+        sell_score = 0
+
+        # 데드크로스 (강력 매도 시그널)
+        if is_death_cross:
+            sell_reasons.append(f"데드크로스 발생 (MA40 {ma_short:,.0f} < MA160 {ma_long:,.0f})")
+            sell_score += 2
+
+        # Stochastic 과매수
+        if is_stoch_overbought:
+            sell_reasons.append(f"Stochastic 과매수 (K={stoch_k:.1f} > {stoch_overbought})")
+            sell_score += 1
+            if stoch_k > 80:
+                sell_reasons.append("Stochastic 극단적 과매수 (K > 80)")
+                sell_score += 1
+
+        # RSI 과매수
+        if is_rsi_overbought:
+            sell_reasons.append(f"RSI 과매수 (RSI={rsi:.1f} > {rsi_overbought})")
+            sell_score += 1
+            if rsi > 80:
+                sell_reasons.append("RSI 극단적 과매수 (RSI > 80)")
+                sell_score += 1
+
+        # Stochastic + RSI 동시 과매수 (추가 점수)
+        if is_stoch_overbought and is_rsi_overbought:
+            sell_reasons.append("Stochastic & RSI 동시 과매수 - 고점 가능성 높음")
+
+        # MA 갭이 너무 벌어진 경우 (과열)
+        if ma_gap_ratio > 20:
+            sell_reasons.append(f"MA 갭 과대 ({ma_gap_ratio:.1f}%) - 평균 회귀 예상")
+            sell_score += 1
+
+        # 점수를 0-5 범위로 제한
+        sell_signal_strength = min(5, sell_score)
+
+        # 추천 등급 결정
+        recommendation_map = {
+            0: "HOLD",
+            1: "WATCH",
+            2: "WEAK_SELL",
+            3: "CONSIDER_SELL",
+            4: "SELL",
+            5: "STRONG_SELL",
+        }
+        sell_recommendation = recommendation_map.get(sell_signal_strength, "HOLD")
+
+        if not sell_reasons:
+            sell_reasons.append("현재 매도 시그널 없음 - 보유 유지")
+
+        logger.info(
+            f"[Sell Signal] {symbol}: strength={sell_signal_strength}, "
+            f"recommendation={sell_recommendation}, reasons={len(sell_reasons)}"
+        )
+
+        return SellSignalAnalysisDTO(
+            symbol=symbol,
+            name=None,  # 종목명은 별도 조회 필요
+            current_price=Decimal(str(close)),
+            analyzed_at=analyzed_at,
+            ma_short=Decimal(str(round(ma_short, 2))),
+            ma_long=Decimal(str(round(ma_long, 2))),
+            ma_gap_ratio=round(ma_gap_ratio, 2),
+            is_death_cross=is_death_cross,
+            stoch_k=round(stoch_k, 2),
+            stoch_d=round(stoch_d, 2),
+            is_stoch_overbought=is_stoch_overbought,
+            rsi=round(rsi, 2),
+            is_rsi_overbought=is_rsi_overbought,
+            sell_signal_strength=sell_signal_strength,
+            sell_recommendation=sell_recommendation,
+            sell_reasons=sell_reasons,
+            candle_count=candle_count,
+        )

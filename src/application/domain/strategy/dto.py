@@ -285,6 +285,14 @@ class StrategyDetailResponseDTO(BaseDTO):
     created_at: datetime = Field(description="생성 시각")
     updated_at: datetime = Field(description="수정 시각")
 
+
+class StrategyListResponseDTO(BaseDTO):
+    """전략 목록 응답 DTO"""
+
+    strategies: list[StrategyDetailResponseDTO] = Field(description="전략 목록")
+    total_count: int = Field(description="전체 전략 수")
+
+
 # ==================== Symbol State DTOs ====================
 
 
@@ -401,6 +409,47 @@ class StockUniverseListDTO(BaseDTO):
     eligible_count: int = Field(description="스크리닝 통과 종목 수")
 
 
+# ==================== Golden Cross Scan DTOs ====================
+
+
+class GoldenCrossScanItemDTO(BaseDTO):
+    """골든크로스 스캔 결과 항목 DTO"""
+
+    symbol: str = Field(description="종목코드")
+    name: str = Field(description="종목명")
+    market: str = Field(description="시장 구분")
+    current_price: Decimal = Field(description="현재가")
+
+    # 이동평균 (실시간 스캔용: MA40/MA160)
+    ma_short: Decimal = Field(description="단기 MA (40일)")
+    ma_long: Decimal = Field(description="장기 MA (160일)")
+    ma_gap_ratio: float = Field(description="MA 갭 비율 ((MA40-MA160)/MA160)")
+
+    # Stochastic
+    stoch_k: float = Field(description="Stochastic %K")
+    stoch_d: float = Field(description="Stochastic %D")
+
+    # 상태
+    is_gc_active: bool = Field(description="골든크로스 활성 여부 (MA40 > MA160)")
+    gc_state: str = Field(description="골든크로스 상태 (NOT_GC, WAITING_FOR_PULLBACK, READY_TO_BUY, GC_ACTIVE)")
+
+    # 추가 정보
+    market_cap: Decimal | None = Field(default=None, description="시가총액")
+    screening_score: Decimal | None = Field(default=None, description="스크리닝 점수")
+
+
+class GoldenCrossScanListDTO(BaseDTO):
+    """골든크로스 스캔 결과 목록 DTO"""
+
+    stocks: list[GoldenCrossScanItemDTO] = Field(description="스캔 결과 목록")
+    total_scanned: int = Field(description="스캔한 전체 종목 수")
+    gc_active_count: int = Field(description="골든크로스 활성 종목 수")
+    pullback_waiting_count: int = Field(description="눌림목 대기 종목 수")
+    ready_to_buy_count: int = Field(description="매수 준비 종목 수")
+    scan_time: datetime = Field(description="스캔 시각")
+    errors: list[str] = Field(default_factory=list, description="오류 메시지")
+
+
 # ==================== Execute Request/Response DTOs ====================
 
 
@@ -425,3 +474,51 @@ class StrategyExecuteResultDTO(BaseDTO):
 
     signals: list[StrategySignalDTO] = Field(description="발생한 시그널 목록")
     errors: list[str] = Field(default_factory=list, description="오류 메시지")
+
+
+# ==================== Sell Signal Analysis DTOs ====================
+
+
+class SellSignalAnalysisDTO(BaseDTO):
+    """매도 시그널 분석 결과 DTO"""
+
+    symbol: str = Field(description="종목코드")
+    name: str | None = Field(default=None, description="종목명")
+    current_price: Decimal = Field(description="현재가")
+    analyzed_at: datetime = Field(description="분석 시각")
+
+    # 이동평균 지표
+    ma_short: Decimal = Field(description="단기 MA (40일)")
+    ma_long: Decimal = Field(description="장기 MA (160일)")
+    ma_gap_ratio: float = Field(description="MA 갭 비율 (%)")
+    is_death_cross: bool = Field(description="데드크로스 여부 (MA40 < MA160)")
+
+    # Stochastic 지표
+    stoch_k: float = Field(description="Stochastic %K")
+    stoch_d: float = Field(description="Stochastic %D")
+    is_stoch_overbought: bool = Field(description="Stochastic 과매수 (K > 70)")
+
+    # RSI 지표
+    rsi: float = Field(description="RSI (14일)")
+    is_rsi_overbought: bool = Field(description="RSI 과매수 (RSI > 70)")
+
+    # 종합 매도 시그널
+    sell_signal_strength: int = Field(
+        description="매도 시그널 강도 (0-5): "
+        "0=보유, 1=관망, 2=약한매도, 3=매도고려, 4=매도권장, 5=강력매도"
+    )
+    sell_recommendation: str = Field(
+        description="매도 추천 (HOLD, WATCH, WEAK_SELL, CONSIDER_SELL, SELL, STRONG_SELL)"
+    )
+    sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
+
+    # 추가 정보
+    candle_count: int = Field(default=0, description="분석에 사용된 캔들 수")
+
+
+class SellSignalRequestDTO(BaseDTO):
+    """매도 시그널 분석 요청 DTO"""
+
+    symbol: str = Field(description="종목코드")
+    stoch_overbought: float = Field(default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값")
+    rsi_overbought: float = Field(default=70.0, ge=50.0, le=90.0, description="RSI 과매수 임계값")

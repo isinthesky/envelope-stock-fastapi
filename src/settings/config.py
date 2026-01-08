@@ -266,6 +266,22 @@ class Settings(BaseSettings):
             raise ValueError(f"상품코드는 {valid_codes} 중 하나여야 합니다")
         return v
 
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, v: str) -> str:
+        """Async driver 강제 (greenlet 컨텍스트 오류 예방)"""
+        if v.startswith("postgresql+asyncpg://"):
+            return v
+        if v.startswith("postgresql://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql+psycopg2://"):
+            return v.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql+psycopg://"):
+            return v.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
+        return v
+
 
 @lru_cache
 def get_settings() -> Settings:
