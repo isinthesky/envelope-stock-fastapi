@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Auth - Stock API Admin{% endblock %}
+
+{% block content %}
+<h1>Auth 관리</h1>
+<p>KIS API 인증 토큰 발급 및 갱신</p>
+
+<section>
+  <h2>토큰 관리</h2>
+  <div class="row">
+    <button onclick="postJson('/api/v1/auth/token', {force: false}, 'auth_output')">토큰 발급</button>
+    <button onclick="postJson('/api/v1/auth/token/refresh', {}, 'auth_output')">토큰 갱신</button>
+    <button onclick="getJson('/api/v1/auth/token/status', 'auth_output')">토큰 상태</button>
+  </div>
+  <pre id="auth_output">결과 출력</pre>
+</section>
+
+<section>
+  <h2>거래 환경</h2>
+  <div class="row">
+    <button onclick="getJson('/api/v1/auth/environment', 'env_output')">거래 환경 조회</button>
+    <button onclick="postJson('/api/v1/auth/websocket/approval', {}, 'env_output')">WebSocket 승인 키</button>
+  </div>
+  <pre id="env_output">결과 출력</pre>
+</section>
+{% endblock %}

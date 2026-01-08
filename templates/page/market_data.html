@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Market Data - Stock API Admin{% endblock %}
+
+{% block content %}
+<h1>Market Data</h1>
+<p>시세 데이터 조회 (현재가, 호가, 차트)</p>
+
+<section>
+  <h2>시세 조회</h2>
+  <div class="row">
+    <label>Symbol</label>
+    <input id="market_symbol" value="005930" placeholder="종목코드" />
+    <label>Interval</label>
+    <input id="market_interval" value="1d" placeholder="1m, 5m, 1d 등" />
+  </div>
+  <div class="row">
+    <button onclick="getMarketPrice()">현재가</button>
+    <button onclick="getOrderbook()">호가</button>
+    <button onclick="getChart()">차트</button>
+  </div>
+  <pre id="market_output">결과 출력</pre>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+const getMarketPrice = () => {
+  const symbol = document.getElementById("market_symbol").value;
+  getJson(`/api/v1/market/price/${symbol}`, "market_output");
+};
+
+const getOrderbook = () => {
+  const symbol = document.getElementById("market_symbol").value;
+  getJson(`/api/v1/market/orderbook/${symbol}`, "market_output");
+};
+
+const getChart = () => {
+  const symbol = document.getElementById("market_symbol").value;
+  const interval = document.getElementById("market_interval").value;
+  getJson(`/api/v1/market/chart/${symbol}?interval=${interval}`, "market_output");
+};
+{% endblock %}

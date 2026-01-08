@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+
+{% block title %}Sell Strategy - Stock API Admin{% endblock %}
+
+{% block extra_styles %}
+.strategy-info { background: linear-gradient(135deg, #7c2d12 0%, #b91c1c 100%); color: white; border: none; }
+.strategy-info h2 { color: #fecaca; margin-bottom: 16px; }
+.strategy-info p { color: #fee2e2; line-height: 1.6; }
+.strategy-flow { display: flex; gap: 8px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
+.strategy-flow .step { background: rgba(255,255,255,0.15); padding: 8px 14px; border-radius: 6px; font-size: 13px; }
+.strategy-flow .arrow { color: #fca5a5; font-size: 18px; }
+
+.result-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin-top: 16px; }
+.result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.result-header h3 { font-size: 20px; color: #1e293b; }
+.recommendation-badge { padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 14px; }
+.recommendation-HOLD { background: #dcfce7; color: #166534; }
+.recommendation-WATCH { background: #fef3c7; color: #92400e; }
+.recommendation-WEAK_SELL { background: #ffedd5; color: #9a3412; }
+.recommendation-CONSIDER_SELL { background: #fed7aa; color: #c2410c; }
+.recommendation-SELL { background: #fecaca; color: #991b1b; }
+.recommendation-STRONG_SELL { background: #dc2626; color: #fff; }
+
+.indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.indicator-card { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+.indicator-card .label { font-size: 12px; color: #64748b; text-transform: uppercase; margin-bottom: 4px; }
+.indicator-card .value { font-size: 24px; font-weight: 700; color: #1e293b; }
+.indicator-card .status { font-size: 12px; margin-top: 4px; padding: 2px 8px; border-radius: 4px; display: inline-block; }
+.status-danger { background: #fecaca; color: #991b1b; }
+.status-warning { background: #fef3c7; color: #92400e; }
+.status-safe { background: #dcfce7; color: #166534; }
+
+.signal-strength { margin: 20px 0; }
+.signal-strength .bar-container { height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden; }
+.signal-strength .bar { height: 100%; transition: width 0.5s ease; }
+.signal-strength .bar-0 { width: 0%; background: #22c55e; }
+.signal-strength .bar-1 { width: 20%; background: #84cc16; }
+.signal-strength .bar-2 { width: 40%; background: #eab308; }
+.signal-strength .bar-3 { width: 60%; background: #f97316; }
+.signal-strength .bar-4 { width: 80%; background: #ef4444; }
+.signal-strength .bar-5 { width: 100%; background: #dc2626; }
+.signal-strength .labels { display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: #64748b; }
+
+.reasons-list { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 16px; }
+.reasons-list h4 { color: #9a3412; margin-bottom: 12px; font-size: 14px; }
+.reasons-list ul { list-style: none; }
+.reasons-list li { padding: 8px 0; border-bottom: 1px solid #fed7aa; font-size: 14px; color: #7c2d12; }
+.reasons-list li:last-child { border-bottom: none; }
+.reasons-list li::before { content: "⚠️ "; }
+
+.history-table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+.history-table th { background: #f1f5f9; padding: 10px 12px; text-align: left; font-weight: 600; border-bottom: 2px solid #e2e8f0; }
+.history-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
+.history-table tr:hover { background: #f8fafc; }
+{% endblock %}
+
+{% block content %}
+<h1>매도 전략 분석</h1>
+<p>보유 종목의 기술적 지표를 분석하여 매도 시점을 추천합니다.</p>
+
+<section class="strategy-info">
+  <h2>매도 시그널 분석 전략</h2>
+  <p>
+    MA40/MA160 데드크로스, Stochastic 과매수, RSI 과매수 신호를 종합하여
+    최적의 매도 시점을 추천합니다.
+  </p>
+  <div class="strategy-flow">
+    <span class="step">데드크로스 확인</span>
+    <span class="arrow">→</span>
+    <span class="step">Stochastic 과매수</span>
+    <span class="arrow">→</span>
+    <span class="step">RSI 과매수</span>
+    <span class="arrow">→</span>
+    <span class="step">매도 추천</span>
+  </div>
+</section>
+
+<section>
+  <h2>종목 분석</h2>
+  <div class="row">
+    <label>종목코드</label>
+    <input type="text" id="symbol_input" placeholder="예: 005930" style="width: 120px;" />
+    <button onclick="analyzeSellSignal()">매도 시그널 분석</button>
+  </div>
+  <div class="row" style="margin-top: 8px;">
+    <label style="font-size: 12px;">Stoch 임계값:</label>
+    <input id="stoch_threshold" type="number" value="70" min="50" max="90" style="width: 60px;" />
+    <label style="font-size: 12px; margin-left: 12px;">RSI 임계값:</label>
+    <input id="rsi_threshold" type="number" value="70" min="50" max="90" style="width: 60px;" />
+  </div>
+  <pre id="scan_output" style="display: none;"></pre>
+</section>
+
+<section id="result_section" style="display: none;">
+  <h2>분석 결과</h2>
+  <div id="result_container"></div>
+</section>
+
+<section>
+  <h2>분석 히스토리</h2>
+  <table class="history-table">
+    <thead>
+      <tr>
+        <th>종목코드</th>
+        <th>현재가</th>
+        <th>추천</th>
+        <th>강도</th>
+        <th>Stoch K</th>
+        <th>RSI</th>
+        <th>분석시간</th>
+      </tr>
+    </thead>
+    <tbody id="history_body">
+      <tr><td colspan="7" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+let analysisHistory = [];
+
+const formatNumber = (n) => {
+  if (n === null || n === undefined) return '-';
+  return Number(n).toLocaleString();
+};
+
+const formatDateTime = (dateStr) => {
+  if (!dateStr) return '-';
+  return new Date(dateStr).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+};
+
+const formatTime = (dateStr) => {
+  if (!dateStr) return '-';
+  return new Date(dateStr).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' });
+};
+
+const getRecommendationLabel = (rec) => {
+  const labels = {
+    'HOLD': '보유 유지',
+    'WATCH': '관망',
+    'WEAK_SELL': '약한 매도',
+    'CONSIDER_SELL': '매도 고려',
+    'SELL': '매도 권장',
+    'STRONG_SELL': '강력 매도'
+  };
+  return labels[rec] || rec;
+};
+
+const analyzeSellSignal = async () => {
+  const symbol = document.getElementById("symbol_input").value.trim();
+  if (!symbol) {
+    alert("종목코드를 입력해주세요.");
+    return;
+  }
+
+  const stochThreshold = document.getElementById("stoch_threshold").value || 70;
+  const rsiThreshold = document.getElementById("rsi_threshold").value || 70;
+
+  document.getElementById("scan_output").style.display = "block";
+  document.getElementById("scan_output").textContent = `${symbol} 분석 중... (OHLCV 데이터 조회 및 지표 계산)`;
+
+  const url = `/api/v1/strategies/sell-signal/${symbol}?stoch_overbought=${stochThreshold}&rsi_overbought=${rsiThreshold}`;
+
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.success && data.data) {
+      displayResult(data.data);
+      addToHistory(data.data);
+      document.getElementById("scan_output").textContent = `분석 완료: ${symbol}`;
+    } else {
+      document.getElementById("scan_output").textContent = `오류: ${data.error || data.detail || '알 수 없는 오류'}`;
+    }
+  } catch (e) {
+    document.getElementById("scan_output").textContent = `오류: ${e.message}`;
+  }
+};
+
+const displayResult = (data) => {
+  document.getElementById("result_section").style.display = "block";
+
+  const strengthClass = `bar-${data.sell_signal_strength}`;
+  const recClass = `recommendation-${data.sell_recommendation}`;
+
+  const stochStatus = data.is_stoch_overbought ? 'status-danger' : 'status-safe';
+  const rsiStatus = data.is_rsi_overbought ? 'status-danger' : 'status-safe';
+  const maStatus = data.is_death_cross ? 'status-danger' : 'status-safe';
+
+  const html = `
+    <div class="result-card">
+      <div class="result-header">
+        <h3>${data.symbol} ${data.name || ''}</h3>
+        <span class="recommendation-badge ${recClass}">${getRecommendationLabel(data.sell_recommendation)}</span>
+      </div>
+
+      <div class="indicator-grid">
+        <div class="indicator-card">
+          <div class="label">현재가</div>
+          <div class="value">${formatNumber(data.current_price)}</div>
+        </div>
+        <div class="indicator-card">
+          <div class="label">MA40 / MA160</div>
+          <div class="value">${formatNumber(data.ma_short)} / ${formatNumber(data.ma_long)}</div>
+          <span class="status ${maStatus}">${data.is_death_cross ? '데드크로스' : '골든크로스'}</span>
+        </div>
+        <div class="indicator-card">
+          <div class="label">MA 갭</div>
+          <div class="value">${data.ma_gap_ratio.toFixed(2)}%</div>
+        </div>
+        <div class="indicator-card">
+          <div class="label">Stochastic %K</div>
+          <div class="value">${data.stoch_k.toFixed(1)}</div>
+          <span class="status ${stochStatus}">${data.is_stoch_overbought ? '과매수' : '정상'}</span>
+        </div>
+        <div class="indicator-card">
+          <div class="label">Stochastic %D</div>
+          <div class="value">${data.stoch_d.toFixed(1)}</div>
+        </div>
+        <div class="indicator-card">
+          <div class="label">RSI (14)</div>
+          <div class="value">${data.rsi.toFixed(1)}</div>
+          <span class="status ${rsiStatus}">${data.is_rsi_overbought ? '과매수' : '정상'}</span>
+        </div>
+      </div>
+
+      <div class="signal-strength">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+          <span style="font-weight: 600;">매도 시그널 강도</span>
+          <span style="font-weight: 700; color: #dc2626;">${data.sell_signal_strength} / 5</span>
+        </div>
+        <div class="bar-container">
+          <div class="bar ${strengthClass}"></div>
+        </div>
+        <div class="labels">
+          <span>보유</span>
+          <span>관망</span>
+          <span>약한매도</span>
+          <span>매도고려</span>
+          <span>매도권장</span>
+          <span>강력매도</span>
+        </div>
+      </div>
+
+      <div class="reasons-list">
+        <h4>매도 근거</h4>
+        <ul>
+          ${data.sell_reasons.map(r => `<li>${r}</li>`).join('')}
+        </ul>
+      </div>
+
+      <p style="margin-top: 16px; font-size: 12px; color: #64748b;">
+        분석 시간: ${formatDateTime(data.analyzed_at)} |
+        사용된 캔들: ${data.candle_count}개
+      </p>
+    </div>
+  `;
+
+  document.getElementById("result_container").innerHTML = html;
+};
+
+const addToHistory = (data) => {
+  analysisHistory.unshift(data);
+  if (analysisHistory.length > 10) analysisHistory.pop();
+
+  const tbody = document.getElementById("history_body");
+  tbody.innerHTML = analysisHistory.map(item => {
+    const recClass = `recommendation-${item.sell_recommendation}`;
+    return `<tr>
+      <td><strong>${item.symbol}</strong></td>
+      <td>${formatNumber(item.current_price)}</td>
+      <td><span class="recommendation-badge ${recClass}" style="font-size: 11px; padding: 4px 8px;">${getRecommendationLabel(item.sell_recommendation)}</span></td>
+      <td>${item.sell_signal_strength}/5</td>
+      <td>${item.stoch_k.toFixed(1)}</td>
+      <td>${item.rsi.toFixed(1)}</td>
+      <td>${formatTime(item.analyzed_at)}</td>
+    </tr>`;
+  }).join('');
+};
+
+// Enter 키로 분석 실행
+document.getElementById("symbol_input").addEventListener("keypress", (e) => {
+  if (e.key === "Enter") analyzeSellSignal();
+});
+{% endblock %}

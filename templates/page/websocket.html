@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}WebSocket - Stock API Admin{% endblock %}
+
+{% block content %}
+<h1>WebSocket</h1>
+<p>실시간 시세 WebSocket 상태 조회</p>
+
+<section>
+  <h2>WebSocket 상태</h2>
+  <div class="row">
+    <button onclick="getJson('/ws/info', 'ws_output')">WS 상태 조회</button>
+  </div>
+  <pre id="ws_output">결과 출력</pre>
+</section>
+{% endblock %}

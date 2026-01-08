@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Backtest - Stock API Admin{% endblock %}
+
+{% block content %}
+<h1>Backtest</h1>
+<p>백테스팅 실행 및 결과 조회</p>
+
+<section>
+  <h2>백테스트 설정</h2>
+  <textarea id="backtest_json">{
+  "symbol": "005930",
+  "start_date": "2024-01-01",
+  "end_date": "2024-06-30",
+  "strategy_config": {"type": "mean_reversion"},
+  "backtest_config": {"initial_cash": 1000000}
+}</textarea>
+  <div class="row">
+    <button onclick="runBacktest()">단일 종목 실행</button>
+    <button onclick="runMultiBacktest()" class="secondary">다중 종목 실행</button>
+  </div>
+  <pre id="backtest_output">결과 출력</pre>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+const runBacktest = () => {
+  const payload = parseJson(document.getElementById("backtest_json").value);
+  postJson("/api/v1/backtest/run", payload, "backtest_output");
+};
+
+const runMultiBacktest = () => {
+  const payload = parseJson(document.getElementById("backtest_json").value);
+  postJson("/api/v1/backtest/run-multi", payload, "backtest_output");
+};
+{% endblock %}

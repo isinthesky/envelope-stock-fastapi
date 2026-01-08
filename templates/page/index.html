@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Stock API Admin{% endblock %}
+
+{% block content %}
+<h1>Stock API Admin Dashboard</h1>
+<p>KIS Trading API 관리 대시보드입니다. 좌측 메뉴에서 도메인을 선택하세요.</p>
+
+<section>
+  <h2>Quick Status</h2>
+  <div class="row">
+    <button onclick="checkAuth()">Auth 상태 확인</button>
+    <button onclick="checkHealth()">서버 Health Check</button>
+  </div>
+  <pre id="status_output">상태 확인 버튼을 클릭하세요</pre>
+</section>
+
+<section>
+  <h2>도메인 바로가기</h2>
+  <div class="row" style="gap: 16px;">
+    <a href="/page/auth/" style="text-decoration: none;"><button>Auth</button></a>
+    <a href="/page/account/" style="text-decoration: none;"><button>Account</button></a>
+    <a href="/page/market-data/" style="text-decoration: none;"><button>Market Data</button></a>
+    <a href="/page/order/" style="text-decoration: none;"><button>Order</button></a>
+    <a href="/page/strategy/" style="text-decoration: none;"><button>Strategy</button></a>
+    <a href="/page/backtest/" style="text-decoration: none;"><button>Backtest</button></a>
+    <a href="/page/websocket/" style="text-decoration: none;"><button>WebSocket</button></a>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+const checkAuth = () => getJson('/api/v1/auth/token/status', 'status_output');
+const checkHealth = () => getJson('/health', 'status_output');
+{% endblock %}

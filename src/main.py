@@ -234,7 +234,7 @@ from src.application.interface.api.market_data_router import router as market_da
 from src.application.interface.api.order_router import router as order_router
 from src.application.interface.api.strategy_router import router as strategy_router
 from src.application.interface.api.websocket_router import router as websocket_router
-from src.application.interface.page.admin_page import router as admin_page_router
+from src.application.interface.page import page_routers
 
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(market_data_router, prefix="/api/v1/market", tags=["MarketData"])
@@ -243,7 +243,10 @@ app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
 app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
 app.include_router(backtest_router)
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
-app.include_router(admin_page_router)
+
+# Page routers (각 라우터는 자체 prefix 포함)
+for page_router in page_routers:
+    app.include_router(page_router)
 
 
 if __name__ == "__main__":

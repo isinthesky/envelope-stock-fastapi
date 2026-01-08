@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Account - Stock API Admin{% endblock %}
+
+{% block content %}
+<h1>Account 관리</h1>
+<p>계좌 잔고 및 포지션 조회</p>
+
+<section>
+  <h2>계좌 조회</h2>
+  <div class="row">
+    <label>Account No</label>
+    <input id="account_no" placeholder="선택 (비워두면 기본 계좌)" />
+  </div>
+  <div class="row">
+    <button onclick="getAccountBalance()">잔고 조회</button>
+    <button onclick="getPositions()">포지션 조회</button>
+  </div>
+  <pre id="account_output">결과 출력</pre>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+const getAccountBalance = () => {
+  const account = document.getElementById("account_no").value;
+  const qs = account ? `?account_no=${account}` : "";
+  getJson(`/api/v1/accounts/balance${qs}`, "account_output");
+};
+
+const getPositions = () => {
+  const account = document.getElementById("account_no").value;
+  const qs = account ? `?account_no=${account}` : "";
+  getJson(`/api/v1/accounts/positions${qs}`, "account_output");
+};
+{% endblock %}

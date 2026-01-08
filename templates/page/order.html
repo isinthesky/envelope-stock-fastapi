@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Order - Stock API Admin{% endblock %}
+
+{% block content %}
+<h1>Order 관리</h1>
+<p>주문 생성, 조회, 취소, 정정</p>
+
+<section>
+  <h2>주문 생성</h2>
+  <div class="row">
+    <label>Symbol</label>
+    <input id="order_symbol" value="005930" />
+    <label>Side</label>
+    <select id="order_side">
+      <option value="buy">buy</option>
+      <option value="sell">sell</option>
+    </select>
+    <label>Price Type</label>
+    <select id="order_price_type">
+      <option value="market">market</option>
+      <option value="limit">limit</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Price</label>
+    <input id="order_price" value="70000" />
+    <label>Qty</label>
+    <input id="order_qty" value="1" />
+    <label>Account No</label>
+    <input id="order_account_no" placeholder="선택" />
+  </div>
+  <div class="row">
+    <button onclick="createOrder()">주문 생성</button>
+    <button onclick="listOrders()" class="secondary">주문 목록</button>
+  </div>
+  <pre id="order_output">결과 출력</pre>
+</section>
+
+<section>
+  <h2>주문 관리</h2>
+  <div class="row">
+    <label>Order ID</label>
+    <input id="order_id" placeholder="주문 ID" />
+    <label>Order No</label>
+    <input id="order_no" placeholder="주문 번호" />
+  </div>
+  <div class="row">
+    <label>Cancel Qty</label>
+    <input id="cancel_qty" placeholder="취소 수량" />
+    <label>New Price</label>
+    <input id="new_price" placeholder="정정 가격" />
+    <label>New Qty</label>
+    <input id="new_qty" placeholder="정정 수량" />
+  </div>
+  <div class="row">
+    <button onclick="getOrderStatus()">상태 조회</button>
+    <button onclick="cancelOrder()">취소</button>
+    <button onclick="modifyOrder()">정정</button>
+    <button onclick="refreshOrderStatus()" class="secondary">체결 업데이트</button>
+  </div>
+  <pre id="manage_output">결과 출력</pre>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+const createOrder = () => {
+  const payload = {
+    symbol: document.getElementById("order_symbol").value,
+    order_type: document.getElementById("order_side").value,
+    price_type: document.getElementById("order_price_type").value,
+    price: Number(document.getElementById("order_price").value),
+    quantity: Number(document.getElementById("order_qty").value),
+    account_no: document.getElementById("order_account_no").value || null
+  };
+  postJson("/api/v1/orders", payload, "order_output");
+};
+
+const listOrders = () => {
+  const account = document.getElementById("order_account_no").value;
+  const qs = account ? `?account_no=${account}` : "";
+  getJson(`/api/v1/orders${qs}`, "order_output");
+};
+
+const getOrderStatus = () => {
+  const orderId = document.getElementById("order_id").value;
+  if (!orderId) return alert("order_id 입력");
+  getJson(`/api/v1/orders/${orderId}`, "manage_output");
+};
+
+const cancelOrder = () => {
+  const orderId = document.getElementById("order_id").value;
+  if (!orderId) return alert("order_id 입력");
+  const payload = {
+    order_id: orderId,
+    order_no: document.getElementById("order_no").value || null,
+    quantity: Number(document.getElementById("cancel_qty").value) || null
+  };
+  postJson(`/api/v1/orders/${orderId}/cancel`, payload, "manage_output");
+};
+
+const modifyOrder = () => {
+  const orderId = document.getElementById("order_id").value;
+  if (!orderId) return alert("order_id 입력");
+  const newPrice = document.getElementById("new_price").value;
+  const newQty = document.getElementById("new_qty").value;
+  const params = new URLSearchParams();
+  if (newPrice !== "") {
+    params.set("new_price", newPrice);
+  }
+  if (newQty !== "") {
+    params.set("new_quantity", newQty);
+  }
+  const qs = params.toString();
+  const url = qs ? `/api/v1/orders/${orderId}?${qs}` : `/api/v1/orders/${orderId}`;
+  patchJson(url, {}, "manage_output");
+};
+
+const refreshOrderStatus = () => {
+  const orderId = document.getElementById("order_id").value;
+  if (!orderId) return alert("order_id 입력");
+  postJson(`/api/v1/orders/${orderId}/refresh-status`, {}, "manage_output");
+};
+{% endblock %}
