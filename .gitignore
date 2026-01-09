@@ -99,7 +99,8 @@ uv.lock
 
 # BMAD
 .bmad/
-.claude/
+.claude/commands/
+.claude/settings.local.json
 .cursor/
 
 # Claude Code local config
