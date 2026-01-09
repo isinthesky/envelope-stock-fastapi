@@ -65,39 +65,30 @@
 
 <section class="strategy-info">
   <h2>전략 개요</h2>
-  <p><strong>골든크로스 눌림목 매매</strong>는 장기 이동평균선(165일)을 단기 이동평균선(55일)이 상향 돌파한 후,
-  Stochastic 지표가 과매도 구간에서 회복할 때 매수하는 추세추종 전략입니다.</p>
+  <p><strong>MA55/MA165 골든크로스</strong> 발생 후 Stochastic 과매도 구간에서 매수하는 추세추종 전략</p>
 
   <div class="strategy-flow">
     <span class="step">MA55 > MA165<br><small>골든크로스</small></span>
-    <span class="arrow">-></span>
-    <span class="step">Stoch K < 25<br><small>눌림목 대기</small></span>
-    <span class="arrow">-></span>
-    <span class="step">Stoch K > 20 회복<br><small>매수 신호</small></span>
-    <span class="arrow">-></span>
-    <span class="step">포지션 보유<br><small>리스크 관리</small></span>
+    <span class="arrow">→</span>
+    <span class="step">Stoch K < 25<br><small>눌림목</small></span>
+    <span class="arrow">→</span>
+    <span class="step">K 반등<br><small>매수</small></span>
+    <span class="arrow">→</span>
+    <span class="step">손절/익절<br><small>청산</small></span>
   </div>
 
   <div class="config-grid">
     <div class="config-item">
-      <div class="label">단기 이평선</div>
-      <div class="value">55일</div>
-    </div>
-    <div class="config-item">
-      <div class="label">장기 이평선</div>
-      <div class="value">165일</div>
+      <div class="label">이평선</div>
+      <div class="value">MA55 / MA165</div>
     </div>
     <div class="config-item">
       <div class="label">Stoch 과매도</div>
       <div class="value">K < 25</div>
     </div>
     <div class="config-item">
-      <div class="label">손절</div>
-      <div class="value">-7%</div>
-    </div>
-    <div class="config-item">
-      <div class="label">익절</div>
-      <div class="value">+20%</div>
+      <div class="label">손절 / 익절</div>
+      <div class="value">-7% / +20%</div>
     </div>
     <div class="config-item">
       <div class="label">최대 보유</div>
