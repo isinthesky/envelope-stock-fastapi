@@ -1,6 +1,6 @@
 # CLAUDE.md - adapters 디렉토리 가이드
 
-> **Adapter 계층(Infrastructure)**: DB/Redis/KIS/WebSocket 등 외부 시스템 연동 담당
+> **Adapter 계층(Infrastructure)**: DB/Redis/KIS/Telegram/WS 등 외부 시스템 연동 담당
 
 ## ✅ 역할
 - 데이터 저장소, 캐시, 외부 API/WS 통신을 캡슐화
@@ -16,7 +16,7 @@ adapters/
 │   ├── models/             # ORM 모델
 │   └── repositories/       # Repository 패턴
 ├── cache/                  # Redis 클라이언트
-└── external/               # KIS API / WebSocket
+└── external/               # KIS API / Telegram / WebSocket
 ```
 
 ---
@@ -25,7 +25,7 @@ adapters/
 ### 주요 모델
 - `account.py`, `position.py`, `order.py`
 - `strategy.py`, `strategy_signal.py`, `strategy_symbol_state.py`
-- `stock_universe.py`, `ohlcv.py`
+- `stock_universe.py`, `ohlcv.py`, `analysis_history.py`
 
 ### 주요 Repository
 - `order_repository.py`
@@ -34,6 +34,7 @@ adapters/
 - `strategy_symbol_state_repository.py`
 - `stock_universe_repository.py`
 - `ohlcv_repository.py`
+- `analysis_history_repository.py`
 - `base_repository.py` (CRUD + mixin)
 
 ### connection.py
@@ -54,6 +55,9 @@ adapters/
 - `auth.py`: 토큰 발급/갱신/캐시
 - `client.py`: REST 호출, 레이트리밋/재시도
 - `exceptions.py`: KIS API 예외
+
+### telegram/
+- `notifier.py`: Telegram Bot API 메시지 전송 클라이언트
 
 ### websocket/
 - `kis_websocket.py`: WS 연결/메시지 송수신

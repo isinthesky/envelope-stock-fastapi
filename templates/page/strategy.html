@@ -120,6 +120,17 @@
     <label style="font-size: 12px; margin-left: 12px;">
       <input type="checkbox" id="gc_only" checked /> GC 활성만
     </label>
+    <label style="font-size: 12px; margin-left: 12px;">
+      <input type="checkbox" id="include_etf" checked /> ETF 포함
+    </label>
+  </div>
+
+  <!-- ETF 스캔 섹션 -->
+  <div style="margin-top: 16px; padding: 16px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px;">
+    <h4 style="margin: 0 0 8px 0; color: #0369a1;">ETF/개별 종목 스캔</h4>
+    <p style="font-size: 12px; color: #64748b; margin-bottom: 8px;">유니버스에 없는 ETF나 개별 종목을 직접 스캔합니다. 한 줄에 하나의 종목코드를 입력하세요.</p>
+    <textarea id="etf_symbols" rows="3" placeholder="441800&#10;466920&#10;404120" style="width: 100%; margin-bottom: 8px; font-family: monospace;"></textarea>
+    <button onclick="scanEtfSymbols()" style="background: #0ea5e9; color: white;">ETF 스캔</button>
   </div>
 
   <div class="stats-row" id="stats_row" style="display:none; margin-top: 16px;">
@@ -570,16 +581,68 @@ const scanGoldenCross = async () => {
 
   const stochThreshold = document.getElementById("stoch_threshold").value || 30;
   const gcOnly = document.getElementById("gc_only").checked;
+  const includeEtf = document.getElementById("include_etf").checked;
 
-  const url = `/api/v1/strategies/universe/golden-cross-scan?stoch_threshold=${stochThreshold}&gc_only=${gcOnly}`;
+  const url = `/api/v1/strategies/universe/golden-cross-scan?stoch_threshold=${stochThreshold}&gc_only=${gcOnly}&include_etf=${includeEtf}`;
   const data = await getJson(url, null);
 
   if (data && data.data) {
     displayGcScanResults(data.data);
     const scanTime = formatTime(data.data.scan_time);
+    const etfLabel = includeEtf ? ' (ETF 포함)' : '';
     document.getElementById("scan_output").textContent =
-      `스캔 완료 (${scanTime}): ${data.data.stocks?.length || 0}개 종목 발견 ` +
+      `스캔 완료${etfLabel} (${scanTime}): ${data.data.stocks?.length || 0}개 종목 발견 ` +
       `(총 ${data.data.total_scanned}개 스캔, 오류 ${data.data.errors?.length || 0}개)`;
+  }
+};
+
+// ETF 스캔
+const scanEtfSymbols = async () => {
+  const symbolsText = document.getElementById("etf_symbols").value.trim();
+  if (!symbolsText) {
+    alert("종목코드를 입력하세요.");
+    return;
+  }
+
+  // 줄바꿈 또는 쉼표로 분리
+  const symbolList = symbolsText.split(/[\n,]/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+    .map(symbol => ({ symbol, name: null, market: "ETF" }));
+
+  if (symbolList.length === 0) {
+    alert("유효한 종목코드가 없습니다.");
+    return;
+  }
+
+  document.getElementById("scan_output").textContent = `ETF ${symbolList.length}개 종목 스캔 중...`;
+
+  const stochThreshold = document.getElementById("stoch_threshold").value || 30;
+  const gcOnly = document.getElementById("gc_only").checked;
+
+  try {
+    const response = await fetch(
+      `/api/v1/strategies/universe/golden-cross-scan-symbols?stoch_threshold=${stochThreshold}&gc_only=${gcOnly}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(symbolList)
+      }
+    );
+
+    const result = await response.json();
+    if (result.success && result.data) {
+      displayGcScanResults(result.data);
+      const scanTime = formatTime(result.data.scan_time);
+      document.getElementById("scan_output").textContent =
+        `ETF 스캔 완료 (${scanTime}): ${result.data.stocks?.length || 0}개 종목 발견 ` +
+        `(총 ${result.data.total_scanned}개 스캔, 오류 ${result.data.errors?.length || 0}개)`;
+    } else {
+      document.getElementById("scan_output").textContent = `스캔 실패: ${result.message || 'Unknown error'}`;
+    }
+  } catch (e) {
+    console.error('ETF scan failed:', e);
+    document.getElementById("scan_output").textContent = `스캔 실패: ${e.message}`;
   }
 };
 

@@ -31,18 +31,49 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
         self,
         market: MarketType | None = None,
         limit: int = 100,
+        include_etf: bool = False,
     ) -> Sequence[StockUniverseModel]:
-        """스크리닝 통과한 종목 조회"""
-        stmt = select(self.model).where(
-            self.model.is_active == True,
-            self.model.is_tradable == True,
-            self.model.is_excluded == False,
-            self.model.passed_market_cap == True,
-            self.model.passed_volume == True,
+        """
+        스크리닝 통과한 종목 조회
+
+        Args:
+            market: 시장 필터 (KOSPI/KOSDAQ/ETF)
+            limit: 최대 조회 개수
+            include_etf: ETF 종목도 함께 조회 (market=None일 때만 적용)
+        """
+        from sqlalchemy import or_
+
+        # 기본 조건: 일반 주식
+        base_condition = (
+            (self.model.is_active == True) &
+            (self.model.is_tradable == True) &
+            (self.model.is_excluded == False) &
+            (self.model.passed_market_cap == True) &
+            (self.model.passed_volume == True)
+        )
+
+        # ETF 조건: 스크리닝 조건 완화 (활성화 + 거래 가능만 확인)
+        etf_condition = (
+            (self.model.is_active == True) &
+            (self.model.is_tradable == True) &
+            (self.model.is_excluded == False) &
+            (self.model.market == MarketType.ETF.value)
         )
 
         if market:
-            stmt = stmt.where(self.model.market == market.value)
+            # 특정 시장 지정 시 해당 시장만
+            stmt = select(self.model).where(
+                base_condition if market != MarketType.ETF else etf_condition,
+                self.model.market == market.value,
+            )
+        elif include_etf:
+            # ETF 포함 옵션: 일반 주식 + ETF
+            stmt = select(self.model).where(
+                or_(base_condition, etf_condition)
+            )
+        else:
+            # 기본: 일반 주식만
+            stmt = select(self.model).where(base_condition)
 
         stmt = stmt.order_by(
             self.model.screening_score.desc().nullslast(),

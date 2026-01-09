@@ -17,7 +17,7 @@ domain/
 ├── backtest/             # 백테스트 엔진/데이터 로더
 ├── market_data/          # 현재가/호가/차트 조회
 ├── order/                # 주문 생성/조회/취소
-├── strategy/             # 전략 관리/실행/스케줄러
+├── strategy/             # 전략 관리/스캔/알림
 ├── news_trading/         # 뉴스 기반 단타 전략
 └── websocket_domain/     # WS 도메인 플레이스홀더
 ```
@@ -50,13 +50,14 @@ domain/
 - `service.py`: 백테스트 퍼사드
 
 ### strategy/
-- `dto.py`: 전략/골든크로스 DTO
-- `service.py`: 전략 CRUD + 골든크로스 스캔
+- `strategy_service.py`: 전략 CRUD/유니버스/상태 관리
+- `buy_strategy_service.py`: 골든크로스 매수 후보 스캔(MA40/MA160)
+- `sell_strategy_service.py`: 매도 시그널 분석(MA/Stochastic/RSI)
+- `ohlcv_data_loader.py`: DB 캐시 + KIS API OHLCV 로딩
+- `scheduler.py`: 전략 실행 스케줄러
+- `notification_scheduler.py`: Telegram 알림 스케줄러
+- `golden_cross_engine.py`, `state_machine.py`: 골든크로스 실행/상태 관리
 - `engine.py`: 레거시 전략 실행 엔진
-- `golden_cross_engine.py`: 골든크로스 실행 엔진
-- `state_machine.py`: 골든크로스 상태 머신
-- `scheduler.py`: 골든크로스 스케줄러
-- `stock_screener.py`: 유니버스 스크리닝
 
 ### news_trading/
 - 뉴스 기반 단타 전략 모듈 (상세는 해당 CLAUDE 문서 참고)

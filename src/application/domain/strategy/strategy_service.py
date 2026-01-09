@@ -552,9 +552,16 @@ class StrategyService:
         market: str | None = None,
         stoch_threshold: float = 30.0,
         gc_only: bool = True,
+        include_etf: bool = True,
     ) -> GoldenCrossScanListDTO:
         """
         골든크로스 종목 스캔 (BuyStrategyService로 위임)
+
+        Args:
+            market: 시장 필터 (KOSPI/KOSDAQ/ETF)
+            stoch_threshold: Stochastic 과매도 임계값
+            gc_only: 골든크로스 활성 종목만 반환
+            include_etf: ETF 종목 포함 여부 (기본 True)
         """
         from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
 
@@ -563,6 +570,7 @@ class StrategyService:
             market=market,
             stoch_threshold=stoch_threshold,
             gc_only=gc_only,
+            include_etf=include_etf,
         )
 
     async def analyze_sell_signal(

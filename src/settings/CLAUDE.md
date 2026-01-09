@@ -21,7 +21,7 @@ settings/
 ## 📋 config.py 핵심 구성
 - `Settings(BaseSettings)`
 - `get_settings()` + `settings` 전역 인스턴스
-- 환경 변수 그룹: 앱/서버/DB/Redis/KIS/리스크/CORS/로깅/웹소켓 등
+- 환경 변수 그룹: 앱/서버/DB/Redis/KIS/리스크/CORS/로깅/웹소켓/Telegram
 
 ### Computed Properties
 - `is_production`, `is_development`

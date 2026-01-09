@@ -125,9 +125,10 @@ async def refresh_universe(
 )
 async def scan_golden_cross(
     session: DatabaseSession,
-    market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ)"),
+    market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
     stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
     gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
+    include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
 ) -> ResponseDTO[GoldenCrossScanListDTO]:
     """
     골든크로스 종목 스캔
@@ -140,10 +141,50 @@ async def scan_golden_cross(
     - WAITING_FOR_PULLBACK: 골든크로스 활성 + Stochastic 중간 (눌림목 대기)
     - GC_ACTIVE: 골든크로스 활성 + Stochastic 과매수 (대기)
     - NOT_GC: 골든크로스 비활성 (MA40 < MA160)
+
+    ETF 종목은 시가총액/거래량 조건이 완화되어 적용됩니다.
     """
     service = StrategyService(session)
     result = await service.scan_golden_cross_candidates(
         market=market,
+        stoch_threshold=stoch_threshold,
+        gc_only=gc_only,
+        include_etf=include_etf,
+    )
+    return ResponseDTO.success_response(result, "Golden cross scan completed")
+
+
+@router.post(
+    "/universe/golden-cross-scan-symbols",
+    response_model=ResponseDTO[GoldenCrossScanListDTO],
+    status_code=status.HTTP_200_OK,
+    summary="특정 종목 골든크로스 스캔",
+    description="지정한 종목 목록에 대해 골든크로스 스캔 (ETF 등 유니버스 외 종목 스캔용)",
+)
+async def scan_golden_cross_symbols(
+    symbols: list[dict],
+    session: DatabaseSession,
+    stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
+    gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
+) -> ResponseDTO[GoldenCrossScanListDTO]:
+    """
+    특정 종목 목록에 대해 골든크로스 스캔
+
+    stock_universe에 없는 ETF, ETN 등의 종목도 직접 스캔할 수 있습니다.
+
+    Request Body:
+    ```json
+    [
+        {"symbol": "441800", "name": "타임폴리오 ETF", "market": "ETF"},
+        {"symbol": "466920", "name": "신한 SOL 조선", "market": "ETF"}
+    ]
+    ```
+    """
+    from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
+
+    buy_service = BuyStrategyService(session)
+    result = await buy_service.scan_symbols(
+        symbols=symbols,
         stoch_threshold=stoch_threshold,
         gc_only=gc_only,
     )

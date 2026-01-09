@@ -25,7 +25,7 @@ interface/
 | `api/market_data_router.py` | `/api/v1/market` | 현재가/호가/차트 | `MarketDataService` 사용 |
 | `api/account_router.py` | `/api/v1/accounts` | 잔고/포지션 | `AccountService` 사용 |
 | `api/order_router.py` | `/api/v1/orders` | 주문 생성/취소/조회 | `OrderService` 사용 |
-| `api/strategy_router.py` | `/api/v1/strategies` | 전략 CRUD/스캔 | `StrategyService` 사용 |
+| `api/strategy_router.py` | `/api/v1/strategies` | 전략 CRUD/스캔/매도 분석 | `StrategyService` 사용 |
 | `api/backtest_router.py` | **내부 prefix 포함** | 백테스트 실행/검증 | `APIRouter(prefix="/api/v1/backtest")` |
 | `api/websocket_router.py` | `/ws` | 실시간 WebSocket | `websocket_manager` 사용 |
 
@@ -34,9 +34,17 @@ interface/
 ---
 
 ## 🖥️ Page 라우터
-- `page/*_page_router.py`는 `/page` 이하 대시보드 라우팅을 담당합니다.
-- 모두 `include_in_schema=False`로 OpenAPI에 노출하지 않습니다.
-- 템플릿은 `templates/page/*.html`를 사용합니다.
+| 파일 | prefix | 템플릿 | 설명 |
+| --- | --- | --- | --- |
+| `main_page_router.py` | `/page` | `page/index.html` | 대시보드 허브 |
+| `auth_page_router.py` | `/page/auth` | `page/auth.html` | 인증 상태/토큰 |
+| `account_page_router.py` | `/page/account` | `page/account.html` | 계좌 조회 |
+| `market_data_page_router.py` | `/page/market-data` | `page/market_data.html` | 시세 조회 + 고급 필터 탭 |
+| `order_page_router.py` | `/page/order` | `page/order.html` | 주문 관리 |
+| `strategy_page_router.py` | `/page/strategy` | `page/strategy.html` | 매수 전략 |
+| `sell_strategy_page_router.py` | `/page/sell-strategy` | `page/sell_strategy.html` | 매도 분석 |
+| `backtest_page_router.py` | `/page/backtest` | `page/backtest.html` | 백테스트 |
+| `websocket_page_router.py` | `/page/websocket` | `page/websocket.html` | WebSocket 테스트 |
 
 ---
 

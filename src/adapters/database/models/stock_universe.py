@@ -21,6 +21,7 @@ class MarketType(str, Enum):
 
     KOSPI = "KOSPI"
     KOSDAQ = "KOSDAQ"
+    ETF = "ETF"  # ETF/ETN
 
 
 class StockUniverseModel(Base, BaseModel):
