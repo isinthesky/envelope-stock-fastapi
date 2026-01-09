@@ -205,6 +205,11 @@ class Settings(BaseSettings):
     uvicorn_reload: bool = Field(default=True, description="Uvicorn 자동 리로드")
     uvicorn_workers: int = Field(default=1, ge=1, description="Uvicorn 워커 수")
 
+    # ==================== Telegram 알림 설정 ====================
+    telegram_bot_token: str = Field(default="", description="Telegram Bot Token")
+    telegram_chat_id: str = Field(default="", description="Telegram Chat ID")
+    telegram_enabled: bool = Field(default=False, description="Telegram 알림 활성화")
+
     # ==================== Computed Properties ====================
 
     @property

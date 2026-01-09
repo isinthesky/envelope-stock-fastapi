@@ -72,6 +72,25 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_active_symbols_with_names(
+        self, analysis_type: str
+    ) -> list[dict[str, str | None]]:
+        """
+        활성 추적 중인 종목 코드 및 종목명 조회
+
+        Args:
+            analysis_type: 분석 유형 (buy/sell)
+
+        Returns:
+            list[dict]: [{"symbol": "005930", "name": "삼성전자"}, ...]
+        """
+        stmt = select(self.model.symbol, self.model.name).where(
+            self.model.analysis_type == analysis_type,
+            self.model.is_active == True,  # noqa: E712
+        ).distinct()
+        result = await self.session.execute(stmt)
+        return [{"symbol": row[0], "name": row[1]} for row in result.all()]
+
     async def get_by_symbol(
         self,
         symbol: str,

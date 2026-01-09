@@ -101,6 +101,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         print(f"⚠️  Golden Cross scheduler start failed: {e}")
 
+    # 6. Telegram 알림 스케줄러 시작
+    notification_scheduler = None
+    try:
+        from src.application.domain.strategy.notification_scheduler import (
+            get_notification_scheduler,
+        )
+
+        notification_scheduler = get_notification_scheduler()
+        await notification_scheduler.start()
+        if settings.telegram_enabled:
+            print("✅ Telegram notification scheduler started (15:00 Buy, 09:10 Sell)")
+        else:
+            print("⏭️  Telegram notification is disabled")
+    except Exception as e:
+        print(f"⚠️  Notification scheduler start failed: {e}")
+
     print("=" * 60)
     print("🎉 Application startup complete!")
     print("=" * 60)
@@ -113,6 +129,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     print("=" * 60)
 
     # 백그라운드 태스크 중지
+    try:
+        if notification_scheduler:
+            await notification_scheduler.stop()
+        print("✅ Notification scheduler stopped")
+    except Exception as e:
+        print(f"⚠️  Notification scheduler stop error: {e}")
+
     try:
         if gc_scheduler:
             await gc_scheduler.stop()
