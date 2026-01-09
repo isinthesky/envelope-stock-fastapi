@@ -117,6 +117,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         print(f"⚠️  Notification scheduler start failed: {e}")
 
+    # 7. OHLCV 캐시 스케줄러 시작
+    ohlcv_scheduler = None
+    try:
+        from src.application.domain.ohlcv.scheduler import get_ohlcv_scheduler
+
+        ohlcv_scheduler = get_ohlcv_scheduler()
+        await ohlcv_scheduler.start()
+        print("✅ OHLCV cache scheduler started (cleanup: 02:00, update: 16:30)")
+    except Exception as e:
+        print(f"⚠️  OHLCV cache scheduler start failed: {e}")
+
     print("=" * 60)
     print("🎉 Application startup complete!")
     print("=" * 60)
@@ -129,6 +140,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     print("=" * 60)
 
     # 백그라운드 태스크 중지
+    try:
+        if ohlcv_scheduler:
+            await ohlcv_scheduler.stop()
+        print("✅ OHLCV cache scheduler stopped")
+    except Exception as e:
+        print(f"⚠️  OHLCV cache scheduler stop error: {e}")
+
     try:
         if notification_scheduler:
             await notification_scheduler.stop()
@@ -254,6 +272,7 @@ from src.application.interface.api.account_router import router as account_route
 from src.application.interface.api.auth_router import router as auth_router
 from src.application.interface.api.backtest_router import router as backtest_router
 from src.application.interface.api.market_data_router import router as market_data_router
+from src.application.interface.api.ohlcv_router import router as ohlcv_router
 from src.application.interface.api.order_router import router as order_router
 from src.application.interface.api.strategy_router import router as strategy_router
 from src.application.interface.api.websocket_router import router as websocket_router
@@ -264,6 +283,7 @@ app.include_router(market_data_router, prefix="/api/v1/market", tags=["MarketDat
 app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
 app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
 app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
+app.include_router(ohlcv_router, prefix="/api/v1/ohlcv", tags=["OHLCV Cache"])
 app.include_router(backtest_router)
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 

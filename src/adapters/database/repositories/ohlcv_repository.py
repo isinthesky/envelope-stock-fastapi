@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Sequence
 
 import pandas as pd
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.ohlcv import OHLCVModel
@@ -455,3 +455,239 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
             "latest_date": latest,
             "date_range_days": date_range,
         }
+
+    # ==================== 캐시 관리용 확장 메서드 ====================
+
+    async def get_all_symbols(self, interval: str = "1d") -> list[str]:
+        """
+        캐시된 모든 종목 코드 목록 조회
+
+        Args:
+            interval: 캔들 간격
+
+        Returns:
+            list[str]: 종목 코드 목록
+        """
+        stmt = (
+            select(distinct(self.model.symbol))
+            .where(self.model.interval == interval)
+            .order_by(self.model.symbol)
+        )
+
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_all_intervals(self) -> list[str]:
+        """
+        캐시된 모든 간격 목록 조회
+
+        Returns:
+            list[str]: 간격 목록
+        """
+        stmt = select(distinct(self.model.interval)).order_by(self.model.interval)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_symbols_with_stale_data(
+        self,
+        freshness_days: int = 7,
+        interval: str = "1d",
+    ) -> list[dict]:
+        """
+        오래된 데이터 보유 종목 목록 조회
+
+        Args:
+            freshness_days: 신선도 기준 (일)
+            interval: 캔들 간격
+
+        Returns:
+            list[dict]: [{"symbol": str, "latest_date": datetime}]
+        """
+        from datetime import timedelta
+
+        threshold_date = datetime.now() - timedelta(days=freshness_days)
+
+        # 종목별 최신 날짜를 서브쿼리로 조회
+        subquery = (
+            select(
+                self.model.symbol,
+                func.max(self.model.timestamp).label("latest_date"),
+            )
+            .where(self.model.interval == interval)
+            .group_by(self.model.symbol)
+        ).subquery()
+
+        # 최신 날짜가 기준일보다 오래된 종목 필터
+        stmt = (
+            select(subquery.c.symbol, subquery.c.latest_date)
+            .where(subquery.c.latest_date < threshold_date)
+            .order_by(subquery.c.latest_date)
+        )
+
+        result = await self.session.execute(stmt)
+        rows = result.all()
+
+        return [
+            {"symbol": row.symbol, "latest_date": row.latest_date}
+            for row in rows
+        ]
+
+    async def get_cache_summary(self) -> dict:
+        """
+        전체 캐시 요약 통계 조회
+
+        Returns:
+            dict: {
+                "total_symbols": int,
+                "total_candles": int,
+                "oldest_date": datetime | None,
+                "newest_date": datetime | None,
+                "intervals": list[str],
+                "symbols_by_interval": dict[str, int]
+            }
+        """
+        # 전체 캔들 수
+        count_stmt = select(func.count()).select_from(self.model)
+        count_result = await self.session.execute(count_stmt)
+        total_candles = count_result.scalar() or 0
+
+        if total_candles == 0:
+            return {
+                "total_symbols": 0,
+                "total_candles": 0,
+                "oldest_date": None,
+                "newest_date": None,
+                "intervals": [],
+                "symbols_by_interval": {},
+            }
+
+        # 전체 종목 수
+        symbols_stmt = select(func.count(distinct(self.model.symbol)))
+        symbols_result = await self.session.execute(symbols_stmt)
+        total_symbols = symbols_result.scalar() or 0
+
+        # 가장 오래된/최신 날짜
+        dates_stmt = select(
+            func.min(self.model.timestamp).label("oldest"),
+            func.max(self.model.timestamp).label("newest"),
+        )
+        dates_result = await self.session.execute(dates_stmt)
+        dates_row = dates_result.one()
+
+        # 간격 목록
+        intervals = await self.get_all_intervals()
+
+        # 간격별 종목 수
+        interval_counts_stmt = (
+            select(
+                self.model.interval,
+                func.count(distinct(self.model.symbol)).label("count"),
+            )
+            .group_by(self.model.interval)
+        )
+        interval_counts_result = await self.session.execute(interval_counts_stmt)
+        symbols_by_interval = {
+            row.interval: row.count for row in interval_counts_result.all()
+        }
+
+        return {
+            "total_symbols": total_symbols,
+            "total_candles": total_candles,
+            "oldest_date": dates_row.oldest,
+            "newest_date": dates_row.newest,
+            "intervals": intervals,
+            "symbols_by_interval": symbols_by_interval,
+        }
+
+    async def bulk_delete_old_data(
+        self,
+        before_date: datetime,
+        batch_size: int = 1000,
+    ) -> int:
+        """
+        배치 단위 오래된 데이터 삭제 (전체 종목)
+
+        Args:
+            before_date: 기준 날짜
+            batch_size: 배치 크기
+
+        Returns:
+            int: 삭제된 총 레코드 수
+        """
+        total_deleted = 0
+
+        while True:
+            # 배치 단위로 삭제할 ID 조회
+            ids_stmt = (
+                select(self.model.id)
+                .where(self.model.timestamp < before_date)
+                .limit(batch_size)
+            )
+            ids_result = await self.session.execute(ids_stmt)
+            ids_to_delete = list(ids_result.scalars().all())
+
+            if not ids_to_delete:
+                break
+
+            # ID 기반 삭제
+            delete_stmt = delete(self.model).where(self.model.id.in_(ids_to_delete))
+            result = await self.session.execute(delete_stmt)
+            await self.session.flush()
+
+            total_deleted += result.rowcount
+
+        return total_deleted
+
+    async def get_symbols_latest_dates(
+        self,
+        interval: str = "1d",
+    ) -> dict[str, datetime]:
+        """
+        모든 종목의 최신 데이터 날짜 조회
+
+        Args:
+            interval: 캔들 간격
+
+        Returns:
+            dict[str, datetime]: {symbol: latest_date}
+        """
+        stmt = (
+            select(
+                self.model.symbol,
+                func.max(self.model.timestamp).label("latest_date"),
+            )
+            .where(self.model.interval == interval)
+            .group_by(self.model.symbol)
+        )
+
+        result = await self.session.execute(stmt)
+        return {row.symbol: row.latest_date for row in result.all()}
+
+    async def count_by_symbol(
+        self,
+        symbol: str,
+        interval: str = "1d",
+    ) -> int:
+        """
+        특정 종목의 캔들 수 조회
+
+        Args:
+            symbol: 종목코드
+            interval: 캔들 간격
+
+        Returns:
+            int: 캔들 수
+        """
+        stmt = (
+            select(func.count())
+            .select_from(self.model)
+            .where(
+                and_(
+                    self.model.symbol == symbol,
+                    self.model.interval == interval,
+                )
+            )
+        )
+
+        result = await self.session.execute(stmt)
+        return result.scalar() or 0
