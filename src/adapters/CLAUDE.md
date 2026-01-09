@@ -1,6 +1,6 @@
 # CLAUDE.md - adapters 디렉토리 가이드
 
-> **Adapter 계층(Infrastructure)**: DB/Redis/KIS/Telegram/WS 등 외부 시스템 연동 담당
+> Adapter 계층(Infrastructure): DB/Redis/KIS/Telegram/WS 등 외부 시스템 연동 담당
 
 ## ✅ 역할
 - 데이터 저장소, 캐시, 외부 API/WS 통신을 캡슐화
@@ -26,6 +26,7 @@ adapters/
 - `account.py`, `position.py`, `order.py`
 - `strategy.py`, `strategy_signal.py`, `strategy_symbol_state.py`
 - `stock_universe.py`, `ohlcv.py`, `analysis_history.py`
+- `base.py` (SQLAlchemy Base)
 
 ### 주요 Repository
 - `order_repository.py`
@@ -35,7 +36,7 @@ adapters/
 - `stock_universe_repository.py`
 - `ohlcv_repository.py`
 - `analysis_history_repository.py`
-- `base_repository.py` (CRUD + mixin)
+- `base_repository.py` (CRUD 공통 로직)
 
 ### connection.py
 - `create_async_engine` 기반 Async Engine 사용
@@ -46,22 +47,22 @@ adapters/
 
 ## 🔴 cache/
 - `redis_client.py`: Redis 비동기 클라이언트
-- 도메인별 캐시 헬퍼(`cache_market_data`, `cache_account_data`, `cache_chart_data`)
+- 도메인별 캐시 헬퍼(시세/계좌/차트)
 
 ---
 
 ## 🌐 external/
 ### kis_api/
 - `auth.py`: 토큰 발급/갱신/캐시
-- `client.py`: REST 호출, 레이트리밋/재시도
+- `client.py`: REST 호출, 레이트리밋/재시도/백오프
 - `exceptions.py`: KIS API 예외
 
 ### telegram/
 - `notifier.py`: Telegram Bot API 메시지 전송 클라이언트
 
 ### websocket/
-- `kis_websocket.py`: WS 연결/메시지 송수신
-- `websocket_manager.py`: 연결 풀 관리
+- `kis_websocket.py`: KIS WS 연결/메시지 송수신
+- `websocket_manager.py`: 연결 풀/구독 관리
 
 ---
 

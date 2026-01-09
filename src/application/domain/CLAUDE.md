@@ -1,6 +1,6 @@
 # CLAUDE.md - domain 디렉토리 가이드
 
-> **도메인 계층**: 비즈니스 규칙/서비스 로직을 구현하고 Interface와 Adapter 사이를 연결하는 레이어
+> 도메인 계층: 비즈니스 규칙/서비스 로직을 구현하고 Interface와 Adapter 사이를 연결하는 레이어
 
 ## ✅ 역할
 - 비즈니스 규칙 집행 및 트랜잭션 경계 관리
@@ -13,13 +13,13 @@
 ```
 domain/
 ├── account/              # 계좌 잔고/포지션 조회
-├── auth/                 # KIS 인증/토큰 관리
+├── auth/                 # KIS 인증/토큰/승인키 관리
 ├── backtest/             # 백테스트 엔진/데이터 로더
 ├── market_data/          # 현재가/호가/차트 조회
-├── order/                # 주문 생성/조회/취소
-├── strategy/             # 전략 관리/스캔/알림
+├── order/                # 주문 생성/조회/취소/정정
+├── strategy/             # 전략 관리/스캔/알림/스케줄러
 ├── news_trading/         # 뉴스 기반 단타 전략
-└── websocket_domain/     # WS 도메인 플레이스홀더
+└── websocket_domain/     # WS 도메인 확장 지점
 ```
 
 ---
@@ -32,7 +32,7 @@ domain/
 
 ### auth/
 - `dto.py`: 토큰/승인키 DTO
-- `service.py`: KISAuth 기반 토큰 발급/갱신
+- `service.py`: KISAuth 기반 토큰 발급/갱신/승인키 발급
 
 ### market_data/
 - `dto.py`: 가격/호가/차트 DTO
@@ -40,30 +40,32 @@ domain/
 
 ### order/
 - `dto.py`: 주문 관련 DTO
-- `service.py`: 주문 생성/취소/조회, KIS 주문 API 호출
+- `service.py`: 주문 생성/취소/정정/조회 + DB 저장
 
 ### backtest/
 - `dto.py`: 백테스트 요청/결과 DTO
 - `engine.py`: 시뮬레이션 엔진
-- `data_loader.py`: OHLCV 수집 + DB 캐시 로더
+- `data_loader.py`: OHLCV 로더
 - `position_manager.py` / `order_manager.py`: 가상 포지션/주문 관리
 - `service.py`: 백테스트 퍼사드
 
 ### strategy/
-- `strategy_service.py`: 전략 CRUD/유니버스/상태 관리
-- `buy_strategy_service.py`: 골든크로스 매수 후보 스캔(MA55/MA160)
-- `sell_strategy_service.py`: 매도 시그널 분석(MA/Stochastic/RSI)
+- `dto.py`: 전략/유니버스/시그널 DTO
+- `strategy_service.py`: 전략 CRUD/유니버스/분석 이력
+- `buy_strategy_service.py`: 골든크로스 매수 스캔
+- `sell_strategy_service.py`: 매도 시그널 분석
+- `stock_screener.py`: 종목 스크리닝 기준
 - `ohlcv_data_loader.py`: DB 캐시 + KIS API OHLCV 로딩
+- `engine.py`: 레거시 전략 엔진
+- `golden_cross_engine.py`, `state_machine.py`: 골든크로스 실행/상태 관리
 - `scheduler.py`: 전략 실행 스케줄러
 - `notification_scheduler.py`: Telegram 알림 스케줄러
-- `golden_cross_engine.py`, `state_machine.py`: 골든크로스 실행/상태 관리
-- `engine.py`: 레거시 전략 실행 엔진
 
 ### news_trading/
 - 뉴스 기반 단타 전략 모듈 (상세는 해당 CLAUDE 문서 참고)
 
 ### websocket_domain/
-- 실시간 도메인 확장 지점(플레이스홀더)
+- 실시간 도메인 확장 지점(현재는 플레이스홀더)
 
 ---
 
