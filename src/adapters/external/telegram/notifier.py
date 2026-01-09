@@ -122,7 +122,7 @@ class TelegramNotifier:
         gc_state: str,
     ) -> bool:
         """
-        매수 준비 알림 전송
+        매수 신호 알림 전송
 
         Args:
             symbol: 종목코드
@@ -134,8 +134,12 @@ class TelegramNotifier:
             gc_state: 골든크로스 상태
         """
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+        state_label = {
+            "OPTIMAL_BUY": "매수 적기",
+            "READY_TO_BUY": "매수 준비",
+        }.get(gc_state, gc_state)
 
-        message = f"""🟢 <b>매수 준비 종목 알림</b>
+        message = f"""🟢 <b>{state_label} 종목 알림</b>
 
 📅 {now}
 
@@ -144,7 +148,7 @@ class TelegramNotifier:
 <b>MA55:</b> {ma_short:,.0f} | <b>MA165:</b> {ma_long:,.0f}
 <b>Stochastic K:</b> {stoch_k:.1f}
 
-<b>상태:</b> {gc_state}"""
+<b>상태:</b> {state_label} ({gc_state})"""
 
         return await self.send_message(message)
 
@@ -153,7 +157,7 @@ class TelegramNotifier:
         stocks: list[dict],
     ) -> bool:
         """
-        매수 준비 종목 요약 알림 전송
+        매수 신호 요약 알림 전송
 
         Args:
             stocks: 매수 준비 종목 리스트 [{symbol, name, current_price, stoch_k, ...}]
@@ -162,13 +166,24 @@ class TelegramNotifier:
             return False
 
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+        optimal_count = sum(1 for stock in stocks if stock.get("gc_state") == "OPTIMAL_BUY")
+        ready_count = sum(1 for stock in stocks if stock.get("gc_state") == "READY_TO_BUY")
 
-        lines = [f"🟢 <b>매수 준비 종목 알림</b>", f"📅 {now}", f"총 {len(stocks)}개 종목", ""]
+        lines = [
+            "🟢 <b>매수 신호 종목 알림</b>",
+            f"📅 {now}",
+            f"총 {len(stocks)}개 종목 (매수 적기 {optimal_count}, 매수 준비 {ready_count})",
+            "",
+        ]
 
         for stock in stocks[:10]:  # 최대 10개
+            state_label = {
+                "OPTIMAL_BUY": "매수 적기",
+                "READY_TO_BUY": "매수 준비",
+            }.get(stock.get("gc_state"), stock.get("gc_state", "-"))
             lines.append(
                 f"• <b>{stock['name']}</b> ({stock['symbol']})\n"
-                f"  현재가: {stock['current_price']:,.0f}원 | K: {stock['stoch_k']:.1f}"
+                f"  상태: {state_label} | 현재가: {stock['current_price']:,.0f}원 | K: {stock['stoch_k']:.1f}"
             )
 
         if len(stocks) > 10:

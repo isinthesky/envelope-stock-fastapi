@@ -141,15 +141,17 @@ class BuyStrategyService:
                 if gc_only and not is_gc_active:
                     continue
 
-                # 상태 결정
+                # MA 갭 비율 계산
+                ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
+
+                # 상태 결정 (stoch_d, ma_gap_ratio 전달)
                 gc_state = self._determine_gc_state(
                     is_gc_active=is_gc_active,
                     stoch_k=stoch_k,
                     stoch_threshold=stoch_threshold,
+                    stoch_d=stoch_d,
+                    ma_gap_ratio=ma_gap_ratio,
                 )
-
-                # MA 갭 비율 계산
-                ma_gap_ratio = ((ma_short - ma_long) / ma_long) if ma_long > 0 else 0
 
                 # 결과 추가
                 results.append(
@@ -160,7 +162,7 @@ class BuyStrategyService:
                         current_price=Decimal(str(close)),
                         ma_short=Decimal(str(round(ma_short, 2))),
                         ma_long=Decimal(str(round(ma_long, 2))),
-                        ma_gap_ratio=round(ma_gap_ratio * 100, 2),  # 백분율
+                        ma_gap_ratio=round(ma_gap_ratio, 2),  # 백분율
                         stoch_k=round(stoch_k, 2),
                         stoch_d=round(stoch_d, 2),
                         is_gc_active=is_gc_active,
@@ -181,19 +183,20 @@ class BuyStrategyService:
                 logger.warning(f"[GC Scan] Error processing {error_msg}")
                 errors.append(error_msg)
 
-        # 3. 결과 정렬 (READY_TO_BUY > WAITING_FOR_PULLBACK > 기타)
-        state_order = {"READY_TO_BUY": 0, "WAITING_FOR_PULLBACK": 1, "GC_ACTIVE": 2, "NOT_GC": 3}
+        # 3. 결과 정렬 (OPTIMAL_BUY > READY_TO_BUY > WAITING_FOR_PULLBACK > 기타)
+        state_order = {"OPTIMAL_BUY": 0, "READY_TO_BUY": 1, "WAITING_FOR_PULLBACK": 2, "GC_ACTIVE": 3, "NOT_GC": 4}
         results.sort(key=lambda x: (state_order.get(x.gc_state, 99), -float(x.screening_score or 0)))
 
         # 4. 통계 계산
         gc_active_count = sum(1 for r in results if r.is_gc_active)
         pullback_waiting_count = sum(1 for r in results if r.gc_state == "WAITING_FOR_PULLBACK")
         ready_to_buy_count = sum(1 for r in results if r.gc_state == "READY_TO_BUY")
+        optimal_buy_count = sum(1 for r in results if r.gc_state == "OPTIMAL_BUY")
 
         logger.info(
             f"[GC Scan] Complete: {len(results)} results, "
             f"GC Active: {gc_active_count}, Pullback: {pullback_waiting_count}, "
-            f"Ready: {ready_to_buy_count}, Errors: {len(errors)}"
+            f"Ready: {ready_to_buy_count}, Optimal: {optimal_buy_count}, Errors: {len(errors)}"
         )
 
         return GoldenCrossScanListDTO(
@@ -202,6 +205,7 @@ class BuyStrategyService:
             gc_active_count=gc_active_count,
             pullback_waiting_count=pullback_waiting_count,
             ready_to_buy_count=ready_to_buy_count,
+            optimal_buy_count=optimal_buy_count,
             scan_time=scan_time,
             errors=errors,
         )
@@ -305,15 +309,17 @@ class BuyStrategyService:
                 if gc_only and not is_gc_active:
                     continue
 
-                # 상태 결정
+                # MA 갭 비율 계산
+                ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
+
+                # 상태 결정 (stoch_d, ma_gap_ratio 전달)
                 gc_state = self._determine_gc_state(
                     is_gc_active=is_gc_active,
                     stoch_k=stoch_k,
                     stoch_threshold=stoch_threshold,
+                    stoch_d=stoch_d,
+                    ma_gap_ratio=ma_gap_ratio,
                 )
-
-                # MA 갭 비율 계산
-                ma_gap_ratio = ((ma_short - ma_long) / ma_long) if ma_long > 0 else 0
 
                 # 결과 추가
                 results.append(
@@ -324,7 +330,7 @@ class BuyStrategyService:
                         current_price=Decimal(str(close)),
                         ma_short=Decimal(str(round(ma_short, 2))),
                         ma_long=Decimal(str(round(ma_long, 2))),
-                        ma_gap_ratio=round(ma_gap_ratio * 100, 2),
+                        ma_gap_ratio=round(ma_gap_ratio, 2),
                         stoch_k=round(stoch_k, 2),
                         stoch_d=round(stoch_d, 2),
                         is_gc_active=is_gc_active,
@@ -345,17 +351,19 @@ class BuyStrategyService:
                 errors.append(error_msg)
 
         # 결과 정렬
-        state_order = {"READY_TO_BUY": 0, "WAITING_FOR_PULLBACK": 1, "GC_ACTIVE": 2, "NOT_GC": 3}
+        state_order = {"OPTIMAL_BUY": 0, "READY_TO_BUY": 1, "WAITING_FOR_PULLBACK": 2, "GC_ACTIVE": 3, "NOT_GC": 4}
         results.sort(key=lambda x: state_order.get(x.gc_state, 99))
 
         # 통계 계산
         gc_active_count = sum(1 for r in results if r.is_gc_active)
         pullback_waiting_count = sum(1 for r in results if r.gc_state == "WAITING_FOR_PULLBACK")
         ready_to_buy_count = sum(1 for r in results if r.gc_state == "READY_TO_BUY")
+        optimal_buy_count = sum(1 for r in results if r.gc_state == "OPTIMAL_BUY")
 
         logger.info(
             f"[GC Scan] Complete: {len(results)} results, "
-            f"GC Active: {gc_active_count}, Ready: {ready_to_buy_count}, Errors: {len(errors)}"
+            f"GC Active: {gc_active_count}, Ready: {ready_to_buy_count}, "
+            f"Optimal: {optimal_buy_count}, Errors: {len(errors)}"
         )
 
         return GoldenCrossScanListDTO(
@@ -364,6 +372,7 @@ class BuyStrategyService:
             gc_active_count=gc_active_count,
             pullback_waiting_count=pullback_waiting_count,
             ready_to_buy_count=ready_to_buy_count,
+            optimal_buy_count=optimal_buy_count,
             scan_time=scan_time,
             errors=errors,
         )
@@ -373,6 +382,8 @@ class BuyStrategyService:
         is_gc_active: bool,
         stoch_k: float,
         stoch_threshold: float,
+        stoch_d: float = 50.0,
+        ma_gap_ratio: float = 0.0,
     ) -> str:
         """
         골든크로스 상태 결정
@@ -381,16 +392,34 @@ class BuyStrategyService:
             is_gc_active: 골든크로스 활성 여부
             stoch_k: 현재 Stochastic K 값
             stoch_threshold: 과매도 임계값
+            stoch_d: 현재 Stochastic D 값
+            ma_gap_ratio: MA 갭 비율 (%)
 
         Returns:
             str: 상태 문자열
+            - OPTIMAL_BUY: 매수 적기 (K<25, K>D, MA갭 0~5%)
+            - READY_TO_BUY: 매수 준비 (K < threshold)
+            - WAITING_FOR_PULLBACK: 눌림목 대기 (K 30~50)
+            - GC_ACTIVE: GC 활성 (K >= 50)
+            - NOT_GC: GC 비활성
         """
         if not is_gc_active:
             return "NOT_GC"
 
         # 골든크로스 활성 상태에서 Stochastic 확인
         if stoch_k < stoch_threshold:
-            # Stochastic이 과매도 구간에 있으면 매수 준비
+            # 매수 적기: 더 까다로운 조건
+            # - Stoch K < 25 (깊은 과매도)
+            # - Stoch K > D (모멘텀 반등 시작)
+            # - MA 갭 비율 0~5% (안정적 상승 추세)
+            is_deep_oversold = stoch_k < 25
+            is_momentum_turning = stoch_k > stoch_d
+            is_healthy_trend = 0 <= ma_gap_ratio <= 5
+
+            if is_deep_oversold and is_momentum_turning and is_healthy_trend:
+                return "OPTIMAL_BUY"
+
+            # 일반 매수 준비
             return "READY_TO_BUY"
         elif stoch_k < 50:
             # 중간 구간이면 눌림목 대기

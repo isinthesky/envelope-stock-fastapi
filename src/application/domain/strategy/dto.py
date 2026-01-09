@@ -423,7 +423,7 @@ class GoldenCrossScanItemDTO(BaseDTO):
     # 이동평균 (실시간 스캔용: MA55/MA165)
     ma_short: Decimal = Field(description="단기 MA (55일)")
     ma_long: Decimal = Field(description="장기 MA (165일)")
-    ma_gap_ratio: float = Field(description="MA 갭 비율 ((MA55-MA165)/MA165)")
+    ma_gap_ratio: float = Field(description="MA 갭 비율 ((MA55-MA165)/MA165*100)")
 
     # Stochastic
     stoch_k: float = Field(description="Stochastic %K")
@@ -431,7 +431,7 @@ class GoldenCrossScanItemDTO(BaseDTO):
 
     # 상태
     is_gc_active: bool = Field(description="골든크로스 활성 여부 (MA55 > MA165)")
-    gc_state: str = Field(description="골든크로스 상태 (NOT_GC, WAITING_FOR_PULLBACK, READY_TO_BUY, GC_ACTIVE)")
+    gc_state: str = Field(description="골든크로스 상태 (NOT_GC, GC_ACTIVE, WAITING_FOR_PULLBACK, READY_TO_BUY, OPTIMAL_BUY)")
 
     # 추가 정보
     market_cap: Decimal | None = Field(default=None, description="시가총액")
@@ -446,6 +446,7 @@ class GoldenCrossScanListDTO(BaseDTO):
     gc_active_count: int = Field(description="골든크로스 활성 종목 수")
     pullback_waiting_count: int = Field(description="눌림목 대기 종목 수")
     ready_to_buy_count: int = Field(description="매수 준비 종목 수")
+    optimal_buy_count: int = Field(default=0, description="매수 적기 종목 수")
     scan_time: datetime = Field(description="스캔 시각")
     errors: list[str] = Field(default_factory=list, description="오류 메시지")
 

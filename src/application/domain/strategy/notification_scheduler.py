@@ -3,7 +3,7 @@
 Notification Scheduler - 전략 알림 스케줄러
 
 APScheduler 기반 스케줄링:
-- 15:00 (월~금): 골든크로스 스캔 후 "매수 준비" 종목 Telegram 알림
+- 15:00 (월~금): 골든크로스 스캔 후 "매수 준비/매수 적기" 종목 Telegram 알림
 - 09:10 (월~금): 분석 이력 갱신 후 "매도 권장/강력매도" 종목 Telegram 알림
 """
 
@@ -32,7 +32,7 @@ class NotificationScheduler:
     전략 알림 스케줄러
 
     APScheduler 기반으로 매수/매도 알림을 스케줄링합니다.
-    - 15:00 골든크로스 스캔 → READY_TO_BUY 종목 알림
+    - 15:00 골든크로스 스캔 → READY_TO_BUY/OPTIMAL_BUY 종목 알림
     - 09:10 매도 분석 갱신 → SELL/STRONG_SELL 종목 알림
     """
 
@@ -108,7 +108,7 @@ class NotificationScheduler:
         """
         매수 알림 Job (15:00)
 
-        골든크로스 스캔 후 READY_TO_BUY 상태 종목을 Telegram으로 알림
+        골든크로스 스캔 후 READY_TO_BUY/OPTIMAL_BUY 상태 종목을 Telegram으로 알림
         """
         async with self._execution_lock:
             logger.info("[NotificationScheduler] Running buy notification job...")
@@ -117,15 +117,16 @@ class NotificationScheduler:
                 async for session in get_async_session():
                     buy_service = BuyStrategyService(session)
 
-                    # 골든크로스 스캔 (READY_TO_BUY만 필터링)
+                    # 골든크로스 스캔 (READY_TO_BUY/OPTIMAL_BUY 필터링)
                     scan_result = await buy_service.scan_golden_cross_candidates(
                         market=None,
                         stoch_threshold=30.0,
                         gc_only=True,
                     )
 
-                    # READY_TO_BUY 종목 필터
-                    ready_stocks = [
+                    # READY_TO_BUY/OPTIMAL_BUY 종목 필터
+                    target_states = {"READY_TO_BUY", "OPTIMAL_BUY"}
+                    buy_targets = [
                         {
                             "symbol": s.symbol,
                             "name": s.name,
@@ -136,17 +137,20 @@ class NotificationScheduler:
                             "gc_state": s.gc_state,
                         }
                         for s in scan_result.stocks
-                        if s.gc_state == "READY_TO_BUY"
+                        if s.gc_state in target_states
                     ]
 
-                    if ready_stocks:
+                    state_order = {"OPTIMAL_BUY": 0, "READY_TO_BUY": 1}
+                    buy_targets.sort(key=lambda s: state_order.get(s.get("gc_state"), 99))
+
+                    if buy_targets:
                         notifier = get_telegram_notifier()
-                        await notifier.send_buy_signals_summary(ready_stocks)
+                        await notifier.send_buy_signals_summary(buy_targets)
                         logger.info(
-                            f"[NotificationScheduler] Sent buy notification for {len(ready_stocks)} stocks"
+                            f"[NotificationScheduler] Sent buy notification for {len(buy_targets)} stocks"
                         )
                     else:
-                        logger.info("[NotificationScheduler] No READY_TO_BUY stocks found")
+                        logger.info("[NotificationScheduler] No READY_TO_BUY/OPTIMAL_BUY stocks found")
 
                     break  # 세션 한 번만 사용
 

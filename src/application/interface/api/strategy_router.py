@@ -137,7 +137,8 @@ async def scan_golden_cross(
     골든크로스 전략 조건에 따라 종목을 필터링합니다.
 
     상태:
-    - READY_TO_BUY: 골든크로스 활성 + Stochastic 과매도 (매수 적기)
+    - OPTIMAL_BUY: K<25, K>D, MA갭 0~5% (매수 적기)
+    - READY_TO_BUY: 골든크로스 활성 + Stochastic 과매도 (매수 준비)
     - WAITING_FOR_PULLBACK: 골든크로스 활성 + Stochastic 중간 (눌림목 대기)
     - GC_ACTIVE: 골든크로스 활성 + Stochastic 과매수 (대기)
     - NOT_GC: 골든크로스 비활성 (MA55 < MA165)
