@@ -97,8 +97,8 @@ class BollingerStrategyConfigDTO(BaseStrategyConfig):
 class GoldenCrossMAConfig(BaseDTO):
     """골든크로스 이동평균 설정"""
 
-    short_period: int = Field(default=60, description="단기 MA 기간", ge=5, le=120)
-    long_period: int = Field(default=200, description="장기 MA 기간", ge=60, le=400)
+    short_period: int = Field(default=55, description="단기 MA 기간", ge=5, le=120)
+    long_period: int = Field(default=165, description="장기 MA 기간", ge=60, le=400)
 
 
 class StochasticConfig(BaseDTO):
@@ -420,17 +420,17 @@ class GoldenCrossScanItemDTO(BaseDTO):
     market: str = Field(description="시장 구분")
     current_price: Decimal = Field(description="현재가")
 
-    # 이동평균 (실시간 스캔용: MA40/MA160)
-    ma_short: Decimal = Field(description="단기 MA (40일)")
-    ma_long: Decimal = Field(description="장기 MA (160일)")
-    ma_gap_ratio: float = Field(description="MA 갭 비율 ((MA40-MA160)/MA160)")
+    # 이동평균 (실시간 스캔용: MA55/MA165)
+    ma_short: Decimal = Field(description="단기 MA (55일)")
+    ma_long: Decimal = Field(description="장기 MA (165일)")
+    ma_gap_ratio: float = Field(description="MA 갭 비율 ((MA55-MA165)/MA165)")
 
     # Stochastic
     stoch_k: float = Field(description="Stochastic %K")
     stoch_d: float = Field(description="Stochastic %D")
 
     # 상태
-    is_gc_active: bool = Field(description="골든크로스 활성 여부 (MA40 > MA160)")
+    is_gc_active: bool = Field(description="골든크로스 활성 여부 (MA55 > MA165)")
     gc_state: str = Field(description="골든크로스 상태 (NOT_GC, WAITING_FOR_PULLBACK, READY_TO_BUY, GC_ACTIVE)")
 
     # 추가 정보
@@ -488,10 +488,10 @@ class SellSignalAnalysisDTO(BaseDTO):
     analyzed_at: datetime = Field(description="분석 시각")
 
     # 이동평균 지표
-    ma_short: Decimal = Field(description="단기 MA (40일)")
-    ma_long: Decimal = Field(description="장기 MA (160일)")
+    ma_short: Decimal = Field(description="단기 MA (55일)")
+    ma_long: Decimal = Field(description="장기 MA (165일)")
     ma_gap_ratio: float = Field(description="MA 갭 비율 (%)")
-    is_death_cross: bool = Field(description="데드크로스 여부 (MA40 < MA160)")
+    is_death_cross: bool = Field(description="데드크로스 여부 (MA55 < MA165)")
 
     # Stochastic 지표
     stoch_k: float = Field(description="Stochastic %K")
@@ -537,8 +537,8 @@ class AnalysisHistoryDTO(BaseDTO):
     current_price: Decimal = Field(description="현재가")
 
     # 공통 지표
-    ma_short: Decimal | None = Field(default=None, description="단기 MA (40일)")
-    ma_long: Decimal | None = Field(default=None, description="장기 MA (160일)")
+    ma_short: Decimal | None = Field(default=None, description="단기 MA (55일)")
+    ma_long: Decimal | None = Field(default=None, description="장기 MA (165일)")
     ma_gap_ratio: float | None = Field(default=None, description="MA 갭 비율 (%)")
     stoch_k: float | None = Field(default=None, description="Stochastic K")
     stoch_d: float | None = Field(default=None, description="Stochastic D")

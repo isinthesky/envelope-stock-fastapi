@@ -61,15 +61,15 @@
 
 {% block content %}
 <h1>매수 전략 (골든크로스)</h1>
-<p>MA40/MA160 골든크로스 + Stochastic 눌림목 매수 전략</p>
+<p>MA55/MA165 골든크로스 + Stochastic 눌림목 매수 전략</p>
 
 <section class="strategy-info">
   <h2>전략 개요</h2>
-  <p><strong>골든크로스 눌림목 매매</strong>는 장기 이동평균선(200일)을 단기 이동평균선(60일)이 상향 돌파한 후,
+  <p><strong>골든크로스 눌림목 매매</strong>는 장기 이동평균선(165일)을 단기 이동평균선(55일)이 상향 돌파한 후,
   Stochastic 지표가 과매도 구간에서 회복할 때 매수하는 추세추종 전략입니다.</p>
 
   <div class="strategy-flow">
-    <span class="step">MA60 > MA200<br><small>골든크로스</small></span>
+    <span class="step">MA55 > MA165<br><small>골든크로스</small></span>
     <span class="arrow">-></span>
     <span class="step">Stoch K < 25<br><small>눌림목 대기</small></span>
     <span class="arrow">-></span>
@@ -81,11 +81,11 @@
   <div class="config-grid">
     <div class="config-item">
       <div class="label">단기 이평선</div>
-      <div class="value">60일</div>
+      <div class="value">55일</div>
     </div>
     <div class="config-item">
       <div class="label">장기 이평선</div>
-      <div class="value">200일</div>
+      <div class="value">165일</div>
     </div>
     <div class="config-item">
       <div class="label">Stoch 과매도</div>
@@ -173,8 +173,8 @@
           <th>종목명</th>
           <th>상태</th>
           <th>현재가</th>
-          <th>MA60</th>
-          <th>MA200</th>
+          <th>MA55</th>
+          <th>MA165</th>
           <th>MA Gap</th>
           <th>Stoch K</th>
           <th>Stoch D</th>
@@ -227,8 +227,8 @@
           <th>종목명</th>
           <th>상태</th>
           <th>현재가</th>
-          <th>MA60</th>
-          <th>MA200</th>
+          <th>MA55</th>
+          <th>MA165</th>
           <th>Stoch K</th>
           <th>수익률</th>
         </tr>
@@ -291,15 +291,15 @@
   <h2>골든크로스 전략 생성</h2>
   <textarea id="strategy_json">{
   "name": "golden-cross-pullback",
-  "description": "200/60일 골든크로스 눌림목 매매전략",
+  "description": "MA55/MA165 골든크로스 눌림목 매매전략",
   "strategy_type": "golden_cross",
   "account_no": "",
   "symbols": ["005930", "000660", "035720"],
   "config": {
     "strategy_type": "golden_cross",
     "ma_config": {
-      "short_period": 60,
-      "long_period": 200
+      "short_period": 55,
+      "long_period": 165
     },
     "stochastic_config": {
       "k_period": 14,

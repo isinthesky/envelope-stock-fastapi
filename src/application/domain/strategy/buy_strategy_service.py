@@ -63,9 +63,9 @@ class BuyStrategyService:
         기본 스크리닝 통과 종목에 대해 기술적 지표를 계산하여
         골든크로스 전략 조건에 부합하는 종목을 필터링합니다.
 
-        - 2번의 API 호출로 약 160~170개 캔들 수집
+        - 2번의 API 호출로 약 165~175개 캔들 수집
         - DB 캐싱을 통해 반복 호출 최소화
-        - MA40/MA160 지표 사용
+        - MA55/MA165 지표 사용
 
         Args:
             market: 시장 필터 (KOSPI/KOSDAQ/ETF)
@@ -102,7 +102,7 @@ class BuyStrategyService:
                 errors=["No eligible stocks found in universe"],
             )
 
-        logger.info(f"[GC Scan] Scanning {len(stocks)} eligible stocks with MA40/MA160")
+        logger.info(f"[GC Scan] Scanning {len(stocks)} eligible stocks with MA55/MA165")
 
         # 2. 종목별 기술적 지표 계산
         data_loader = self._get_data_loader()
@@ -114,14 +114,14 @@ class BuyStrategyService:
                     symbol=stock.symbol,
                     days=240,
                     interval="1d",
-                    min_candles=160,
+                    min_candles=165,
                 )
 
-                # 지표 계산 (MA40/MA160)
+                # 지표 계산 (MA55/MA165)
                 df = TechnicalIndicators.prepare_golden_cross_indicators(
                     df,
-                    short_ma_period=40,
-                    long_ma_period=160,
+                    short_ma_period=55,
+                    long_ma_period=165,
                     stoch_k_period=14,
                     stoch_d_period=3,
                 )
@@ -240,7 +240,7 @@ class BuyStrategyService:
                 errors=["No symbols provided"],
             )
 
-        logger.info(f"[GC Scan] Scanning {len(symbols)} symbols with MA40/MA160")
+        logger.info(f"[GC Scan] Scanning {len(symbols)} symbols with MA55/MA165")
 
         data_loader = self._get_data_loader()
 
@@ -278,14 +278,14 @@ class BuyStrategyService:
                     symbol=symbol,
                     days=240,
                     interval="1d",
-                    min_candles=160,
+                    min_candles=165,
                 )
 
-                # 지표 계산 (MA40/MA160)
+                # 지표 계산 (MA55/MA165)
                 df = TechnicalIndicators.prepare_golden_cross_indicators(
                     df,
-                    short_ma_period=40,
-                    long_ma_period=160,
+                    short_ma_period=55,
+                    long_ma_period=165,
                     stoch_k_period=14,
                     stoch_d_period=3,
                 )

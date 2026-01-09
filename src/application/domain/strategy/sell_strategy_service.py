@@ -52,7 +52,7 @@ class SellStrategyService:
         매도 시그널 분석
 
         종목의 기술적 지표를 분석하여 매도 시그널을 판단합니다.
-        - MA40/MA160 데드크로스 확인
+        - MA55/MA165 데드크로스 확인
         - Stochastic 과매수 확인
         - RSI 과매수 확인
 
@@ -74,18 +74,18 @@ class SellStrategyService:
                 symbol=symbol,
                 days=240,
                 interval="1d",
-                min_candles=160,
+                min_candles=165,
             )
         except ValueError as e:
             raise StrategyError(str(e))
 
         candle_count = len(df)
 
-        # 2. 기술적 지표 계산 (MA40/MA160 + Stochastic)
+        # 2. 기술적 지표 계산 (MA55/MA165 + Stochastic)
         df = TechnicalIndicators.prepare_golden_cross_indicators(
             df,
-            short_ma_period=40,
-            long_ma_period=160,
+            short_ma_period=55,
+            long_ma_period=165,
             stoch_k_period=14,
             stoch_d_period=3,
         )
@@ -182,7 +182,7 @@ class SellStrategyService:
 
         # 데드크로스 (강력 매도 시그널)
         if is_death_cross:
-            sell_reasons.append(f"데드크로스 발생 (MA40 {ma_short:,.0f} < MA160 {ma_long:,.0f})")
+            sell_reasons.append(f"데드크로스 발생 (MA55 {ma_short:,.0f} < MA165 {ma_long:,.0f})")
             sell_score += 2
 
         # Stochastic 과매수

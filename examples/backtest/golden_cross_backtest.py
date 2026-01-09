@@ -6,8 +6,8 @@ analysis_history 테이블의 종목들에 대해 2년치 일봉 데이터로
 골든크로스 매수/매도 전략을 백테스팅합니다.
 
 전략 규칙:
-- 매수: MA40이 MA160을 상향 돌파 (골든크로스) + Stochastic K < 30 (과매도)
-- 매도: MA40이 MA160을 하향 돌파 (데드크로스) 또는 손절/익절
+- 매수: MA55가 MA165를 상향 돌파 (골든크로스) + Stochastic K < 30 (과매도)
+- 매도: MA55가 MA165를 하향 돌파 (데드크로스) 또는 손절/익절
 """
 
 import asyncio
@@ -29,8 +29,8 @@ from src.application.domain.market_data.service import MarketDataService
 @dataclass
 class GoldenCrossConfig:
     """골든크로스 전략 설정"""
-    short_ma_period: int = 40  # 단기 이동평균 기간
-    long_ma_period: int = 160  # 장기 이동평균 기간
+    short_ma_period: int = 55  # 단기 이동평균 기간
+    long_ma_period: int = 165  # 장기 이동평균 기간
     stoch_k_period: int = 14   # Stochastic K 기간
     stoch_d_period: int = 3    # Stochastic D 기간
     stoch_oversold: float = 30.0   # 과매도 임계값
@@ -499,11 +499,11 @@ def generate_report(results: list[BacktestResult], report_path: str) -> str:
     lines.append("## 1. 요약")
     lines.append("")
     lines.append("### 백테스트 설정")
-    lines.append("- **전략**: 골든크로스 (MA40/MA160)")
+    lines.append("- **전략**: 골든크로스 (MA55/MA165)")
     lines.append("- **기간**: 최근 2년")
     lines.append("- **초기 자본**: 10,000,000원")
-    lines.append("- **매수 조건**: MA40 > MA160 (골든크로스 활성) + Stochastic K < 30 (과매도)")
-    lines.append("- **매도 조건**: MA40 < MA160 (데드크로스) 또는 손절(-7%)/익절(+15%)")
+    lines.append("- **매수 조건**: MA55 > MA165 (골든크로스 활성) + Stochastic K < 30 (과매도)")
+    lines.append("- **매도 조건**: MA55 < MA165 (데드크로스) 또는 손절(-7%)/익절(+15%)")
     lines.append("")
 
     valid_results = [r for r in results if r.error is None]

@@ -75,7 +75,7 @@
 <section class="strategy-info">
   <h2>매도 시그널 분석 전략</h2>
   <p>
-    MA40/MA160 데드크로스, Stochastic 과매수, RSI 과매수 신호를 종합하여
+    MA55/MA165 데드크로스, Stochastic 과매수, RSI 과매수 신호를 종합하여
     최적의 매도 시점을 추천합니다.
   </p>
   <div class="strategy-flow">
@@ -388,7 +388,7 @@ const displayResult = (data) => {
           <div class="value">${formatNumber(data.current_price)}</div>
         </div>
         <div class="indicator-card">
-          <div class="label">MA40 / MA160</div>
+          <div class="label">MA55 / MA165</div>
           <div class="value">${formatNumber(data.ma_short)} / ${formatNumber(data.ma_long)}</div>
           <span class="status ${maStatus}">${data.is_death_cross ? '데드크로스' : '골든크로스'}</span>
         </div>

@@ -51,7 +51,7 @@ class OHLCVDataLoader:
         symbol: str,
         days: int = 240,
         interval: str = "1d",
-        min_candles: int = 160,
+        min_candles: int = 165,
         cache_freshness_days: int = 3,
     ) -> pd.DataFrame:
         """
@@ -63,7 +63,7 @@ class OHLCVDataLoader:
             symbol: 종목코드
             days: 조회 기간 (일), 기본 240일
             interval: 캔들 간격, 기본 "1d"
-            min_candles: 최소 필요 캔들 수, 기본 160
+            min_candles: 최소 필요 캔들 수, 기본 165
             cache_freshness_days: 캐시 유효 기간 (일), 기본 3일
 
         Returns:

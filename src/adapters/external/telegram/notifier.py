@@ -141,7 +141,7 @@ class TelegramNotifier:
 
 <b>종목:</b> {name} ({symbol})
 <b>현재가:</b> {current_price:,.0f}원
-<b>MA40:</b> {ma_short:,.0f} | <b>MA160:</b> {ma_long:,.0f}
+<b>MA55:</b> {ma_short:,.0f} | <b>MA165:</b> {ma_long:,.0f}
 <b>Stochastic K:</b> {stoch_k:.1f}
 
 <b>상태:</b> {gc_state}"""

@@ -51,7 +51,7 @@ domain/
 
 ### strategy/
 - `strategy_service.py`: 전략 CRUD/유니버스/상태 관리
-- `buy_strategy_service.py`: 골든크로스 매수 후보 스캔(MA40/MA160)
+- `buy_strategy_service.py`: 골든크로스 매수 후보 스캔(MA55/MA160)
 - `sell_strategy_service.py`: 매도 시그널 분석(MA/Stochastic/RSI)
 - `ohlcv_data_loader.py`: DB 캐시 + KIS API OHLCV 로딩
 - `scheduler.py`: 전략 실행 스케줄러

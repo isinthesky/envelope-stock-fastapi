@@ -481,16 +481,16 @@ class TechnicalIndicators:
     @staticmethod
     def calculate_ma_series(
         df: pd.DataFrame,
-        short_period: int = 60,
-        long_period: int = 200,
+        short_period: int = 55,
+        long_period: int = 165,
     ) -> tuple[pd.Series, pd.Series]:
         """
         이동평균 시리즈 계산
 
         Args:
             df: OHLCV 데이터프레임 (close 컬럼 필요)
-            short_period: 단기 MA 기간 (기본: 60)
-            long_period: 장기 MA 기간 (기본: 200)
+            short_period: 단기 MA 기간 (기본: 55)
+            long_period: 장기 MA 기간 (기본: 165)
 
         Returns:
             tuple[pd.Series, pd.Series]: (short_ma, long_ma)
@@ -503,8 +503,8 @@ class TechnicalIndicators:
     @staticmethod
     def prepare_golden_cross_indicators(
         df: pd.DataFrame,
-        short_ma_period: int = 60,
-        long_ma_period: int = 200,
+        short_ma_period: int = 55,
+        long_ma_period: int = 165,
         stoch_k_period: int = 14,
         stoch_d_period: int = 3,
     ) -> pd.DataFrame:
@@ -513,8 +513,8 @@ class TechnicalIndicators:
 
         Args:
             df: OHLCV 데이터프레임 (timestamp, open, high, low, close, volume)
-            short_ma_period: 단기 MA 기간 (기본: 60)
-            long_ma_period: 장기 MA 기간 (기본: 200)
+            short_ma_period: 단기 MA 기간 (기본: 55)
+            long_ma_period: 장기 MA 기간 (기본: 165)
             stoch_k_period: Stochastic %K 기간 (기본: 14)
             stoch_d_period: Stochastic %D 기간 (기본: 3)
 

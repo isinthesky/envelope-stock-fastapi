@@ -133,14 +133,14 @@ async def scan_golden_cross(
     """
     골든크로스 종목 스캔
 
-    스크리닝 통과 종목에 대해 MA40, MA160, Stochastic K/D 지표를 계산하고
+    스크리닝 통과 종목에 대해 MA55, MA165, Stochastic K/D 지표를 계산하고
     골든크로스 전략 조건에 따라 종목을 필터링합니다.
 
     상태:
     - READY_TO_BUY: 골든크로스 활성 + Stochastic 과매도 (매수 적기)
     - WAITING_FOR_PULLBACK: 골든크로스 활성 + Stochastic 중간 (눌림목 대기)
     - GC_ACTIVE: 골든크로스 활성 + Stochastic 과매수 (대기)
-    - NOT_GC: 골든크로스 비활성 (MA40 < MA160)
+    - NOT_GC: 골든크로스 비활성 (MA55 < MA165)
 
     ETF 종목은 시가총액/거래량 조건이 완화되어 적용됩니다.
     """
@@ -211,7 +211,7 @@ async def analyze_sell_signal(
     종목의 기술적 지표를 분석하여 매도 추천을 제공합니다.
 
     분석 지표:
-    - MA40/MA160: 데드크로스 여부 (MA40 < MA160)
+    - MA55/MA165: 데드크로스 여부 (MA55 < MA165)
     - Stochastic: 과매수 여부 (K > 70)
     - RSI: 과매수 여부 (RSI > 70)
 
