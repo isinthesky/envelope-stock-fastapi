@@ -274,6 +274,7 @@ from src.application.interface.api.backtest_router import router as backtest_rou
 from src.application.interface.api.market_data_router import router as market_data_router
 from src.application.interface.api.ohlcv_router import router as ohlcv_router
 from src.application.interface.api.order_router import router as order_router
+from src.application.interface.api.screener_router import router as screener_router
 from src.application.interface.api.strategy_router import router as strategy_router
 from src.application.interface.api.websocket_router import router as websocket_router
 from src.application.interface.page import page_routers
@@ -284,7 +285,8 @@ app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
 app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
 app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
 app.include_router(ohlcv_router, prefix="/api/v1/ohlcv", tags=["OHLCV Cache"])
-app.include_router(backtest_router)
+app.include_router(screener_router)  # 내부 prefix: /api/v1/screener
+app.include_router(backtest_router)  # 내부 prefix: /api/v1/backtest
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 
 # Page routers (각 라우터는 자체 prefix 포함)

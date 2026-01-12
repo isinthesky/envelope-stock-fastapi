@@ -8,6 +8,7 @@
 
 <div class="tabs">
   <button class="tab-button active" data-target="tab-basic">기본 조회</button>
+  <button class="tab-button" data-target="tab-screener">가치주 스크리너</button>
   <button class="tab-button" data-target="tab-advanced">고급 필터</button>
 </div>
 
@@ -26,6 +27,82 @@
       <button onclick="getChart()">차트</button>
     </div>
     <pre id="market_output">결과 출력</pre>
+  </section>
+</div>
+
+<div id="tab-screener" class="tab-panel">
+  <section>
+    <h2>가치주 스크리너</h2>
+    <p>네이버 금융 데이터를 기반으로 가치주 조건에 맞는 종목을 실시간 스크리닝합니다.</p>
+    <div class="note-box">
+      <strong>스크리닝 조건</strong>
+      <ul>
+        <li><strong>시가총액</strong>: 대기업이 아닌 중소형주 (1조원 미만)</li>
+        <li><strong>유보율</strong>: 이익잉여금이 많이 축적된 기업</li>
+        <li><strong>당좌비율</strong>: 현금성 자산이 풍부한 기업</li>
+        <li><strong>부채비율</strong>: 재무 건전성이 높은 기업</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>스크리닝 조건 설정</h2>
+    <div class="row">
+      <label>프리셋</label>
+      <select id="screener_preset" onchange="applyPreset()">
+        <option value="">직접 설정</option>
+        <option value="small_cap_value">소형 가치주</option>
+        <option value="cash_rich">현금 부자</option>
+        <option value="low_debt_value">저부채 가치주</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>시가총액 상한</label>
+      <select id="screener_max_market_cap">
+        <option value="1000000000000">1조원 미만</option>
+        <option value="500000000000">5000억 미만</option>
+        <option value="300000000000">3000억 미만</option>
+        <option value="100000000000">1000억 미만</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>유보율 (% 이상)</label>
+      <input id="screener_min_retention" type="number" value="500" min="0" step="100" />
+      <label>당좌비율 (% 이상)</label>
+      <input id="screener_min_quick" type="number" value="100" min="0" step="10" />
+    </div>
+    <div class="row">
+      <label>부채비율 (% 이하)</label>
+      <input id="screener_max_debt" type="number" value="" min="0" step="10" placeholder="제한 없음" />
+    </div>
+    <div class="row">
+      <button onclick="runScreener()" id="screener_run_btn">스크리닝 실행</button>
+      <button class="secondary" onclick="resetScreenerFilters()">조건 초기화</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>스크리닝 결과</h2>
+    <div class="result-meta" id="screener_result_meta">스크리닝을 실행하세요.</div>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>종목명</th>
+            <th>시가총액</th>
+            <th>유보율(%)</th>
+            <th>당좌비율(%)</th>
+            <th>부채비율(%)</th>
+            <th>ROE(%)</th>
+            <th>PBR</th>
+          </tr>
+        </thead>
+        <tbody id="screener_results">
+          <tr><td colspan="8">스크리닝 조건을 설정하고 실행 버튼을 클릭하세요.</td></tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 </div>
 
@@ -152,6 +229,114 @@ const getChart = () => {
   const interval = document.getElementById("market_interval").value;
   getJson(`/api/v1/market/chart/${symbol}?interval=${interval}`, "market_output");
 };
+
+// 가치주 스크리너 기능
+let screenerPresets = {};
+
+const loadPresets = async () => {
+  try {
+    const res = await fetch("/api/v1/screener/presets");
+    const data = await res.json();
+    if (data.success) {
+      screenerPresets = data.data;
+    }
+  } catch (e) {
+    console.error("프리셋 로드 실패:", e);
+  }
+};
+
+const applyPreset = () => {
+  const presetKey = document.getElementById("screener_preset").value;
+  if (!presetKey || !screenerPresets[presetKey]) {
+    return;
+  }
+  const criteria = screenerPresets[presetKey].criteria;
+  document.getElementById("screener_max_market_cap").value = criteria.max_market_cap;
+  document.getElementById("screener_min_retention").value = criteria.min_retention_ratio;
+  document.getElementById("screener_min_quick").value = criteria.min_quick_ratio;
+  document.getElementById("screener_max_debt").value = criteria.max_debt_ratio ?? "";
+};
+
+const runScreener = async () => {
+  const btn = document.getElementById("screener_run_btn");
+  const tbody = document.getElementById("screener_results");
+  const meta = document.getElementById("screener_result_meta");
+
+  btn.disabled = true;
+  btn.textContent = "스크리닝 중...";
+  meta.textContent = "스크리닝 실행 중... (네이버 API 호출 중)";
+  tbody.innerHTML = '<tr><td colspan="8">데이터를 조회 중입니다...</td></tr>';
+
+  const criteria = {
+    max_market_cap: parseInt(document.getElementById("screener_max_market_cap").value),
+    min_retention_ratio: parseFloat(document.getElementById("screener_min_retention").value) || 0,
+    min_quick_ratio: parseFloat(document.getElementById("screener_min_quick").value) || 0,
+    max_debt_ratio: parseFloat(document.getElementById("screener_max_debt").value) || null,
+  };
+
+  try {
+    const res = await fetch("/api/v1/screener/value-stocks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ criteria, symbols: null }),
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      const result = data.data;
+      meta.textContent = `스크리닝 완료: ${result.filtered_count}/${result.total_count}개 종목 통과`;
+      renderScreenerResults(result.items);
+    } else {
+      meta.textContent = `오류: ${data.message}`;
+      tbody.innerHTML = '<tr><td colspan="8">스크리닝 중 오류가 발생했습니다.</td></tr>';
+    }
+  } catch (e) {
+    meta.textContent = `오류: ${e.message}`;
+    tbody.innerHTML = '<tr><td colspan="8">네트워크 오류가 발생했습니다.</td></tr>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "스크리닝 실행";
+  }
+};
+
+const renderScreenerResults = (items) => {
+  const tbody = document.getElementById("screener_results");
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="8">조건에 맞는 종목이 없습니다.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = items.map((item) => {
+    const retention = item.retention_ratio != null ? item.retention_ratio.toLocaleString(undefined, {maximumFractionDigits: 1}) : "-";
+    const quick = item.quick_ratio != null ? item.quick_ratio.toLocaleString(undefined, {maximumFractionDigits: 1}) : "-";
+    const debt = item.debt_ratio != null ? item.debt_ratio.toLocaleString(undefined, {maximumFractionDigits: 1}) : "-";
+    const roe = item.roe != null ? item.roe.toLocaleString(undefined, {maximumFractionDigits: 2}) : "-";
+    const pbr = item.pbr != null ? item.pbr.toLocaleString(undefined, {maximumFractionDigits: 2}) : "-";
+    return `
+      <tr>
+        <td>${item.symbol}</td>
+        <td>${item.name}</td>
+        <td>${item.market_cap_display}</td>
+        <td>${retention}</td>
+        <td>${quick}</td>
+        <td>${debt}</td>
+        <td>${roe}</td>
+        <td>${pbr}</td>
+      </tr>
+    `;
+  }).join("");
+};
+
+const resetScreenerFilters = () => {
+  document.getElementById("screener_preset").value = "";
+  document.getElementById("screener_max_market_cap").value = "1000000000000";
+  document.getElementById("screener_min_retention").value = "500";
+  document.getElementById("screener_min_quick").value = "100";
+  document.getElementById("screener_max_debt").value = "";
+};
+
+// 페이지 로드 시 프리셋 로드
+loadPresets();
 
 const tabButtons = document.querySelectorAll(".tab-button");
 const tabPanels = document.querySelectorAll(".tab-panel");
