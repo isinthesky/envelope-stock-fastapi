@@ -143,14 +143,18 @@ class NotificationScheduler:
                     state_order = {"OPTIMAL_BUY": 0, "READY_TO_BUY": 1}
                     buy_targets.sort(key=lambda s: state_order.get(s.get("gc_state"), 99))
 
+                    notifier = get_telegram_notifier()
                     if buy_targets:
-                        notifier = get_telegram_notifier()
                         await notifier.send_buy_signals_summary(buy_targets)
                         logger.info(
                             f"[NotificationScheduler] Sent buy notification for {len(buy_targets)} stocks"
                         )
                     else:
-                        logger.info("[NotificationScheduler] No READY_TO_BUY/OPTIMAL_BUY stocks found")
+                        # 결과가 없어도 알림 전송 (시스템 정상 동작 확인용)
+                        await notifier.send_no_buy_signals_alert(
+                            total_scanned=scan_result.total_scanned
+                        )
+                        logger.info("[NotificationScheduler] No READY_TO_BUY/OPTIMAL_BUY stocks found, sent empty alert")
 
                     break  # 세션 한 번만 사용
 

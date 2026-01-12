@@ -192,6 +192,27 @@ class TelegramNotifier:
         message = "\n".join(lines)
         return await self.send_message(message)
 
+    async def send_no_buy_signals_alert(self, total_scanned: int = 0) -> bool:
+        """
+        매수 권장 종목 없음 알림 전송
+
+        Args:
+            total_scanned: 스캔한 총 종목 수
+        """
+        now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+
+        message = f"""⚪ <b>매수 신호 종목 알림</b>
+
+📅 {now}
+
+오늘은 매수 권장 종목이 없습니다.
+(총 {total_scanned}개 종목 스캔)
+
+골든크로스 활성 + Stochastic 과매도 조건을
+충족하는 종목이 없습니다."""
+
+        return await self.send_message(message)
+
     # ==================== 매도 알림 포맷 ====================
 
     async def send_sell_signal_alert(
