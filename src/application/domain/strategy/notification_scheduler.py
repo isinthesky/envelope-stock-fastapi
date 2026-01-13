@@ -108,7 +108,7 @@ class NotificationScheduler:
         """
         매수 알림 Job (15:00)
 
-        골든크로스 스캔 후 READY_TO_BUY/OPTIMAL_BUY 상태 종목을 Telegram으로 알림
+        골든크로스 스캔 후 BUY_INTEREST/READY_TO_BUY/OPTIMAL_BUY 상태 종목을 Telegram으로 알림
         """
         async with self._execution_lock:
             logger.info("[NotificationScheduler] Running buy notification job...")
@@ -117,15 +117,15 @@ class NotificationScheduler:
                 async for session in get_async_session():
                     buy_service = BuyStrategyService(session)
 
-                    # 골든크로스 스캔 (READY_TO_BUY/OPTIMAL_BUY 필터링)
+                    # 골든크로스 스캔 (매수 관심/준비/적기 필터링)
                     scan_result = await buy_service.scan_golden_cross_candidates(
                         market=None,
                         stoch_threshold=30.0,
                         gc_only=True,
                     )
 
-                    # READY_TO_BUY/OPTIMAL_BUY 종목 필터
-                    target_states = {"READY_TO_BUY", "OPTIMAL_BUY"}
+                    # BUY_INTEREST/READY_TO_BUY/OPTIMAL_BUY 종목 필터
+                    target_states = {"BUY_INTEREST", "READY_TO_BUY", "OPTIMAL_BUY"}
                     buy_targets = [
                         {
                             "symbol": s.symbol,
@@ -140,7 +140,7 @@ class NotificationScheduler:
                         if s.gc_state in target_states
                     ]
 
-                    state_order = {"OPTIMAL_BUY": 0, "READY_TO_BUY": 1}
+                    state_order = {"OPTIMAL_BUY": 0, "BUY_INTEREST": 1, "READY_TO_BUY": 2}
                     buy_targets.sort(key=lambda s: state_order.get(s.get("gc_state"), 99))
 
                     notifier = get_telegram_notifier()
@@ -154,7 +154,7 @@ class NotificationScheduler:
                         await notifier.send_no_buy_signals_alert(
                             total_scanned=scan_result.total_scanned
                         )
-                        logger.info("[NotificationScheduler] No READY_TO_BUY/OPTIMAL_BUY stocks found, sent empty alert")
+                        logger.info("[NotificationScheduler] No buy target stocks found, sent empty alert")
 
                     break  # 세션 한 번만 사용
 

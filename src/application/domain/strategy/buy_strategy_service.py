@@ -109,12 +109,12 @@ class BuyStrategyService:
 
         for stock in stocks:
             try:
-                # OHLCV 데이터 로딩
+                # OHLCV 데이터 로딩 (MA165 계산을 위해 300일 조회, 약 200 거래일)
                 df = await data_loader.load_ohlcv_dataframe(
                     symbol=stock.symbol,
-                    days=240,
+                    days=400,
                     interval="1d",
-                    min_candles=165,
+                    min_candles=160,
                 )
 
                 # 지표 계산 (MA55/MA165)
@@ -176,26 +176,36 @@ class BuyStrategyService:
                 await asyncio.sleep(0.05)
 
             except ValueError as e:
-                # 데이터 부족 등의 예상된 오류
-                logger.debug(f"[GC Scan] {stock.symbol}: {e}")
+                # 데이터 부족 등의 예상된 오류 - 에러 리스트에 추가하여 디버깅
+                error_msg = f"{stock.symbol}: {str(e)}"
+                errors.append(error_msg)
+                logger.warning(f"[GC Scan] {error_msg}")
             except Exception as e:
                 error_msg = f"{stock.symbol}: {str(e)}"
                 logger.warning(f"[GC Scan] Error processing {error_msg}")
                 errors.append(error_msg)
 
-        # 3. 결과 정렬 (OPTIMAL_BUY > READY_TO_BUY > WAITING_FOR_PULLBACK > 기타)
-        state_order = {"OPTIMAL_BUY": 0, "READY_TO_BUY": 1, "WAITING_FOR_PULLBACK": 2, "GC_ACTIVE": 3, "NOT_GC": 4}
+        # 3. 결과 정렬 (OPTIMAL_BUY > BUY_INTEREST > READY_TO_BUY > WAITING_FOR_PULLBACK > 기타)
+        state_order = {
+            "OPTIMAL_BUY": 0,
+            "BUY_INTEREST": 1,
+            "READY_TO_BUY": 2,
+            "WAITING_FOR_PULLBACK": 3,
+            "GC_ACTIVE": 4,
+            "NOT_GC": 5,
+        }
         results.sort(key=lambda x: (state_order.get(x.gc_state, 99), -float(x.screening_score or 0)))
 
         # 4. 통계 계산
         gc_active_count = sum(1 for r in results if r.is_gc_active)
         pullback_waiting_count = sum(1 for r in results if r.gc_state == "WAITING_FOR_PULLBACK")
+        buy_interest_count = sum(1 for r in results if r.gc_state == "BUY_INTEREST")
         ready_to_buy_count = sum(1 for r in results if r.gc_state == "READY_TO_BUY")
         optimal_buy_count = sum(1 for r in results if r.gc_state == "OPTIMAL_BUY")
 
         logger.info(
             f"[GC Scan] Complete: {len(results)} results, "
-            f"GC Active: {gc_active_count}, Pullback: {pullback_waiting_count}, "
+            f"GC Active: {gc_active_count}, Interest: {buy_interest_count}, "
             f"Ready: {ready_to_buy_count}, Optimal: {optimal_buy_count}, Errors: {len(errors)}"
         )
 
@@ -204,6 +214,7 @@ class BuyStrategyService:
             total_scanned=len(stocks),
             gc_active_count=gc_active_count,
             pullback_waiting_count=pullback_waiting_count,
+            buy_interest_count=buy_interest_count,
             ready_to_buy_count=ready_to_buy_count,
             optimal_buy_count=optimal_buy_count,
             scan_time=scan_time,
@@ -277,12 +288,12 @@ class BuyStrategyService:
             name = name or symbol
 
             try:
-                # OHLCV 데이터 로딩
+                # OHLCV 데이터 로딩 (MA165 계산을 위해 300일 조회, 약 200 거래일)
                 df = await data_loader.load_ohlcv_dataframe(
                     symbol=symbol,
-                    days=240,
+                    days=400,
                     interval="1d",
-                    min_candles=165,
+                    min_candles=160,
                 )
 
                 # 지표 계산 (MA55/MA165)
@@ -350,20 +361,28 @@ class BuyStrategyService:
                 logger.warning(f"[GC Scan] Error processing {error_msg}")
                 errors.append(error_msg)
 
-        # 결과 정렬
-        state_order = {"OPTIMAL_BUY": 0, "READY_TO_BUY": 1, "WAITING_FOR_PULLBACK": 2, "GC_ACTIVE": 3, "NOT_GC": 4}
+        # 결과 정렬 (BUY_INTEREST 추가)
+        state_order = {
+            "OPTIMAL_BUY": 0,
+            "BUY_INTEREST": 1,
+            "READY_TO_BUY": 2,
+            "WAITING_FOR_PULLBACK": 3,
+            "GC_ACTIVE": 4,
+            "NOT_GC": 5,
+        }
         results.sort(key=lambda x: state_order.get(x.gc_state, 99))
 
         # 통계 계산
         gc_active_count = sum(1 for r in results if r.is_gc_active)
         pullback_waiting_count = sum(1 for r in results if r.gc_state == "WAITING_FOR_PULLBACK")
+        buy_interest_count = sum(1 for r in results if r.gc_state == "BUY_INTEREST")
         ready_to_buy_count = sum(1 for r in results if r.gc_state == "READY_TO_BUY")
         optimal_buy_count = sum(1 for r in results if r.gc_state == "OPTIMAL_BUY")
 
         logger.info(
             f"[GC Scan] Complete: {len(results)} results, "
-            f"GC Active: {gc_active_count}, Ready: {ready_to_buy_count}, "
-            f"Optimal: {optimal_buy_count}, Errors: {len(errors)}"
+            f"GC Active: {gc_active_count}, Interest: {buy_interest_count}, "
+            f"Ready: {ready_to_buy_count}, Optimal: {optimal_buy_count}, Errors: {len(errors)}"
         )
 
         return GoldenCrossScanListDTO(
@@ -371,6 +390,7 @@ class BuyStrategyService:
             total_scanned=len(symbols),
             gc_active_count=gc_active_count,
             pullback_waiting_count=pullback_waiting_count,
+            buy_interest_count=buy_interest_count,
             ready_to_buy_count=ready_to_buy_count,
             optimal_buy_count=optimal_buy_count,
             scan_time=scan_time,
@@ -384,6 +404,11 @@ class BuyStrategyService:
         stoch_threshold: float,
         stoch_d: float = 50.0,
         ma_gap_ratio: float = 0.0,
+        # 신규 파라미터 (기본값으로 하위 호환성 유지)
+        deep_oversold_threshold: float = 30.0,
+        require_momentum_turn: bool = False,
+        min_ma_gap: float = 0.0,
+        max_ma_gap: float = 8.0,
     ) -> str:
         """
         골든크로스 상태 결정
@@ -394,10 +419,15 @@ class BuyStrategyService:
             stoch_threshold: 과매도 임계값
             stoch_d: 현재 Stochastic D 값
             ma_gap_ratio: MA 갭 비율 (%)
+            deep_oversold_threshold: 깊은 과매도 기준 (기본 30, 기존 25에서 완화)
+            require_momentum_turn: K>D 조건 필수 여부 (기본 False)
+            min_ma_gap: 최소 MA 갭 비율 (기본 0%)
+            max_ma_gap: 최대 MA 갭 비율 (기본 8%, 기존 5에서 완화)
 
         Returns:
             str: 상태 문자열
-            - OPTIMAL_BUY: 매수 적기 (K<25, K>D, MA갭 0~5%)
+            - OPTIMAL_BUY: 매수 적기 (모든 조건 충족)
+            - BUY_INTEREST: 매수 관심 (2개 조건 충족)
             - READY_TO_BUY: 매수 준비 (K < threshold)
             - WAITING_FOR_PULLBACK: 눌림목 대기 (K 30~50)
             - GC_ACTIVE: GC 활성 (K >= 50)
@@ -408,16 +438,21 @@ class BuyStrategyService:
 
         # 골든크로스 활성 상태에서 Stochastic 확인
         if stoch_k < stoch_threshold:
-            # 매수 적기: 더 까다로운 조건
-            # - Stoch K < 25 (깊은 과매도)
-            # - Stoch K > D (모멘텀 반등 시작)
-            # - MA 갭 비율 0~5% (안정적 상승 추세)
-            is_deep_oversold = stoch_k < 25
-            is_momentum_turning = stoch_k > stoch_d
-            is_healthy_trend = 0 <= ma_gap_ratio <= 5
+            # OPTIMAL_BUY 조건 (보수적 완화 적용)
+            is_deep_oversold = stoch_k < deep_oversold_threshold
+            is_momentum_turning = (stoch_k > stoch_d) if require_momentum_turn else True
+            is_healthy_trend = min_ma_gap <= ma_gap_ratio <= max_ma_gap
 
-            if is_deep_oversold and is_momentum_turning and is_healthy_trend:
+            conditions = [is_deep_oversold, is_momentum_turning, is_healthy_trend]
+            conditions_met = sum(conditions)
+
+            # 모든 조건 충족: 매수 적기
+            if all(conditions):
                 return "OPTIMAL_BUY"
+
+            # 2개 이상 조건 충족: 매수 관심
+            if conditions_met >= 2:
+                return "BUY_INTEREST"
 
             # 일반 매수 준비
             return "READY_TO_BUY"

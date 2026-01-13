@@ -6,7 +6,7 @@ DB 캐시 우선 조회 후, 없으면 KIS API로 데이터 수집
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,7 +72,8 @@ class OHLCVDataLoader:
         Raises:
             ValueError: 데이터가 부족한 경우
         """
-        end_date = datetime.now()
+        # DB 타임스탬프가 timezone-aware이므로 UTC 사용
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
 
         df = await self._try_load_from_cache(
@@ -138,6 +139,9 @@ class OHLCVDataLoader:
 
             # 충분한 데이터가 있고, 최신 데이터가 신선한 경우
             if count >= min_candles and latest:
+                # latest가 timezone-naive인 경우 UTC로 변환
+                if latest.tzinfo is None:
+                    latest = latest.replace(tzinfo=timezone.utc)
                 if (end_date - latest) <= timedelta(days=cache_freshness_days):
                     cached_df = await ohlcv_repo.get_candles_to_dataframe(
                         symbol=symbol,

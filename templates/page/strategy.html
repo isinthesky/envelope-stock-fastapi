@@ -24,6 +24,7 @@
 .state-waiting-gc { background: #fef3c7; color: #92400e; }
 .state-waiting-pullback { background: #dbeafe; color: #1e40af; }
 .state-ready-buy { background: #dcfce7; color: #166534; }
+.state-buy-interest { background: #fed7aa; color: #9a3412; border: 1px solid #fb923c; }
 .state-optimal-buy { background: #fef08a; color: #854d0e; border: 2px solid #eab308; font-weight: 700; }
 .state-in-position { background: #f3e8ff; color: #7c3aed; }
 
@@ -73,7 +74,9 @@
     <span class="arrow">→</span>
     <span class="step">Stoch K < 30<br><small>매수 준비</small></span>
     <span class="arrow">→</span>
-    <span class="step" style="background: rgba(234,179,8,0.3); border: 1px solid #eab308;">K<25 & K>D<br><small>매수 적기</small></span>
+    <span class="step" style="background: rgba(251,146,60,0.3); border: 1px solid #fb923c;">2개 조건↑<br><small>매수 관심</small></span>
+    <span class="arrow">→</span>
+    <span class="step" style="background: rgba(234,179,8,0.3); border: 1px solid #eab308;">3개 조건<br><small>매수 적기</small></span>
     <span class="arrow">→</span>
     <span class="step">손절/익절<br><small>청산</small></span>
   </div>
@@ -88,8 +91,8 @@
       <div class="value">Stoch K < 30</div>
     </div>
     <div class="config-item">
-      <div class="label">매수 적기</div>
-      <div class="value">K<25, K>D, MA갭≤5%</div>
+      <div class="label">매수 적기 조건</div>
+      <div class="value">K<30, MA갭≤8%</div>
     </div>
     <div class="config-item">
       <div class="label">손절 / 익절</div>
@@ -708,6 +711,7 @@ const getGcStateClass = (state) => {
     'GC_ACTIVE': 'state-waiting-pullback',
     'WAITING_FOR_PULLBACK': 'state-waiting-pullback',
     'READY_TO_BUY': 'state-ready-buy',
+    'BUY_INTEREST': 'state-buy-interest',
     'OPTIMAL_BUY': 'state-optimal-buy'
   };
   return map[state] || '';
@@ -719,6 +723,7 @@ const getGcStateLabel = (state) => {
     'GC_ACTIVE': 'GC 활성',
     'WAITING_FOR_PULLBACK': '눌림목 대기',
     'READY_TO_BUY': '매수 준비',
+    'BUY_INTEREST': '매수 관심',
     'OPTIMAL_BUY': '매수 적기'
   };
   return map[state] || state;

@@ -136,6 +136,7 @@ class TelegramNotifier:
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
         state_label = {
             "OPTIMAL_BUY": "매수 적기",
+            "BUY_INTEREST": "매수 관심",
             "READY_TO_BUY": "매수 준비",
         }.get(gc_state, gc_state)
 
@@ -167,18 +168,20 @@ class TelegramNotifier:
 
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
         optimal_count = sum(1 for stock in stocks if stock.get("gc_state") == "OPTIMAL_BUY")
+        interest_count = sum(1 for stock in stocks if stock.get("gc_state") == "BUY_INTEREST")
         ready_count = sum(1 for stock in stocks if stock.get("gc_state") == "READY_TO_BUY")
 
         lines = [
             "🟢 <b>매수 신호 종목 알림</b>",
             f"📅 {now}",
-            f"총 {len(stocks)}개 종목 (매수 적기 {optimal_count}, 매수 준비 {ready_count})",
+            f"총 {len(stocks)}개 종목 (매수 적기 {optimal_count}, 매수 관심 {interest_count}, 매수 준비 {ready_count})",
             "",
         ]
 
         for stock in stocks[:10]:  # 최대 10개
             state_label = {
                 "OPTIMAL_BUY": "매수 적기",
+                "BUY_INTEREST": "매수 관심",
                 "READY_TO_BUY": "매수 준비",
             }.get(stock.get("gc_state"), stock.get("gc_state", "-"))
             lines.append(

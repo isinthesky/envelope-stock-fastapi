@@ -110,6 +110,18 @@ class StochasticConfig(BaseDTO):
     recovery_threshold: float = Field(default=20.0, description="회복 기준", ge=10, le=40)
     strong_recovery_threshold: float = Field(default=30.0, description="강한 회복 기준", ge=20, le=50)
 
+    # OPTIMAL_BUY 조건용 (보수적 완화)
+    deep_oversold_threshold: float = Field(
+        default=30.0,
+        description="깊은 과매도 기준 (OPTIMAL_BUY용, 기존 25에서 완화)",
+        ge=15,
+        le=40,
+    )
+    require_momentum_turn: bool = Field(
+        default=False,
+        description="K>D 조건 필수 여부 (False면 조건 무시)",
+    )
+
 
 class GoldenCrossRiskConfig(BaseDTO):
     """골든크로스 리스크 관리 설정"""
@@ -127,6 +139,23 @@ class GoldenCrossRiskConfig(BaseDTO):
 
     # 보유 기간
     max_hold_days: int = Field(default=60, description="최대 보유 기간 (일)", ge=10, le=180)
+
+
+class MAGapConfig(BaseDTO):
+    """MA 갭 설정 (OPTIMAL_BUY 조건)"""
+
+    min_gap_ratio: float = Field(
+        default=0.0,
+        description="최소 MA 갭 비율 (%)",
+        ge=-5.0,
+        le=10.0,
+    )
+    max_gap_ratio: float = Field(
+        default=8.0,
+        description="최대 MA 갭 비율 (%, 기존 5에서 완화)",
+        ge=5.0,
+        le=20.0,
+    )
 
 
 class StockScreenerConfigDTO(BaseDTO):
@@ -161,7 +190,7 @@ class StockScreenerConfigDTO(BaseDTO):
     )
 
     # 최대 종목 수
-    max_stocks: int = Field(default=50, description="최대 종목 수", ge=10, le=200)
+    max_stocks: int = Field(default=100, description="최대 종목 수", ge=10, le=200)
 
 
 class GoldenCrossConfigDTO(BaseStrategyConfig):
@@ -180,6 +209,9 @@ class GoldenCrossConfigDTO(BaseStrategyConfig):
 
     # 종목 스크리너 설정
     screener_config: StockScreenerConfigDTO = Field(default_factory=StockScreenerConfigDTO)
+
+    # MA 갭 설정 (OPTIMAL_BUY 조건)
+    ma_gap_config: MAGapConfig = Field(default_factory=MAGapConfig)
 
     # 포지션 설정
     position: PositionConfig = Field(default_factory=PositionConfig)
@@ -431,7 +463,9 @@ class GoldenCrossScanItemDTO(BaseDTO):
 
     # 상태
     is_gc_active: bool = Field(description="골든크로스 활성 여부 (MA55 > MA165)")
-    gc_state: str = Field(description="골든크로스 상태 (NOT_GC, GC_ACTIVE, WAITING_FOR_PULLBACK, READY_TO_BUY, OPTIMAL_BUY)")
+    gc_state: str = Field(
+        description="골든크로스 상태 (NOT_GC, GC_ACTIVE, WAITING_FOR_PULLBACK, BUY_INTEREST, READY_TO_BUY, OPTIMAL_BUY)"
+    )
 
     # 추가 정보
     market_cap: Decimal | None = Field(default=None, description="시가총액")
@@ -445,6 +479,7 @@ class GoldenCrossScanListDTO(BaseDTO):
     total_scanned: int = Field(description="스캔한 전체 종목 수")
     gc_active_count: int = Field(description="골든크로스 활성 종목 수")
     pullback_waiting_count: int = Field(description="눌림목 대기 종목 수")
+    buy_interest_count: int = Field(default=0, description="매수 관심 종목 수")
     ready_to_buy_count: int = Field(description="매수 준비 종목 수")
     optimal_buy_count: int = Field(default=0, description="매수 적기 종목 수")
     scan_time: datetime = Field(description="스캔 시각")

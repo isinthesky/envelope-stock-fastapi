@@ -288,16 +288,23 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
         earliest = min(timestamps)
         latest = max(timestamps)
 
-        # 타임존 정규화 (DB에서 온 데이터는 timezone-aware, 입력은 naive일 수 있음)
-        if earliest.tzinfo is not None:
-            earliest = earliest.replace(tzinfo=None)
-        if latest.tzinfo is not None:
-            latest = latest.replace(tzinfo=None)
+        # 타임존 정규화 - UTC 기준으로 통일
+        from datetime import timedelta, timezone as tz
+
+        def to_utc(dt: datetime) -> datetime:
+            """datetime을 UTC로 정규화"""
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=tz.utc)
+            return dt.astimezone(tz.utc)
+
+        earliest = to_utc(earliest)
+        latest = to_utc(latest)
+        start_date = to_utc(start_date)
+        end_date = to_utc(end_date)
 
         # 전체 기간 커버 여부 판단
         # 완벽한 매치: earliest <= start_date and latest >= end_date
         # 허용 범위: 시작/종료일 ±3일 이내 (주말/공휴일 고려)
-        from datetime import timedelta
         start_tolerance = timedelta(days=3)
         end_tolerance = timedelta(days=3)
 
