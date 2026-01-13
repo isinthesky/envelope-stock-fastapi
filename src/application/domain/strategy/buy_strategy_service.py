@@ -23,7 +23,7 @@ from src.application.domain.strategy.dto import (
     GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
 )
-from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
+from src.application.domain.strategy.ohlcv_data_loader import LoadType, OHLCVDataLoader
 
 
 logger = logging.getLogger(__name__)
@@ -107,15 +107,36 @@ class BuyStrategyService:
         # 2. 종목별 기술적 지표 계산
         data_loader = self._get_data_loader()
 
+        # 캐시 통계 추적
+        cache_stats = {
+            "cache_hits": 0,
+            "incremental_updates": 0,
+            "full_loads": 0,
+            "total_api_calls": 0,
+            "new_candles": 0,
+        }
+
         for stock in stocks:
             try:
-                # OHLCV 데이터 로딩 (MA165 계산을 위해 300일 조회, 약 200 거래일)
-                df = await data_loader.load_ohlcv_dataframe(
+                # OHLCV 데이터 로딩 (증분 업데이트 지원)
+                load_result = await data_loader.load_ohlcv_with_stats(
                     symbol=stock.symbol,
                     days=400,
                     interval="1d",
                     min_candles=160,
+                    cache_freshness_days=7,
                 )
+                df = load_result.df
+
+                # 캐시 통계 업데이트
+                if load_result.load_type == LoadType.CACHE_HIT:
+                    cache_stats["cache_hits"] += 1
+                elif load_result.load_type == LoadType.INCREMENTAL:
+                    cache_stats["incremental_updates"] += 1
+                else:
+                    cache_stats["full_loads"] += 1
+                cache_stats["total_api_calls"] += load_result.api_calls
+                cache_stats["new_candles"] += load_result.new_candles
 
                 # 지표 계산 (MA55/MA165)
                 df = TechnicalIndicators.prepare_golden_cross_indicators(
@@ -207,6 +228,13 @@ class BuyStrategyService:
             f"[GC Scan] Complete: {len(results)} results, "
             f"GC Active: {gc_active_count}, Interest: {buy_interest_count}, "
             f"Ready: {ready_to_buy_count}, Optimal: {optimal_buy_count}, Errors: {len(errors)}"
+        )
+        logger.info(
+            f"[GC Scan] Cache stats: hits={cache_stats['cache_hits']}, "
+            f"incremental={cache_stats['incremental_updates']}, "
+            f"full={cache_stats['full_loads']}, "
+            f"api_calls={cache_stats['total_api_calls']}, "
+            f"new_candles={cache_stats['new_candles']}"
         )
 
         return GoldenCrossScanListDTO(
