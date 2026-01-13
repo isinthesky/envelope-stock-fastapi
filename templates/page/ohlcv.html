@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+
+{% block title %}OHLCV Cache - Stock API Admin{% endblock %}
+
+{% block extra_styles %}
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; text-align: center; }
+.stat-card .value { font-size: 24px; font-weight: 700; color: #1e293b; }
+.stat-card .label { font-size: 12px; color: #64748b; margin-top: 4px; }
+.health-status { padding: 8px 12px; border-radius: 6px; font-weight: 600; display: inline-block; margin-bottom: 12px; }
+.health-healthy { background: #dcfce7; color: #166534; }
+.health-warning { background: #fef3c7; color: #92400e; }
+.health-critical { background: #fee2e2; color: #991b1b; }
+.symbol-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.symbol-tag { background: #e2e8f0; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: monospace; }
+.recommendation { background: #eff6ff; border-left: 3px solid #3b82f6; padding: 8px 12px; margin-top: 8px; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+th { background: #f8fafc; font-weight: 600; color: #475569; }
+button.danger { background: #ef4444; }
+button.danger:hover { background: #dc2626; }
+button.success { background: #22c55e; }
+button.success:hover { background: #16a34a; }
+.loading { opacity: 0.5; pointer-events: none; }
+{% endblock %}
+
+{% block content %}
+<h1>OHLCV Cache</h1>
+<p>일봉 캐시 데이터 관리 및 모니터링</p>
+
+<!-- 캐시 통계 -->
+<section>
+  <h2>캐시 통계</h2>
+  <div class="row">
+    <button onclick="loadStatistics()">통계 조회</button>
+    <button onclick="loadHealth()" class="secondary">건강 상태 조회</button>
+    <button onclick="loadFreshness()" class="secondary">신선도 조회</button>
+  </div>
+  <div id="stats-container" class="stats-grid" style="display:none;"></div>
+  <div id="health-container" style="display:none;"></div>
+  <pre id="stats_output" style="display:none;"></pre>
+</section>
+
+<!-- 종목별 조회 -->
+<section>
+  <h2>종목별 조회</h2>
+  <div class="row">
+    <label>종목코드</label>
+    <input type="text" id="symbol_input" placeholder="005930" value="005930" />
+    <label>기간(일)</label>
+    <input type="number" id="days_input" value="240" min="1" max="500" style="width:100px;" />
+  </div>
+  <div class="row">
+    <button onclick="loadSymbolStats()">종목 통계</button>
+    <button onclick="loadSymbolGaps()" class="secondary">결측 구간</button>
+    <button onclick="validateSymbol()" class="secondary">무결성 검증</button>
+  </div>
+  <pre id="symbol_output">결과 출력</pre>
+</section>
+
+<!-- 워밍업 -->
+<section>
+  <h2>캐시 워밍업</h2>
+  <div class="row">
+    <label>종목 목록</label>
+    <input type="text" id="warmup_symbols" placeholder="005930,000660,035720" style="width:300px;" />
+  </div>
+  <div class="row">
+    <label>기간(일)</label>
+    <input type="number" id="warmup_days" value="240" min="1" max="500" style="width:100px;" />
+    <label>동시처리</label>
+    <input type="number" id="warmup_concurrency" value="3" min="1" max="10" style="width:80px;" />
+    <label>
+      <input type="checkbox" id="warmup_force" /> 강제 갱신
+    </label>
+  </div>
+  <div class="row">
+    <button onclick="runWarmup()" class="success">워밍업 실행</button>
+    <button onclick="updateStale()" class="secondary">오래된 데이터 업데이트</button>
+    <button onclick="estimateApiCalls()" class="secondary">API 호출 예상</button>
+  </div>
+  <pre id="warmup_output">결과 출력</pre>
+</section>
+
+<!-- 정리 -->
+<section>
+  <h2>캐시 정리</h2>
+  <div class="row">
+    <label>보존 기간(일)</label>
+    <input type="number" id="retention_days" value="365" min="30" max="1000" style="width:100px;" />
+    <label>배치 크기</label>
+    <input type="number" id="batch_size" value="1000" min="100" max="10000" style="width:100px;" />
+  </div>
+  <div class="row">
+    <button onclick="runCleanup(true)" class="secondary">미리보기 (Dry Run)</button>
+    <button onclick="runCleanup(false)" class="danger">실제 삭제</button>
+  </div>
+  <pre id="cleanup_output">결과 출력</pre>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+// 통계 조회
+const loadStatistics = async () => {
+  const data = await getJson("/api/v1/ohlcv/statistics", "stats_output");
+  if (data.success && data.data) {
+    const s = data.data;
+    document.getElementById("stats-container").innerHTML = `
+      <div class="stat-card"><div class="value">${s.total_symbols?.toLocaleString() || 0}</div><div class="label">총 종목 수</div></div>
+      <div class="stat-card"><div class="value">${s.total_candles?.toLocaleString() || 0}</div><div class="label">총 캔들 수</div></div>
+      <div class="stat-card"><div class="value">${s.intervals?.join(", ") || "-"}</div><div class="label">캔들 간격</div></div>
+      <div class="stat-card"><div class="value">${s.estimated_size_mb?.toFixed(1) || 0} MB</div><div class="label">예상 크기</div></div>
+      <div class="stat-card"><div class="value">${s.date_range?.start?.split("T")[0] || "-"}</div><div class="label">시작일</div></div>
+      <div class="stat-card"><div class="value">${s.date_range?.end?.split("T")[0] || "-"}</div><div class="label">종료일</div></div>
+    `;
+    document.getElementById("stats-container").style.display = "grid";
+    document.getElementById("health-container").style.display = "none";
+    document.getElementById("stats_output").style.display = "block";
+  }
+};
+
+// 건강 상태 조회
+const loadHealth = async () => {
+  const data = await getJson("/api/v1/ohlcv/health?freshness_days=7", "stats_output");
+  if (data.success && data.data) {
+    const h = data.data;
+    const statusClass = h.status === "healthy" ? "health-healthy" :
+                        h.status === "warning" ? "health-warning" : "health-critical";
+    let html = `<div class="health-status ${statusClass}">${h.status?.toUpperCase() || "UNKNOWN"}</div>`;
+
+    html += `<table>
+      <tr><th>항목</th><th>값</th></tr>
+      <tr><td>총 종목 수</td><td>${h.total_symbols || 0}</td></tr>
+      <tr><td>오래된 데이터 종목</td><td>${h.stale_symbols?.length || 0}개</td></tr>
+      <tr><td>최근 데이터 없는 종목</td><td>${h.missing_recent?.length || 0}개</td></tr>
+    </table>`;
+
+    if (h.stale_symbols?.length > 0) {
+      html += `<div class="symbol-list"><strong>오래된 종목:</strong> `;
+      html += h.stale_symbols.slice(0, 20).map(s => `<span class="symbol-tag">${s}</span>`).join("");
+      if (h.stale_symbols.length > 20) html += `<span class="symbol-tag">+${h.stale_symbols.length - 20}개</span>`;
+      html += `</div>`;
+    }
+
+    if (h.recommendations?.length > 0) {
+      html += h.recommendations.map(r => `<div class="recommendation">${r}</div>`).join("");
+    }
+
+    document.getElementById("health-container").innerHTML = html;
+    document.getElementById("health-container").style.display = "block";
+    document.getElementById("stats-container").style.display = "none";
+    document.getElementById("stats_output").style.display = "block";
+  }
+};
+
+// 신선도 조회
+const loadFreshness = async () => {
+  await getJson("/api/v1/ohlcv/freshness?interval=1d", "stats_output");
+  document.getElementById("stats-container").style.display = "none";
+  document.getElementById("health-container").style.display = "none";
+  document.getElementById("stats_output").style.display = "block";
+};
+
+// 종목 통계
+const loadSymbolStats = () => {
+  const symbol = document.getElementById("symbol_input").value.trim();
+  if (!symbol) return alert("종목코드를 입력하세요");
+  getJson(`/api/v1/ohlcv/${symbol}/stats?interval=1d`, "symbol_output");
+};
+
+// 결측 구간
+const loadSymbolGaps = () => {
+  const symbol = document.getElementById("symbol_input").value.trim();
+  const days = document.getElementById("days_input").value || 240;
+  if (!symbol) return alert("종목코드를 입력하세요");
+  getJson(`/api/v1/ohlcv/${symbol}/gaps?days=${days}&interval=1d`, "symbol_output");
+};
+
+// 무결성 검증
+const validateSymbol = () => {
+  const symbol = document.getElementById("symbol_input").value.trim();
+  if (!symbol) return alert("종목코드를 입력하세요");
+  getJson(`/api/v1/ohlcv/${symbol}/validate?interval=1d`, "symbol_output");
+};
+
+// 워밍업 실행
+const runWarmup = async () => {
+  const symbols = document.getElementById("warmup_symbols").value.split(",").map(s => s.trim()).filter(s => s);
+  if (symbols.length === 0) return alert("종목 목록을 입력하세요");
+
+  const payload = {
+    symbols: symbols,
+    days: parseInt(document.getElementById("warmup_days").value) || 240,
+    interval: "1d",
+    force_refresh: document.getElementById("warmup_force").checked
+  };
+  const concurrency = document.getElementById("warmup_concurrency").value || 3;
+  await postJson(`/api/v1/ohlcv/warmup?concurrency=${concurrency}`, payload, "warmup_output");
+};
+
+// 오래된 데이터 업데이트
+const updateStale = async () => {
+  const concurrency = document.getElementById("warmup_concurrency").value || 3;
+  await postJson(`/api/v1/ohlcv/warmup/stale?freshness_days=3&concurrency=${concurrency}`, {}, "warmup_output");
+};
+
+// API 호출 예상
+const estimateApiCalls = async () => {
+  const symbols = document.getElementById("warmup_symbols").value.split(",").map(s => s.trim()).filter(s => s);
+  if (symbols.length === 0) return alert("종목 목록을 입력하세요");
+
+  const payload = {
+    symbols: symbols,
+    days: parseInt(document.getElementById("warmup_days").value) || 240,
+    interval: "1d"
+  };
+  await postJson("/api/v1/ohlcv/warmup/estimate", payload, "warmup_output");
+};
+
+// 정리 실행
+const runCleanup = async (dryRun) => {
+  if (!dryRun && !confirm("정말로 오래된 데이터를 삭제하시겠습니까?")) return;
+
+  const payload = {
+    retention_days: parseInt(document.getElementById("retention_days").value) || 365,
+    batch_size: parseInt(document.getElementById("batch_size").value) || 1000
+  };
+  await postJson(`/api/v1/ohlcv/cleanup?dry_run=${dryRun}`, payload, "cleanup_output");
+};
+
+// 페이지 로드 시 통계 자동 조회
+document.addEventListener("DOMContentLoaded", loadStatistics);
+{% endblock %}

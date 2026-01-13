@@ -93,6 +93,8 @@ class GoldenCrossStateMachine:
         pullback_date: datetime | None = None,
         entry_price: Decimal | None = None,
         entry_date: datetime | None = None,
+        highest_price: Decimal | None = None,
+        trailing_stop_activated: bool = False,
     ) -> StateTransition:
         """
         상태 머신 처리
@@ -105,6 +107,8 @@ class GoldenCrossStateMachine:
             pullback_date: 풀백 발생일
             entry_price: 진입가
             entry_date: 진입일
+            highest_price: 포지션 진입 후 최고가 (트레일링 스탑용)
+            trailing_stop_activated: 트레일링 스탑 활성화 여부
 
         Returns:
             StateTransition: 상태 전이 결과
@@ -124,7 +128,11 @@ class GoldenCrossStateMachine:
         # 4. IN_POSITION 상태
         elif current_state == SymbolState.IN_POSITION:
             return self._process_in_position(
-                current, entry_price, entry_date
+                current,
+                entry_price,
+                entry_date,
+                highest_price,
+                trailing_stop_activated,
             )
 
         # 알 수 없는 상태 -> 초기화
@@ -243,6 +251,8 @@ class GoldenCrossStateMachine:
         current: IndicatorSnapshot,
         entry_price: Decimal | None,
         entry_date: datetime | None,
+        highest_price: Decimal | None = None,
+        trailing_stop_activated: bool = False,
     ) -> StateTransition:
         """
         포지션 보유 상태 처리
@@ -285,7 +295,18 @@ class GoldenCrossStateMachine:
                     )
 
             # 4. 트레일링 스탑 체크
-            # TODO: 고점 대비 하락폭 체크 (별도 상태 저장 필요)
+            if self.risk_config.use_trailing_stop and highest_price and highest_price > 0:
+                # 활성화 조건: 수익률 >= trailing_stop_activation (기본 15%)
+                if pnl_ratio >= self.risk_config.trailing_stop_activation:
+                    # 고점 대비 하락폭 체크
+                    drawdown = float((highest_price - current.close) / highest_price)
+                    # 발동 조건: 고점 대비 trailing_stop_distance (기본 7%) 이상 하락
+                    if drawdown >= self.risk_config.trailing_stop_distance:
+                        return StateTransition(
+                            new_state=SymbolState.WAITING_FOR_GC,
+                            signal=Signal.SELL,
+                            reason="trailing_stop",
+                        )
 
         # 5. 최대 보유 기간 체크
         if entry_date:

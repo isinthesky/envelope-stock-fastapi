@@ -21,6 +21,9 @@ from src.application.interface.page.websocket_page_router import (
 from src.application.interface.page.sell_strategy_page_router import (
     router as sell_strategy_page_router,
 )
+from src.application.interface.page.ohlcv_page_router import (
+    router as ohlcv_page_router,
+)
 
 # 모든 페이지 라우터 리스트
 page_routers = [
@@ -33,6 +36,7 @@ page_routers = [
     sell_strategy_page_router,
     backtest_page_router,
     websocket_page_router,
+    ohlcv_page_router,
 ]
 
 __all__ = [
@@ -45,6 +49,7 @@ __all__ = [
     "sell_strategy_page_router",
     "backtest_page_router",
     "websocket_page_router",
+    "ohlcv_page_router",
     "page_routers",
 ]
 

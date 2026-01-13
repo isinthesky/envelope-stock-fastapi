@@ -123,6 +123,31 @@ class StochasticConfig(BaseDTO):
     )
 
 
+class DynamicSellThresholdConfig(BaseDTO):
+    """수익률 기반 동적 매도 임계값 설정"""
+
+    # 고수익 구간 (수익률 >= 20%)
+    high_profit_threshold: float = Field(default=0.20, description="고수익 기준")
+    high_profit_stoch: float = Field(default=60.0, description="고수익 시 Stoch 임계값")
+    high_profit_rsi: float = Field(default=65.0, description="고수익 시 RSI 임계값")
+
+    # 중수익 구간 (수익률 10~20%)
+    mid_profit_threshold: float = Field(default=0.10, description="중수익 기준")
+    mid_profit_stoch: float = Field(default=65.0, description="중수익 시 Stoch 임계값")
+    mid_profit_rsi: float = Field(default=68.0, description="중수익 시 RSI 임계값")
+
+    # 기본 구간 (수익률 0~10%)
+    default_stoch: float = Field(default=70.0, description="기본 Stoch 임계값")
+    default_rsi: float = Field(default=70.0, description="기본 RSI 임계값")
+
+    # 손실 구간 (수익률 < 0%)
+    loss_stoch: float = Field(default=75.0, description="손실 시 Stoch 임계값")
+    loss_rsi: float = Field(default=75.0, description="손실 시 RSI 임계값")
+
+    # 긴급 손절 (수익률 <= -7%)
+    emergency_stop_ratio: float = Field(default=-0.07, description="긴급 손절 기준")
+
+
 class GoldenCrossRiskConfig(BaseDTO):
     """골든크로스 리스크 관리 설정"""
 
@@ -139,6 +164,12 @@ class GoldenCrossRiskConfig(BaseDTO):
 
     # 보유 기간
     max_hold_days: int = Field(default=60, description="최대 보유 기간 (일)", ge=10, le=180)
+
+    # 동적 매도 임계값 설정
+    dynamic_sell: DynamicSellThresholdConfig = Field(
+        default_factory=DynamicSellThresholdConfig,
+        description="수익률 기반 동적 매도 임계값",
+    )
 
 
 class MAGapConfig(BaseDTO):
@@ -515,6 +546,27 @@ class StrategyExecuteResultDTO(BaseDTO):
 # ==================== Sell Signal Analysis DTOs ====================
 
 
+class SellPhaseEnum(str, Enum):
+    """매도 Phase 단계"""
+
+    NONE = "NONE"           # 매도 조건 없음
+    PHASE_1 = "PHASE_1"     # 수익 보호 (GC 유지 + 과열)
+    PHASE_2 = "PHASE_2"     # 매도 준비 (MA 갭 축소 + 과열)
+    PHASE_3 = "PHASE_3"     # 매도 고려 (데드크로스 + 과열)
+    PHASE_4 = "PHASE_4"     # 매도 권장 (데드크로스 + 강한 과열)
+    PHASE_5 = "PHASE_5"     # 강력 매도 (데드크로스 + 극단적 과열)
+
+
+SELL_PHASE_INFO: dict[str, dict[str, str]] = {
+    "NONE": {"name": "보유 유지", "action": "현 상태 유지"},
+    "PHASE_1": {"name": "수익 보호", "action": "부분 익절 고려 (50%)"},
+    "PHASE_2": {"name": "매도 준비", "action": "트레일링 스탑 활성화 권장"},
+    "PHASE_3": {"name": "매도 고려", "action": "매도 타이밍 모색"},
+    "PHASE_4": {"name": "매도 권장", "action": "즉시 매도 권장"},
+    "PHASE_5": {"name": "강력 매도", "action": "최우선 매도"},
+}
+
+
 class SellSignalAnalysisDTO(BaseDTO):
     """매도 시그널 분석 결과 DTO"""
 
@@ -528,6 +580,7 @@ class SellSignalAnalysisDTO(BaseDTO):
     ma_long: Decimal = Field(description="장기 MA (165일)")
     ma_gap_ratio: float = Field(description="MA 갭 비율 (%)")
     is_death_cross: bool = Field(description="데드크로스 여부 (MA55 < MA165)")
+    is_gc_active: bool = Field(default=False, description="골든크로스 활성 여부 (MA55 > MA165)")
 
     # Stochastic 지표
     stoch_k: float = Field(description="Stochastic %K")
@@ -547,6 +600,26 @@ class SellSignalAnalysisDTO(BaseDTO):
         description="매도 추천 (HOLD, WATCH, WEAK_SELL, CONSIDER_SELL, SELL, STRONG_SELL)"
     )
     sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
+
+    # Phase 관련 (선제적 매도 시그널)
+    sell_phase: str = Field(default="NONE", description="매도 Phase (NONE~PHASE_5)")
+    sell_phase_name: str = Field(default="보유 유지", description="Phase 이름")
+    sell_phase_action: str = Field(default="현 상태 유지", description="Phase 권장 행동")
+
+    # 수익률 관련 (entry_price 제공 시)
+    entry_price: Decimal | None = Field(default=None, description="진입가")
+    profit_ratio: float | None = Field(default=None, description="현재 수익률")
+    dynamic_stoch_threshold: float | None = Field(default=None, description="적용된 Stoch 임계값")
+    dynamic_rsi_threshold: float | None = Field(default=None, description="적용된 RSI 임계값")
+
+    # 손절/익절 상태
+    is_stop_loss_triggered: bool = Field(default=False, description="손절 라인 도달 여부")
+    is_take_profit_triggered: bool = Field(default=False, description="익절 목표 도달 여부")
+
+    # 트레일링 스탑 관련
+    highest_price: Decimal | None = Field(default=None, description="포지션 최고가")
+    drawdown_from_high: float | None = Field(default=None, description="고점 대비 하락률")
+    trailing_stop_activated: bool = Field(default=False, description="트레일링 스탑 활성화 여부")
 
     # 추가 정보
     candle_count: int = Field(default=0, description="분석에 사용된 캔들 수")

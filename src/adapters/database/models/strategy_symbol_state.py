@@ -11,6 +11,7 @@ from enum import Enum
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Index,
     Numeric,
@@ -106,6 +107,19 @@ class StrategySymbolStateModel(Base, BaseModel):
         Numeric(15, 2), nullable=True, comment="최근 종가"
     )
 
+    # ==================== 트레일링 스탑 관련 ====================
+    highest_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(15, 2), nullable=True, comment="포지션 진입 후 최고가"
+    )
+
+    trailing_stop_activated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, comment="트레일링 스탑 활성화 여부"
+    )
+
+    trailing_stop_activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="트레일링 스탑 활성화 시점"
+    )
+
     # ==================== 메타데이터 ====================
     metadata_json: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="추가 메타데이터 (JSON)"
@@ -155,3 +169,12 @@ class StrategySymbolStateModel(Base, BaseModel):
         if self.entry_price == 0:
             return None
         return float((self.last_close - self.entry_price) / self.entry_price)
+
+    @property
+    def drawdown_from_highest(self) -> float | None:
+        """고점 대비 하락률"""
+        if self.highest_price is None or self.last_close is None:
+            return None
+        if self.highest_price == 0:
+            return None
+        return float((self.highest_price - self.last_close) / self.highest_price)

@@ -164,6 +164,66 @@ class StrategySymbolStateRepository(BaseRepository[StrategySymbolStateModel]):
         state.entry_date = None
         state.entry_price = None
         state.quantity = None
+        # 트레일링 스탑 관련 필드 리셋
+        state.highest_price = None
+        state.trailing_stop_activated = False
+        state.trailing_stop_activated_at = None
+        state.last_checked_at = datetime.now()
+
+        await self.session.flush()
+        await self.session.refresh(state)
+        return state
+
+    async def update_highest_price(
+        self,
+        strategy_id: int,
+        symbol: str,
+        highest_price: Decimal,
+    ) -> StrategySymbolStateModel | None:
+        """포지션 최고가 업데이트"""
+        state = await self.get_by_strategy_and_symbol(strategy_id, symbol)
+        if not state:
+            return None
+
+        state.highest_price = highest_price
+        state.last_checked_at = datetime.now()
+
+        await self.session.flush()
+        await self.session.refresh(state)
+        return state
+
+    async def activate_trailing_stop(
+        self,
+        strategy_id: int,
+        symbol: str,
+    ) -> StrategySymbolStateModel | None:
+        """트레일링 스탑 활성화"""
+        state = await self.get_by_strategy_and_symbol(strategy_id, symbol)
+        if not state:
+            return None
+
+        state.trailing_stop_activated = True
+        state.trailing_stop_activated_at = datetime.now()
+        state.last_checked_at = datetime.now()
+
+        await self.session.flush()
+        await self.session.refresh(state)
+        return state
+
+    async def init_position_tracking(
+        self,
+        strategy_id: int,
+        symbol: str,
+        entry_price: Decimal,
+    ) -> StrategySymbolStateModel | None:
+        """포지션 진입 시 트래킹 초기화"""
+        state = await self.get_by_strategy_and_symbol(strategy_id, symbol)
+        if not state:
+            return None
+
+        state.highest_price = entry_price
+        state.trailing_stop_activated = False
+        state.trailing_stop_activated_at = None
         state.last_checked_at = datetime.now()
 
         await self.session.flush()

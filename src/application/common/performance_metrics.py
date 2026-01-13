@@ -391,7 +391,8 @@ class PerformanceMetrics:
         )
 
         if total_loss == 0:
-            return float('inf') if total_profit > 0 else 0.0
+            # JSON 직렬화 가능하도록 큰 값 반환 (inf 대신)
+            return 9999.99 if total_profit > 0 else 0.0
 
         profit_factor = total_profit / total_loss
 

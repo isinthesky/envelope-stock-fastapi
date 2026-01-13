@@ -5,7 +5,7 @@ Backtest Router - 백테스팅 API 엔드포인트
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from src.application.common.dependencies import get_kis_client, get_redis_client
+from src.application.common.dependencies import DatabaseSession, get_kis_client, get_redis_client
 from src.application.domain.backtest.dto import (
     BacktestRequestDTO,
     BacktestResultDTO,
@@ -18,13 +18,14 @@ from src.application.domain.market_data.service import MarketDataService
 router = APIRouter(prefix="/api/v1/backtest", tags=["Backtest"])
 
 
-def get_backtest_service(
+async def get_backtest_service(
+    session: DatabaseSession,
     kis_client=Depends(get_kis_client),
     redis_client=Depends(get_redis_client)
 ) -> BacktestService:
-    """백테스팅 서비스 의존성"""
+    """백테스팅 서비스 의존성 (DB 세션 포함)"""
     market_data_service = MarketDataService(kis_client, redis_client)
-    return BacktestService(market_data_service)
+    return BacktestService(market_data_service, db_session=session)
 
 
 @router.post("/run", response_model=BacktestResultDTO)

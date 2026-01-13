@@ -3,9 +3,15 @@
 Backtest Data Loader - 백테스팅 데이터 수집 및 전처리
 
 과거 차트 데이터 수집, 검증, 전처리를 담당합니다.
+
+증분 업데이트 전략:
+1. 캐시에 데이터가 있으면 먼저 로드
+2. 부족한 기간(시작/끝)을 확인하여 API로 보충
+3. 병합 후 반환
 """
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 import pandas as pd
 
@@ -15,6 +21,9 @@ from src.adapters.database.repositories.ohlcv_repository import OHLCVRepository
 from src.application.common.exceptions import BacktestDataError
 from src.application.domain.market_data.dto import CandleDTO
 from src.application.domain.market_data.service import MarketDataService
+
+
+logger = logging.getLogger(__name__)
 
 
 class BacktestDataLoader:
@@ -48,7 +57,13 @@ class BacktestDataLoader:
         use_cache: bool = True,
     ) -> tuple[pd.DataFrame, datetime, datetime]:
         """
-        OHLCV 데이터 로드 (DB 캐시 우선)
+        OHLCV 데이터 로드 (증분 업데이트 지원)
+
+        증분 업데이트 전략:
+        1. 캐시에 데이터가 있으면 먼저 로드
+        2. 부족한 기간(시작/끝)을 확인하여 API로 보충
+        3. 각 구간을 개별 저장하여 중간 캐시 보존
+        4. 병합 후 반환
 
         Args:
             symbol: 종목코드
@@ -67,42 +82,177 @@ class BacktestDataLoader:
             BacktestDataError: 데이터 로드 실패
         """
         try:
-            # ==================== 1. DB 캐시 확인 ====================
+            cached_df: pd.DataFrame | None = None
+            cache_start: datetime | None = None
+            cache_end: datetime | None = None
+
+            # ==================== 1. 캐시 데이터 로드 ====================
             if use_cache and self.ohlcv_repo:
-                cached_data = await self._load_from_cache(symbol, start_date, end_date)
-                if cached_data is not None:
-                    df, actual_start, actual_end = cached_data
-                    print(f"✅ 캐시에서 데이터 로드: {len(df)}건 (DB)")
-                    return df, actual_start, actual_end
+                cached_df, cache_start, cache_end = await self._load_cached_data(
+                    symbol, start_date, end_date
+                )
+                if cached_df is not None and cache_start and cache_end:
+                    logger.info(
+                        f"[Backtest] {symbol}: 캐시 로드 {len(cached_df)}건 "
+                        f"({cache_start.date()} ~ {cache_end.date()})"
+                    )
 
-            # ==================== 2. API에서 수집 ====================
-            all_candles = await self._collect_long_period(
-                symbol, start_date, end_date, chunk_days
-            )
+            # ==================== 2. 캐시 상태에 따른 분기 처리 ====================
+            dataframes_to_merge: list[pd.DataFrame] = []
 
-            if not all_candles:
+            if cached_df is not None and cache_start and cache_end:
+                # 캐시가 요청 범위를 완전히 포함하면 캐시만 사용
+                if cache_start <= start_date and cache_end >= end_date:
+                    print(f"✅ 캐시 완전 히트: {len(cached_df)}건 (DB)")
+                    df = self._preprocess_data(cached_df)
+                    # 요청 범위로 필터링
+                    df = df[(df["timestamp"] >= start_date) & (df["timestamp"] <= end_date)]
+                    # 캐시 완전 히트에도 검증 수행
+                    self._validate_data(df, start_date, end_date)
+                    actual_start = df["timestamp"].min()
+                    actual_end = df["timestamp"].max()
+                    return df, self._to_datetime(actual_start), self._to_datetime(actual_end)
+
+                # 캐시 데이터 추가
+                dataframes_to_merge.append(cached_df)
+
+                # 시작 부분 보충 (과거 데이터)
+                if cache_start > start_date:
+                    fill_end = cache_start - timedelta(days=1)
+                    print(f"📥 과거 데이터 수집: {start_date.date()} ~ {fill_end.date()}")
+                    start_candles = await self._collect_long_period(
+                        symbol, start_date, fill_end, chunk_days
+                    )
+                    if start_candles:
+                        # 시작 구간 개별 저장 (중간 캐시 보존)
+                        if use_cache and self.ohlcv_repo and self.db_session:
+                            await self._save_to_cache(symbol, start_candles)
+                            await self.db_session.commit()
+                            print(f"💾 과거 데이터 DB 저장: {len(start_candles)}건")
+                        dataframes_to_merge.append(self._candles_to_dataframe(start_candles))
+
+                # 끝 부분 보충 (최신 데이터)
+                if cache_end < end_date:
+                    fill_start = cache_end + timedelta(days=1)
+                    print(f"📥 최신 데이터 수집: {fill_start.date()} ~ {end_date.date()}")
+                    end_candles = await self._collect_long_period(
+                        symbol, fill_start, end_date, chunk_days
+                    )
+                    if end_candles:
+                        # 끝 구간 개별 저장 (중간 캐시 보존)
+                        if use_cache and self.ohlcv_repo and self.db_session:
+                            await self._save_to_cache(symbol, end_candles)
+                            await self.db_session.commit()
+                            print(f"💾 최신 데이터 DB 저장: {len(end_candles)}건")
+                        dataframes_to_merge.append(self._candles_to_dataframe(end_candles))
+
+            else:
+                # 캐시 없음: 전체 기간 한 번에 수집
+                print(f"📥 전체 데이터 수집: {start_date.date()} ~ {end_date.date()}")
+                all_candles = await self._collect_long_period(
+                    symbol, start_date, end_date, chunk_days
+                )
+                if not all_candles:
+                    raise BacktestDataError(f"No data collected for {symbol}")
+
+                # DB 저장
+                if use_cache and self.ohlcv_repo and self.db_session:
+                    await self._save_to_cache(symbol, all_candles)
+                    await self.db_session.commit()
+                    print(f"💾 전체 데이터 DB 저장: {len(all_candles)}건")
+
+                dataframes_to_merge.append(self._candles_to_dataframe(all_candles))
+
+            # ==================== 3. 병합 ====================
+            if not dataframes_to_merge:
                 raise BacktestDataError(f"No data collected for {symbol}")
 
-            # ==================== 3. DB에 저장 ====================
-            if use_cache and self.ohlcv_repo:
-                await self._save_to_cache(symbol, all_candles)
-                await self.db_session.commit()
-                print(f"💾 데이터 DB 저장 완료: {len(all_candles)}건")
+            if len(dataframes_to_merge) == 1:
+                df = dataframes_to_merge[0]
+            else:
+                df = pd.concat(dataframes_to_merge, ignore_index=True)
+                print(f"🔀 {len(dataframes_to_merge)}개 데이터 병합 완료")
 
-            # ==================== 4. DataFrame 변환 및 검증 ====================
-            df = self._candles_to_dataframe(all_candles)
+            # ==================== 4. 검증 및 전처리 ====================
             self._validate_data(df, start_date, end_date)
             df = self._preprocess_data(df)
+
+            # 요청 범위로 필터링
+            df = df[(df["timestamp"] >= start_date) & (df["timestamp"] <= end_date)]
+
+            if df.empty:
+                raise BacktestDataError(f"No data in requested range for {symbol}")
 
             actual_start = df["timestamp"].min()
             actual_end = df["timestamp"].max()
 
-            return df, actual_start, actual_end
+            return df, self._to_datetime(actual_start), self._to_datetime(actual_end)
 
+        except BacktestDataError:
+            raise
         except Exception as e:
             if self.db_session:
                 await self.db_session.rollback()
             raise BacktestDataError(f"Failed to load OHLCV data for {symbol}: {e}")
+
+    def _to_datetime(self, ts) -> datetime:
+        """pandas Timestamp를 datetime으로 변환"""
+        if hasattr(ts, 'to_pydatetime'):
+            ts = ts.to_pydatetime()
+        if hasattr(ts, 'tzinfo') and ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        return ts
+
+    async def _load_cached_data(
+        self,
+        symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> tuple[pd.DataFrame | None, datetime | None, datetime | None]:
+        """
+        캐시된 데이터 로드 (부분 캐시도 반환)
+
+        Returns:
+            tuple: (DataFrame, 캐시 시작일, 캐시 종료일) 또는 (None, None, None)
+        """
+        if not self.ohlcv_repo:
+            return None, None, None
+
+        try:
+            # 데이터 가용성 확인
+            availability = await self.ohlcv_repo.check_data_availability(
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                interval="1d",
+            )
+
+            if not availability.get("has_data"):
+                return None, None, None
+
+            # DB에서 DataFrame 로드
+            df = await self.ohlcv_repo.get_candles_to_dataframe(
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                interval="1d",
+            )
+
+            if df.empty:
+                return None, None, None
+
+            # 타임존 정규화
+            if df["timestamp"].dt.tz is not None:
+                df["timestamp"] = df["timestamp"].dt.tz_localize(None)
+
+            cache_start = self._to_datetime(df["timestamp"].min())
+            cache_end = self._to_datetime(df["timestamp"].max())
+
+            return df, cache_start, cache_end
+
+        except Exception as e:
+            logger.warning(f"[Backtest] Cache load failed for {symbol}: {e}")
+            return None, None, None
 
     async def _collect_long_period(
         self,
@@ -197,16 +347,16 @@ class BacktestDataLoader:
     def _validate_data(
         self,
         df: pd.DataFrame,
-        start_date: datetime,
-        end_date: datetime
+        _start_date: datetime | None = None,
+        _end_date: datetime | None = None,
     ) -> None:
         """
         데이터 유효성 검증
 
         Args:
             df: OHLCV 데이터
-            start_date: 예상 시작일
-            end_date: 예상 종료일
+            _start_date: 예상 시작일 (현재 미사용, 향후 확장용)
+            _end_date: 예상 종료일 (현재 미사용, 향후 확장용)
 
         Raises:
             BacktestDataError: 데이터 검증 실패
@@ -357,70 +507,6 @@ class BacktestDataLoader:
         }
 
     # ==================== DB 캐싱 헬퍼 메서드 ====================
-
-    async def _load_from_cache(
-        self,
-        symbol: str,
-        start_date: datetime,
-        end_date: datetime,
-    ) -> tuple[pd.DataFrame, datetime, datetime] | None:
-        """
-        DB 캐시에서 데이터 로드
-
-        Args:
-            symbol: 종목코드
-            start_date: 시작일
-            end_date: 종료일
-
-        Returns:
-            tuple | None: (DataFrame, 실제 시작일, 실제 종료일) 또는 None (캐시 미스)
-        """
-        if not self.ohlcv_repo:
-            return None
-
-        # 데이터 가용성 확인
-        availability = await self.ohlcv_repo.check_data_availability(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            interval="1d",
-        )
-
-        # 완전한 데이터가 없으면 캐시 미스
-        if not availability["is_complete"]:
-            if availability["has_data"]:
-                print(f"⚠️ 부분 캐시 존재 (미사용): {availability['count']}건")
-            return None
-
-        # DB에서 DataFrame 로드
-        df = await self.ohlcv_repo.get_candles_to_dataframe(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            interval="1d",
-        )
-
-        if df.empty:
-            return None
-
-        # 데이터 검증 및 전처리
-        self._validate_data(df, start_date, end_date)
-        df = self._preprocess_data(df)
-
-        actual_start = df["timestamp"].min()
-        actual_end = df["timestamp"].max()
-
-        # 타임존 정규화 (pandas Timestamp를 Python datetime으로, timezone-naive로)
-        if hasattr(actual_start, 'to_pydatetime'):
-            actual_start = actual_start.to_pydatetime()
-        if hasattr(actual_end, 'to_pydatetime'):
-            actual_end = actual_end.to_pydatetime()
-        if actual_start.tzinfo is not None:
-            actual_start = actual_start.replace(tzinfo=None)
-        if actual_end.tzinfo is not None:
-            actual_end = actual_end.replace(tzinfo=None)
-
-        return df, actual_start, actual_end
 
     async def _save_to_cache(
         self,

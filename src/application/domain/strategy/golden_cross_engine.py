@@ -256,6 +256,8 @@ class GoldenCrossEngine:
             pullback_date=state.pullback_date,
             entry_price=state.entry_price,
             entry_date=state.entry_date,
+            highest_price=state.highest_price,
+            trailing_stop_activated=state.trailing_stop_activated,
         )
 
         # 6. 지표 스냅샷 업데이트
@@ -268,6 +270,28 @@ class GoldenCrossEngine:
             stoch_d=Decimal(str(current_snapshot.stoch_d)),
             close=current_snapshot.close,
         )
+
+        # 6-1. 포지션 보유 중이면 highest_price 업데이트
+        if state.state == SymbolState.IN_POSITION.value:
+            current_highest = state.highest_price or Decimal("0")
+            if current_snapshot.close > current_highest:
+                await self.symbol_state_repo.update_highest_price(
+                    strategy_id=strategy.id,
+                    symbol=symbol,
+                    highest_price=current_snapshot.close,
+                )
+
+            # 트레일링 스탑 활성화 체크
+            if state.entry_price and state.entry_price > 0:
+                pnl_ratio = float(
+                    (current_snapshot.close - state.entry_price) / state.entry_price
+                )
+                activation_threshold = config.risk_config.trailing_stop_activation
+                if pnl_ratio >= activation_threshold and not state.trailing_stop_activated:
+                    await self.symbol_state_repo.activate_trailing_stop(
+                        strategy_id=strategy.id,
+                        symbol=symbol,
+                    )
 
         # 7. 시그널 처리
         if transition.signal == Signal.HOLD:

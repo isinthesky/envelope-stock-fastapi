@@ -11,7 +11,7 @@
 .strategy-flow .arrow { color: #fca5a5; font-size: 18px; }
 
 .result-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin-top: 16px; }
-.result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
 .result-header h3 { font-size: 20px; color: #1e293b; }
 .recommendation-badge { padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 14px; }
 .recommendation-HOLD { background: #dcfce7; color: #166534; }
@@ -21,6 +21,14 @@
 .recommendation-SELL { background: #fecaca; color: #991b1b; }
 .recommendation-STRONG_SELL { background: #dc2626; color: #fff; }
 
+.phase-badge { padding: 6px 12px; border-radius: 16px; font-weight: 500; font-size: 12px; margin-left: 8px; }
+.phase-NONE { background: #e2e8f0; color: #475569; }
+.phase-PHASE_1 { background: #dbeafe; color: #1e40af; }
+.phase-PHASE_2 { background: #fef3c7; color: #92400e; }
+.phase-PHASE_3 { background: #fed7aa; color: #c2410c; }
+.phase-PHASE_4 { background: #fecaca; color: #991b1b; }
+.phase-PHASE_5 { background: #dc2626; color: #fff; }
+
 .indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
 .indicator-card { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
 .indicator-card .label { font-size: 12px; color: #64748b; text-transform: uppercase; margin-bottom: 4px; }
@@ -29,6 +37,7 @@
 .status-danger { background: #fecaca; color: #991b1b; }
 .status-warning { background: #fef3c7; color: #92400e; }
 .status-safe { background: #dcfce7; color: #166534; }
+.status-info { background: #dbeafe; color: #1e40af; }
 
 .signal-strength { margin: 20px 0; }
 .signal-strength .bar-container { height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden; }
@@ -40,6 +49,23 @@
 .signal-strength .bar-4 { width: 80%; background: #ef4444; }
 .signal-strength .bar-5 { width: 100%; background: #dc2626; }
 .signal-strength .labels { display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: #64748b; }
+
+.phase-indicator { display: flex; gap: 4px; margin: 20px 0; }
+.phase-step { flex: 1; padding: 12px 8px; text-align: center; background: #f1f5f9; border-radius: 8px; font-size: 11px; color: #64748b; }
+.phase-step.active { background: #fef3c7; color: #92400e; font-weight: 600; }
+.phase-step.active.danger { background: #fecaca; color: #991b1b; }
+.phase-step.active.critical { background: #dc2626; color: #fff; }
+
+.profit-section { background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+.profit-section.loss { background: #fef2f2; border-color: #fecaca; }
+.profit-section h4 { margin: 0 0 12px 0; color: #166534; font-size: 14px; }
+.profit-section.loss h4 { color: #991b1b; }
+.profit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.profit-item { text-align: center; }
+.profit-item .label { font-size: 11px; color: #64748b; }
+.profit-item .value { font-size: 18px; font-weight: 700; }
+.profit-item .value.positive { color: #16a34a; }
+.profit-item .value.negative { color: #dc2626; }
 
 .reasons-list { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 16px; }
 .reasons-list h4 { color: #9a3412; margin-bottom: 12px; font-size: 14px; }
@@ -76,16 +102,14 @@
   <h2>매도 시그널 분석 전략</h2>
   <p>
     MA55/MA165 데드크로스, Stochastic 과매수, RSI 과매수 신호를 종합하여
-    최적의 매도 시점을 추천합니다.
+    최적의 매도 시점을 추천합니다. Phase 기반 선제적 매도 시그널과 수익률 기반 동적 임계값을 지원합니다.
   </p>
   <div class="strategy-flow">
-    <span class="step">데드크로스 확인</span>
-    <span class="arrow">-></span>
-    <span class="step">Stochastic 과매수</span>
-    <span class="arrow">-></span>
-    <span class="step">RSI 과매수</span>
-    <span class="arrow">-></span>
-    <span class="step">매도 추천</span>
+    <span class="step">Phase 1: 수익 보호</span>
+    <span class="arrow">→</span>
+    <span class="step">Phase 2: 매도 준비</span>
+    <span class="arrow">→</span>
+    <span class="step">Phase 3-5: 매도 실행</span>
   </div>
 </section>
 
@@ -95,6 +119,11 @@
     <label>종목코드</label>
     <input type="text" id="symbol_input" placeholder="예: 005930" style="width: 120px;" />
     <button onclick="analyzeSellSignal()">매도 시그널 분석</button>
+  </div>
+  <div class="row" style="margin-top: 8px;">
+    <label style="font-size: 12px;">진입가 (선택):</label>
+    <input id="entry_price_input" type="number" placeholder="예: 50000" style="width: 100px;" />
+    <span style="font-size: 11px; color: #64748b; margin-left: 8px;">수익률 기반 동적 임계값 적용</span>
   </div>
   <div class="row" style="margin-top: 8px;">
     <label style="font-size: 12px;">Stoch 임계값:</label>
@@ -125,6 +154,7 @@
         <th>종목명</th>
         <th>현재가</th>
         <th>추천</th>
+        <th>Phase</th>
         <th>강도</th>
         <th>Stoch K</th>
         <th>RSI</th>
@@ -133,7 +163,7 @@
       </tr>
     </thead>
     <tbody id="history_body">
-      <tr><td colspan="10" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
+      <tr><td colspan="11" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
     </tbody>
   </table>
 </section>
@@ -158,6 +188,11 @@ const formatTime = (dateStr) => {
   return new Date(dateStr).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' });
 };
 
+const formatPercent = (ratio) => {
+  if (ratio === null || ratio === undefined) return '-';
+  return (ratio * 100).toFixed(2) + '%';
+};
+
 const getRecommendationLabel = (rec) => {
   const labels = {
     'HOLD': '보유 유지',
@@ -168,6 +203,18 @@ const getRecommendationLabel = (rec) => {
     'STRONG_SELL': '강력 매도'
   };
   return labels[rec] || rec;
+};
+
+const getPhaseLabel = (phase) => {
+  const labels = {
+    'NONE': '-',
+    'PHASE_1': 'P1',
+    'PHASE_2': 'P2',
+    'PHASE_3': 'P3',
+    'PHASE_4': 'P4',
+    'PHASE_5': 'P5'
+  };
+  return labels[phase] || phase;
 };
 
 // 페이지 로드 시 히스토리 조회
@@ -183,7 +230,7 @@ const loadHistory = async () => {
   } catch (e) {
     console.error('Failed to load history:', e);
     document.getElementById("history_body").innerHTML =
-      '<tr><td colspan="10" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
+      '<tr><td colspan="11" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
   }
 };
 
@@ -196,11 +243,15 @@ const analyzeSellSignal = async () => {
 
   const stochThreshold = document.getElementById("stoch_threshold").value || 70;
   const rsiThreshold = document.getElementById("rsi_threshold").value || 70;
+  const entryPrice = document.getElementById("entry_price_input").value;
 
   document.getElementById("scan_output").style.display = "block";
   document.getElementById("scan_output").textContent = `${symbol} 분석 중... (OHLCV 데이터 조회 및 지표 계산)`;
 
-  const url = `/api/v1/strategies/sell-signal/${symbol}?stoch_overbought=${stochThreshold}&rsi_overbought=${rsiThreshold}`;
+  let url = `/api/v1/strategies/sell-signal/${symbol}?stoch_overbought=${stochThreshold}&rsi_overbought=${rsiThreshold}`;
+  if (entryPrice) {
+    url += `&entry_price=${entryPrice}`;
+  }
 
   try {
     const response = await fetch(url);
@@ -368,6 +419,7 @@ const displayResult = (data) => {
 
   const strengthClass = `bar-${data.sell_signal_strength}`;
   const recClass = `recommendation-${data.sell_recommendation}`;
+  const phaseClass = `phase-${data.sell_phase || 'NONE'}`;
 
   const stochStatus = data.is_stoch_overbought ? 'status-danger' : 'status-safe';
   const rsiStatus = data.is_rsi_overbought ? 'status-danger' : 'status-safe';
@@ -375,12 +427,90 @@ const displayResult = (data) => {
 
   const sellReasons = data.sell_reasons || [];
 
+  // Phase 인디케이터 생성
+  const phases = ['NONE', 'PHASE_1', 'PHASE_2', 'PHASE_3', 'PHASE_4', 'PHASE_5'];
+  const phaseNames = ['보유', '수익 보호', '매도 준비', '매도 고려', '매도 권장', '강력 매도'];
+  const currentPhase = data.sell_phase || 'NONE';
+  const phaseIdx = phases.indexOf(currentPhase);
+
+  const phaseIndicatorHtml = phases.map((p, i) => {
+    let activeClass = '';
+    if (i === phaseIdx && p !== 'NONE') {
+      activeClass = i >= 4 ? 'active critical' : (i >= 3 ? 'active danger' : 'active');
+    }
+    return `<div class="phase-step ${activeClass}">${phaseNames[i]}</div>`;
+  }).join('');
+
+  // 수익률 섹션 생성
+  let profitSectionHtml = '';
+  if (data.profit_ratio !== null && data.profit_ratio !== undefined) {
+    const profitClass = data.profit_ratio >= 0 ? '' : 'loss';
+    const valueClass = data.profit_ratio >= 0 ? 'positive' : 'negative';
+    profitSectionHtml = `
+      <div class="profit-section ${profitClass}">
+        <h4>${data.profit_ratio >= 0 ? '수익 정보' : '손실 정보'}</h4>
+        <div class="profit-grid">
+          <div class="profit-item">
+            <div class="label">진입가</div>
+            <div class="value">${formatNumber(data.entry_price)}</div>
+          </div>
+          <div class="profit-item">
+            <div class="label">현재가</div>
+            <div class="value">${formatNumber(data.current_price)}</div>
+          </div>
+          <div class="profit-item">
+            <div class="label">수익률</div>
+            <div class="value ${valueClass}">${formatPercent(data.profit_ratio)}</div>
+          </div>
+          <div class="profit-item">
+            <div class="label">적용 임계값</div>
+            <div class="value" style="font-size: 14px;">Stoch ${data.dynamic_stoch_threshold || 70} / RSI ${data.dynamic_rsi_threshold || 70}</div>
+          </div>
+          ${data.is_stop_loss_triggered ? '<div class="profit-item"><div class="label">상태</div><div class="value negative">손절 라인</div></div>' : ''}
+          ${data.is_take_profit_triggered ? '<div class="profit-item"><div class="label">상태</div><div class="value positive">익절 목표</div></div>' : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  // 트레일링 스탑 정보
+  let trailingStopHtml = '';
+  if (data.highest_price) {
+    const drawdownPct = data.drawdown_from_high ? (data.drawdown_from_high * 100).toFixed(2) : '-';
+    trailingStopHtml = `
+      <div class="indicator-card">
+        <div class="label">트레일링 스탑</div>
+        <div class="value" style="font-size: 16px;">${data.trailing_stop_activated ? '활성' : '비활성'}</div>
+        <div style="font-size: 12px; color: #64748b; margin-top: 4px;">
+          최고가: ${formatNumber(data.highest_price)}<br/>
+          고점 대비: -${drawdownPct}%
+        </div>
+      </div>
+    `;
+  }
+
   const html = `
     <div class="result-card">
       <div class="result-header">
         <h3>${data.symbol} ${data.name || ''}</h3>
-        <span class="recommendation-badge ${recClass}">${getRecommendationLabel(data.sell_recommendation)}</span>
+        <div>
+          <span class="recommendation-badge ${recClass}">${getRecommendationLabel(data.sell_recommendation)}</span>
+          ${data.sell_phase && data.sell_phase !== 'NONE' ? `<span class="phase-badge ${phaseClass}">${data.sell_phase_name || data.sell_phase}</span>` : ''}
+        </div>
       </div>
+
+      ${data.sell_phase_action && data.sell_phase !== 'NONE' ? `
+      <div style="background: #fef3c7; padding: 12px; border-radius: 8px; margin-bottom: 16px;">
+        <strong style="color: #92400e;">권장 행동:</strong>
+        <span style="color: #78350f;">${data.sell_phase_action}</span>
+      </div>
+      ` : ''}
+
+      <div class="phase-indicator">
+        ${phaseIndicatorHtml}
+      </div>
+
+      ${profitSectionHtml}
 
       <div class="indicator-grid">
         <div class="indicator-card">
@@ -410,6 +540,7 @@ const displayResult = (data) => {
           <div class="value">${Number(data.rsi).toFixed(1)}</div>
           <span class="status ${rsiStatus}">${data.is_rsi_overbought ? '과매수' : '정상'}</span>
         </div>
+        ${trailingStopHtml}
       </div>
 
       <div class="signal-strength">
@@ -453,12 +584,13 @@ const renderHistoryTable = () => {
   const tbody = document.getElementById("history_body");
 
   if (analysisHistory.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
     return;
   }
 
   tbody.innerHTML = analysisHistory.map(item => {
     const recClass = `recommendation-${item.sell_recommendation}`;
+    const phaseClass = `phase-${item.sell_phase || 'NONE'}`;
     const activeIcon = item.is_active ? '●' : '○';
     const activeClass = item.is_active ? 'active' : 'inactive';
     const selectedClass = item.id === selectedHistoryId ? 'selected' : '';
@@ -471,6 +603,7 @@ const renderHistoryTable = () => {
       <td>${item.name || '-'}</td>
       <td>${formatNumber(item.current_price)}</td>
       <td><span class="recommendation-badge ${recClass}" style="font-size: 11px; padding: 4px 8px;">${getRecommendationLabel(item.sell_recommendation)}</span></td>
+      <td><span class="phase-badge ${phaseClass}" style="font-size: 10px; padding: 2px 6px;">${getPhaseLabel(item.sell_phase)}</span></td>
       <td>${item.sell_signal_strength}/5</td>
       <td>${Number(item.stoch_k).toFixed(1)}</td>
       <td>${Number(item.rsi).toFixed(1)}</td>

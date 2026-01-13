@@ -197,7 +197,7 @@ async def scan_golden_cross_symbols(
     response_model=ResponseDTO[SellSignalAnalysisDTO],
     status_code=status.HTTP_200_OK,
     summary="매도 시그널 분석",
-    description="종목의 기술적 지표를 분석하여 매도 시그널 판단 (MA + Stochastic + RSI)",
+    description="종목의 기술적 지표를 분석하여 매도 시그널 판단 (MA + Stochastic + RSI + Phase)",
 )
 async def analyze_sell_signal(
     symbol: str,
@@ -205,6 +205,8 @@ async def analyze_sell_signal(
     market_data_service: MarketDataServiceDep,
     stoch_overbought: float = Query(default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값"),
     rsi_overbought: float = Query(default=70.0, ge=50.0, le=90.0, description="RSI 과매수 임계값"),
+    entry_price: float | None = Query(default=None, ge=0.0, description="진입가 (수익률 기반 동적 임계값 적용)"),
+    strategy_id: int | None = Query(default=None, ge=1, description="전략 ID (보유 종목 진입가 자동 조회)"),
 ) -> ResponseDTO[SellSignalAnalysisDTO]:
     """
     매도 시그널 분석
@@ -216,6 +218,15 @@ async def analyze_sell_signal(
     - Stochastic: 과매수 여부 (K > 70)
     - RSI: 과매수 여부 (RSI > 70)
 
+    Phase 기반 선제적 매도 시그널:
+    - PHASE_1: 골든크로스 유지 + 극심한 과열 (수익 보호)
+    - PHASE_2: MA 갭 축소 + 과열 (데드크로스 임박)
+    - PHASE_3~5: 데드크로스 + 과열 수준별 매도 권장
+
+    수익률 기반 동적 임계값:
+    - entry_price 제공 시 수익률에 따라 임계값 자동 조정
+    - strategy_id 제공 시 보유 종목의 진입가 자동 조회
+
     매도 추천 등급:
     - HOLD: 보유 유지 (시그널 없음)
     - WATCH: 관망 (약한 시그널)
@@ -224,11 +235,33 @@ async def analyze_sell_signal(
     - SELL: 매도 권장
     - STRONG_SELL: 강력 매도
     """
+    # 전략 ID가 제공되면 보유 종목의 진입가/최고가 자동 조회
+    highest_price: float | None = None
+    trailing_stop_activated: bool = False
+
+    if strategy_id is not None and entry_price is None:
+        from src.adapters.database.repositories.strategy_symbol_state_repository import (
+            StrategySymbolStateRepository,
+        )
+        try:
+            state_repo = StrategySymbolStateRepository(session)
+            state = await state_repo.get_by_strategy_and_symbol(strategy_id, symbol)
+            if state and state.entry_price:
+                entry_price = float(state.entry_price)
+                if state.highest_price:
+                    highest_price = float(state.highest_price)
+                trailing_stop_activated = state.trailing_stop_activated
+        except Exception:
+            pass  # 조회 실패 시 무시
+
     service = StrategyService(session)
     result = await service.analyze_sell_signal(
         symbol=symbol,
         stoch_overbought=stoch_overbought,
         rsi_overbought=rsi_overbought,
+        entry_price=entry_price,
+        highest_price=highest_price,
+        trailing_stop_activated=trailing_stop_activated,
     )
 
     # 종목명 조회 및 추가 (DB 우선, API 폴백 - ETF 지원)
