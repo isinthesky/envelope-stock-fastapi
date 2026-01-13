@@ -56,6 +56,7 @@ class BuyStrategyService:
         stoch_threshold: float = 30.0,
         gc_only: bool = True,
         include_etf: bool = True,
+        cache_freshness_days: int = 1,
     ) -> GoldenCrossScanListDTO:
         """
         골든크로스 종목 스캔
@@ -63,8 +64,8 @@ class BuyStrategyService:
         기본 스크리닝 통과 종목에 대해 기술적 지표를 계산하여
         골든크로스 전략 조건에 부합하는 종목을 필터링합니다.
 
-        - 2번의 API 호출로 약 165~175개 캔들 수집
         - DB 캐싱을 통해 반복 호출 최소화
+        - 캐시가 오래된 경우 증분 업데이트 (chunking 지원)
         - MA55/MA165 지표 사용
 
         Args:
@@ -72,6 +73,9 @@ class BuyStrategyService:
             stoch_threshold: Stochastic 과매도 임계값 (기본 30)
             gc_only: 골든크로스 활성 종목만 반환 (기본 True)
             include_etf: ETF 종목도 함께 스캔 (기본 True)
+            cache_freshness_days: 캐시 신선도 기준 (일).
+                기본 1일 - 당일 데이터가 없으면 API 호출.
+                장 마감 후 스캔 시 1일, 주말에는 3일 권장.
 
         Returns:
             GoldenCrossScanListDTO: 스캔 결과
@@ -124,7 +128,7 @@ class BuyStrategyService:
                     days=400,
                     interval="1d",
                     min_candles=160,
-                    cache_freshness_days=7,
+                    cache_freshness_days=cache_freshness_days,
                 )
                 df = load_result.df
 

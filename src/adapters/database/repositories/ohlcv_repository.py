@@ -252,7 +252,10 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
         interval: str = "1d",
     ) -> dict:
         """
-        데이터 가용성 확인
+        데이터 가용성 확인 (경량 집계 쿼리 사용)
+
+        전체 캔들을 로드하지 않고 집계 함수만 사용하여
+        count, min, max 값만 조회합니다.
 
         Args:
             symbol: 종목코드
@@ -268,14 +271,33 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
                 - latest: 가장 늦은 날짜
                 - is_complete: 전체 기간 커버 여부
         """
-        candles = await self.get_candles_by_date_range(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval,
+        from datetime import timedelta, timezone as tz
+
+        # 집계 쿼리로 count, min, max만 조회 (전체 로드 방지)
+        stmt = (
+            select(
+                func.count().label("count"),
+                func.min(self.model.timestamp).label("earliest"),
+                func.max(self.model.timestamp).label("latest"),
+            )
+            .where(
+                and_(
+                    self.model.symbol == symbol,
+                    self.model.interval == interval,
+                    self.model.timestamp >= start_date,
+                    self.model.timestamp <= end_date,
+                )
+            )
         )
 
-        if not candles:
+        result = await self.session.execute(stmt)
+        row = result.one()
+
+        count = row.count or 0
+        earliest = row.earliest
+        latest = row.latest
+
+        if count == 0 or earliest is None or latest is None:
             return {
                 "has_data": False,
                 "count": 0,
@@ -283,13 +305,6 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
                 "latest": None,
                 "is_complete": False,
             }
-
-        timestamps = [candle.timestamp for candle in candles]
-        earliest = min(timestamps)
-        latest = max(timestamps)
-
-        # 타임존 정규화 - UTC 기준으로 통일
-        from datetime import timedelta, timezone as tz
 
         def to_utc(dt: datetime) -> datetime:
             """datetime을 UTC로 정규화"""
@@ -299,8 +314,8 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
 
         earliest = to_utc(earliest)
         latest = to_utc(latest)
-        start_date = to_utc(start_date)
-        end_date = to_utc(end_date)
+        start_date_utc = to_utc(start_date)
+        end_date_utc = to_utc(end_date)
 
         # 전체 기간 커버 여부 판단
         # 완벽한 매치: earliest <= start_date and latest >= end_date
@@ -308,14 +323,14 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
         start_tolerance = timedelta(days=3)
         end_tolerance = timedelta(days=3)
 
-        start_ok = earliest <= start_date or (earliest - start_date) <= start_tolerance
-        end_ok = latest >= end_date or (end_date - latest) <= end_tolerance
+        start_ok = earliest <= start_date_utc or (earliest - start_date_utc) <= start_tolerance
+        end_ok = latest >= end_date_utc or (end_date_utc - latest) <= end_tolerance
 
         is_complete = start_ok and end_ok
 
         return {
             "has_data": True,
-            "count": len(candles),
+            "count": count,
             "earliest": earliest,
             "latest": latest,
             "is_complete": is_complete,

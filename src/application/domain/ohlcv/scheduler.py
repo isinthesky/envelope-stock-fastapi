@@ -25,7 +25,7 @@ class OHLCVCacheScheduler:
 
     정기 작업:
     - 02:00: 오래된 데이터 정리 (365일 이전)
-    - 15:00: 전략 실행 전 증분 업데이트 (전략 스캔 15:35 이전)
+    - 16:00: 장 마감 후 증분 업데이트 (당일 종가 확정 후)
     """
 
     def __init__(self) -> None:
@@ -54,14 +54,14 @@ class OHLCVCacheScheduler:
             replace_existing=True,
         )
 
-        # 전략 실행 전 (15:00): 증분 업데이트
-        # 전략 스캔(15:35) 전에 캐시를 최신 상태로 유지
+        # 장 마감 후 (16:00): 증분 업데이트
+        # 당일 종가 확정 후 캐시를 최신 상태로 유지
         # 평일만 실행 (월-금: day_of_week='mon-fri')
         self._scheduler.add_job(
             self._update_job,
             trigger=CronTrigger(
                 day_of_week="mon-fri",
-                hour=15,
+                hour=16,
                 minute=0,
             ),
             id="ohlcv_update",
@@ -72,7 +72,7 @@ class OHLCVCacheScheduler:
         self._scheduler.start()
         self._is_running = True
 
-        logger.info("[OHLCVScheduler] Started (cleanup: 02:00, update: 15:00 weekdays)")
+        logger.info("[OHLCVScheduler] Started (cleanup: 02:00, update: 16:00 weekdays)")
 
     async def stop(self) -> None:
         """스케줄러 중지"""

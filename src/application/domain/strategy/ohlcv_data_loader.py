@@ -4,12 +4,12 @@ OHLCV Data Loader - 공통 OHLCV 데이터 로딩 모듈
 
 DB 캐시 우선 조회 + 증분 업데이트 전략:
 1. 캐시에 충분한 데이터가 있으면 캐시 사용
-2. 캐시가 stale하면 누락된 최신 데이터만 API 호출 (1회)
+2. 캐시가 stale하면 누락된 최신 데이터만 API 호출 (chunking 지원)
 3. 캐시가 없거나 부족하면 전체 데이터 요청 (2회 호출)
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 
@@ -23,6 +23,54 @@ from src.application.domain.market_data.service import MarketDataService
 
 
 logger = logging.getLogger(__name__)
+
+# KIS API 단일 호출 최대 조회 기간 (일)
+MAX_API_DAYS_PER_CALL = 100
+
+
+def normalize_timestamp(dt: datetime) -> datetime:
+    """
+    타임스탬프를 UTC timezone-aware로 정규화
+
+    KIS API는 KST 날짜만 반환 (시간 정보 없음)하므로
+    일봉 데이터는 날짜만 의미 있음. UTC로 통일하여
+    tz-aware와 tz-naive 혼합 시 발생하는 비교 오류를 방지.
+
+    Args:
+        dt: 정규화할 datetime
+
+    Returns:
+        datetime: UTC timezone-aware datetime
+    """
+    if dt.tzinfo is None:
+        # tz-naive → UTC로 가정
+        return dt.replace(tzinfo=timezone.utc)
+    # 이미 tz-aware → UTC로 변환
+    return dt.astimezone(timezone.utc)
+
+
+def normalize_df_timestamps(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    DataFrame의 timestamp 컬럼을 UTC로 정규화
+
+    Args:
+        df: timestamp 컬럼이 있는 DataFrame
+
+    Returns:
+        pd.DataFrame: timestamp가 UTC로 정규화된 DataFrame
+    """
+    if df.empty or "timestamp" not in df.columns:
+        return df
+
+    df = df.copy()
+    # pandas timestamp를 UTC로 변환
+    if df["timestamp"].dt.tz is None:
+        # tz-naive → UTC로 localize
+        df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
+    else:
+        # tz-aware → UTC로 변환
+        df["timestamp"] = df["timestamp"].dt.tz_convert("UTC")
+    return df
 
 
 class LoadType(str, Enum):
@@ -74,7 +122,7 @@ class OHLCVDataLoader:
         days: int = 240,
         interval: str = "1d",
         min_candles: int = 165,
-        cache_freshness_days: int = 7,
+        cache_freshness_days: int = 1,
     ) -> pd.DataFrame:
         """
         OHLCV 데이터를 DataFrame으로 로딩 (증분 업데이트 지원)
@@ -84,15 +132,16 @@ class OHLCVDataLoader:
         2. 캐시가 min_candles 이상이면:
            - 최신 날짜 확인
            - 신선하면 (≤cache_freshness_days) 캐시 그대로 반환
-           - stale하면 누락된 최근 데이터만 API 호출 (1회)
-        3. 캐시가 부족하면 전체 데이터 요청 (기존 2회 호출)
+           - stale하면 누락된 최근 데이터만 API 호출 (chunking 지원)
+        3. 캐시가 부족하면 전체 데이터 요청 (2회 호출)
 
         Args:
             symbol: 종목코드
             days: 조회 기간 (일), 기본 240일
             interval: 캔들 간격, 기본 "1d"
             min_candles: 최소 필요 캔들 수, 기본 165
-            cache_freshness_days: 캐시 유효 기간 (일), 기본 7일
+            cache_freshness_days: 캐시 유효 기간 (일), 기본 1일.
+                장 마감 후 스캔 시 1일, 주말에는 3일 권장.
 
         Returns:
             pd.DataFrame: OHLCV 데이터프레임 (timestamp, open, high, low, close, volume)
@@ -115,7 +164,7 @@ class OHLCVDataLoader:
         days: int = 240,
         interval: str = "1d",
         min_candles: int = 165,
-        cache_freshness_days: int = 7,
+        cache_freshness_days: int = 1,
     ) -> LoadResult:
         """
         OHLCV 데이터를 DataFrame으로 로딩 (통계 포함)
@@ -125,7 +174,7 @@ class OHLCVDataLoader:
             days: 조회 기간 (일)
             interval: 캔들 간격
             min_candles: 최소 필요 캔들 수
-            cache_freshness_days: 캐시 유효 기간 (일)
+            cache_freshness_days: 캐시 유효 기간 (일), 기본 1일
 
         Returns:
             LoadResult: DataFrame과 로딩 통계
@@ -160,7 +209,7 @@ class OHLCVDataLoader:
             cached_df = cache_result["df"]
             latest = cache_result["latest"]
 
-            incremental_df, new_count = await self._incremental_update(
+            incremental_df, new_count, inc_api_calls = await self._incremental_update(
                 symbol=symbol,
                 cached_df=cached_df,
                 last_cached_date=latest,
@@ -171,34 +220,38 @@ class OHLCVDataLoader:
             if incremental_df is not None:
                 df = incremental_df
                 load_type = LoadType.INCREMENTAL
-                api_calls = 1
+                api_calls = inc_api_calls
                 new_candles = new_count
                 logger.debug(
-                    f"[OHLCVLoader] {symbol}: Incremental update (+{new_count} candles)"
+                    f"[OHLCVLoader] {symbol}: Incremental update "
+                    f"(+{new_count} candles, {inc_api_calls} API calls)"
                 )
             else:
                 # 증분 업데이트 실패 시 전체 로딩
-                df = await self._load_from_api(
+                df, full_api_calls = await self._load_from_api(
                     symbol=symbol,
                     start_date=start_date,
                     end_date=end_date,
                     interval=interval,
                 )
                 load_type = LoadType.FULL_LOAD
-                api_calls = 2
+                api_calls = inc_api_calls + full_api_calls
 
         else:
             # 전체 로딩 (캐시 없음 또는 부족)
-            df = await self._load_from_api(
+            df, full_api_calls = await self._load_from_api(
                 symbol=symbol,
                 start_date=start_date,
                 end_date=end_date,
                 interval=interval,
             )
             load_type = LoadType.FULL_LOAD
-            api_calls = 2
+            api_calls = full_api_calls
             if df is not None:
-                logger.debug(f"[OHLCVLoader] {symbol}: Full load ({len(df)} candles)")
+                logger.debug(
+                    f"[OHLCVLoader] {symbol}: Full load "
+                    f"({len(df)} candles, {full_api_calls} API calls)"
+                )
 
         if df is None or df.empty:
             raise ValueError(f"No candle data available for {symbol}")
@@ -279,6 +332,9 @@ class OHLCVDataLoader:
             if cached_df.empty:
                 return {"status": "none", "df": None, "latest": None, "count": 0}
 
+            # DataFrame 타임존 정규화
+            cached_df = normalize_df_timestamps(cached_df)
+
             # 신선도 판단
             days_since_latest = (end_date - latest).days
             if days_since_latest <= cache_freshness_days:
@@ -297,9 +353,12 @@ class OHLCVDataLoader:
         last_cached_date: datetime,
         end_date: datetime,
         interval: str,
-    ) -> tuple[pd.DataFrame | None, int]:
+    ) -> tuple[pd.DataFrame | None, int, int]:
         """
         캐시된 데이터에 최신 데이터를 증분 추가
+
+        오래된 캐시의 경우 MAX_API_DAYS_PER_CALL 단위로 chunking하여
+        API 기간 제한을 준수합니다.
 
         Args:
             symbol: 종목코드
@@ -309,46 +368,74 @@ class OHLCVDataLoader:
             interval: 캔들 간격
 
         Returns:
-            tuple: (병합된 DataFrame, 새로 추가된 캔들 수)
+            tuple: (병합된 DataFrame, 새로 추가된 캔들 수, API 호출 횟수)
         """
-        # 이미 최신이면 캐시 그대로 반환
-        if (end_date - last_cached_date).days <= 1:
-            return cached_df, 0
+        # 타임존 정규화
+        last_cached_date = normalize_timestamp(last_cached_date)
+        end_date = normalize_timestamp(end_date)
 
-        # 누락된 기간만 API 호출 (1회)
-        fetch_start = last_cached_date + timedelta(days=1)
+        # 이미 최신이면 캐시 그대로 반환
+        days_gap = (end_date - last_cached_date).days
+        if days_gap <= 1:
+            return cached_df, 0, 0
+
+        # 캐시된 DataFrame 타임존 정규화
+        cached_df = normalize_df_timestamps(cached_df)
 
         market_data_service = await self._get_market_data_service()
 
+        all_new_candles: list = []
+        api_calls = 0
+
         try:
-            chart_data = await market_data_service.get_chart_data(
-                symbol=symbol,
-                interval=interval,
-                start_date=fetch_start,
-                end_date=end_date,
-            )
+            # 누락 기간을 MAX_API_DAYS_PER_CALL 단위로 분할
+            fetch_start = last_cached_date + timedelta(days=1)
 
-            if not chart_data.candles:
+            while fetch_start < end_date:
+                # chunk 종료일 계산
+                chunk_end = min(
+                    fetch_start + timedelta(days=MAX_API_DAYS_PER_CALL),
+                    end_date,
+                )
+
+                chart_data = await market_data_service.get_chart_data(
+                    symbol=symbol,
+                    interval=interval,
+                    start_date=fetch_start,
+                    end_date=chunk_end,
+                )
+                api_calls += 1
+
+                if chart_data.candles:
+                    all_new_candles.extend(chart_data.candles)
+
+                # 다음 chunk로 이동
+                fetch_start = chunk_end + timedelta(days=1)
+
+            if not all_new_candles:
                 # 신규 데이터 없음 (주말/휴일 등)
-                return cached_df, 0
+                return cached_df, 0, api_calls
 
-            new_candles = chart_data.candles
-            new_count = len(new_candles)
+            # 중복 제거 (API 응답에 중복 캔들이 있을 수 있음)
+            candles_by_date = {c.timestamp: c for c in all_new_candles}
+            unique_candles = list(candles_by_date.values())
+            new_count = len(unique_candles)
 
-            # 신규 데이터 DataFrame 변환
+            # 신규 데이터 DataFrame 변환 (타임존 정규화 포함)
             new_df = pd.DataFrame(
                 [
                     {
-                        "timestamp": c.timestamp,
+                        "timestamp": normalize_timestamp(c.timestamp),
                         "open": float(c.open),
                         "high": float(c.high),
                         "low": float(c.low),
                         "close": float(c.close),
                         "volume": int(c.volume),
                     }
-                    for c in new_candles
+                    for c in unique_candles
                 ]
             )
+            new_df = normalize_df_timestamps(new_df)
 
             # 병합 및 중복 제거
             merged_df = pd.concat([cached_df, new_df], ignore_index=True)
@@ -359,13 +446,13 @@ class OHLCVDataLoader:
             )
 
             # 신규 데이터 DB 저장
-            await self._cache_to_db(symbol, new_candles, interval)
+            await self._cache_to_db(symbol, unique_candles, interval)
 
-            return merged_df, new_count
+            return merged_df, new_count, api_calls
 
         except Exception as e:
             logger.warning(f"[OHLCVLoader] Incremental update failed for {symbol}: {e}")
-            return None, 0
+            return None, 0, api_calls
 
     async def _load_from_api(
         self,
@@ -373,42 +460,50 @@ class OHLCVDataLoader:
         start_date: datetime,
         end_date: datetime,
         interval: str,
-    ) -> pd.DataFrame | None:
-        """KIS API에서 데이터 로딩 (2회 호출)"""
+    ) -> tuple[pd.DataFrame | None, int]:
+        """
+        KIS API에서 데이터 로딩 (2회 호출)
+
+        Returns:
+            tuple: (DataFrame, API 호출 횟수)
+        """
         market_data_service = await self._get_market_data_service()
         all_candles: list = []
+        api_calls = 0
 
         try:
-            # 첫 번째 호출: 최근 120일
-            mid_date = end_date - timedelta(days=120)
+            # 첫 번째 호출: 최근 100일 (MAX_API_DAYS_PER_CALL)
+            mid_date = end_date - timedelta(days=MAX_API_DAYS_PER_CALL)
             chart_data1 = await market_data_service.get_chart_data(
                 symbol=symbol,
                 interval=interval,
                 start_date=mid_date,
                 end_date=end_date,
             )
+            api_calls += 1
             if chart_data1.candles:
                 all_candles.extend(chart_data1.candles)
 
-            # 두 번째 호출: 이전 120일
+            # 두 번째 호출: 이전 100일
             if all_candles:
                 earliest = min(c.timestamp for c in all_candles)
                 chart_data2 = await market_data_service.get_chart_data(
                     symbol=symbol,
                     interval=interval,
-                    start_date=earliest - timedelta(days=120),
+                    start_date=earliest - timedelta(days=MAX_API_DAYS_PER_CALL),
                     end_date=earliest - timedelta(days=1),
                 )
+                api_calls += 1
                 if chart_data2.candles:
                     all_candles.extend(chart_data2.candles)
 
         except Exception as e:
             logger.warning(f"[OHLCVLoader] API call failed for {symbol}: {e}")
-            return None
+            return None, api_calls
 
         if not all_candles:
             logger.debug(f"[OHLCVLoader] {symbol}: No candle data from API")
-            return None
+            return None, api_calls
 
         # 중복 제거 및 정렬
         candles_by_date = {c.timestamp: c for c in all_candles}
@@ -417,11 +512,11 @@ class OHLCVDataLoader:
         # DB 캐싱
         await self._cache_to_db(symbol, all_candles, interval)
 
-        # DataFrame 변환
+        # DataFrame 변환 (타임존 정규화 포함)
         df = pd.DataFrame(
             [
                 {
-                    "timestamp": c.timestamp,
+                    "timestamp": normalize_timestamp(c.timestamp),
                     "open": float(c.open),
                     "high": float(c.high),
                     "low": float(c.low),
@@ -431,8 +526,9 @@ class OHLCVDataLoader:
                 for c in all_candles
             ]
         )
+        df = normalize_df_timestamps(df)
 
-        return df
+        return df, api_calls
 
     async def _cache_to_db(
         self,
