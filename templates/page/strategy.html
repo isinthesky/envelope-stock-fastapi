@@ -67,19 +67,28 @@
 
 <section class="strategy-info">
   <h2>전략 개요</h2>
-  <p><strong>MA55/MA165 골든크로스</strong> 발생 후 Stochastic 과매도 구간에서 매수하는 추세추종 전략</p>
+  <p><strong>MA55/MA165 골든크로스</strong> 발생 후 Stochastic 과매도 구간에서 매수하는 중기 추세추종 전략</p>
 
   <div class="strategy-flow">
     <span class="step">MA55 > MA165<br><small>골든크로스</small></span>
     <span class="arrow">→</span>
-    <span class="step">Stoch K < 30<br><small>매수 준비</small></span>
+    <span class="step">K ≥ 50<br><small>GC 활성</small></span>
+    <span class="arrow">→</span>
+    <span class="step">K 30~50<br><small>눌림목 대기</small></span>
+    <span class="arrow">→</span>
+    <span class="step" style="background: rgba(22,163,74,0.2); border: 1px solid #16a34a;">K < 30<br><small>매수 준비</small></span>
     <span class="arrow">→</span>
     <span class="step" style="background: rgba(251,146,60,0.3); border: 1px solid #fb923c;">2개 조건↑<br><small>매수 관심</small></span>
     <span class="arrow">→</span>
-    <span class="step" style="background: rgba(234,179,8,0.3); border: 1px solid #eab308;">3개 조건<br><small>매수 적기</small></span>
-    <span class="arrow">→</span>
-    <span class="step">손절/익절<br><small>청산</small></span>
+    <span class="step" style="background: rgba(234,179,8,0.4); border: 2px solid #eab308;">3개 조건<br><small>매수 적기</small></span>
   </div>
+
+  <p style="margin-top: 16px; font-size: 13px; color: #bae6fd;">
+    <strong>매수 적기 3가지 조건:</strong>
+    ① Stoch K < 30 (과매도)&nbsp;&nbsp;
+    ② MA갭 0~8% (건전한 추세)&nbsp;&nbsp;
+    ③ K > D (모멘텀 전환, 선택적)
+  </p>
 
   <div class="config-grid">
     <div class="config-item">
@@ -87,16 +96,24 @@
       <div class="value">MA55 / MA165</div>
     </div>
     <div class="config-item">
-      <div class="label">매수 준비</div>
-      <div class="value">Stoch K < 30</div>
+      <div class="label">Stochastic</div>
+      <div class="value">K(14), D(3)</div>
     </div>
     <div class="config-item">
-      <div class="label">매수 적기 조건</div>
-      <div class="value">K<30, MA갭≤8%</div>
+      <div class="label">MA갭 허용</div>
+      <div class="value">0% ~ 8%</div>
     </div>
     <div class="config-item">
       <div class="label">손절 / 익절</div>
       <div class="value">-7% / +20%</div>
+    </div>
+    <div class="config-item">
+      <div class="label">트레일링 스탑</div>
+      <div class="value">+15%시 7%</div>
+    </div>
+    <div class="config-item">
+      <div class="label">최대 보유</div>
+      <div class="value">60일</div>
     </div>
   </div>
 </section>
