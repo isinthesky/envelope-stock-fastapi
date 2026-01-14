@@ -1,61 +1,59 @@
-# CLAUDE.md - src 디렉토리 가이드
+# CLAUDE.md - `src/` (소스 루트) 가이드
 
-> 소스 코드 루트: FastAPI 애플리케이션 엔트리포인트와 레이어 진입점
+> FastAPI 애플리케이션 엔트리포인트(`main.py`)와 레이어 진입점(`application/`, `adapters/`, `settings/`)을 포함합니다.
 
-## ✅ 역할
-- FastAPI 앱 생성/라우터 등록 (`main.py`)
-- CORS/예외 핸들러 설정 및 전역 설정 로드
-- 애플리케이션 시작/종료 lifecycle 관리
+## 이 레이어의 역할
+- FastAPI 앱 생성/설정(CORS, OpenAPI 노출 정책, 전역 예외 핸들러)
+- 애플리케이션 라이프사이클(startup/shutdown)에서 인프라/백그라운드 작업 시작/정리
+- 라우터 등록(REST/WS/Page)
 
----
+## 폴더 구조
 
-## 📂 구조
-```
+```text
 src/
-├── main.py                 # FastAPI 앱 생성/라우터 등록/라이프사이클
-├── settings/               # 환경 설정(Pydantic Settings)
-├── adapters/               # DB/Redis/KIS/Telegram/WS 연동
-└── application/            # interface/domain/common 계층
+  main.py          # FastAPI 앱/라이프사이클/라우터 등록
+  settings/        # Pydantic Settings
+  adapters/        # DB/Redis/KIS/Naver/Telegram/WS
+  application/     # interface/domain/common
 ```
 
----
+## `main.py` 실행 흐름(현재 코드 기준)
+- **lifespan(startup)**
+  - DB 연결 점검(`SELECT 1`)
+  - Redis 연결 점검(`ping`)
+  - `settings.auto_reauth`가 true면 KIS 토큰 발급 및 자동갱신 태스크 시작
+  - 전략 엔진/스케줄러/알림/캐시 스케줄러 시작
+    - `domain.strategy.engine`
+    - `domain.strategy.scheduler` (Golden Cross)
+    - `domain.strategy.notification_scheduler` (Telegram)
+    - `domain.ohlcv.scheduler` (OHLCV cache)
+- **라우터 등록**
+  - REST:
+    - `/api/v1/auth` (Auth)
+    - `/api/v1/market` (MarketData)
+    - `/api/v1/accounts` (Account)
+    - `/api/v1/orders` (Order)
+    - `/api/v1/strategies` (Strategy)
+    - `/api/v1/ohlcv` (OHLCV Cache)
+    - `/api/v1/screener` (Screener: 라우터 내부 prefix)
+    - `/api/v1/backtest` (Backtest: 라우터 내부 prefix)
+  - WebSocket: `/ws`
+  - Page(Jinja2): `page_routers` 루프 등록(각 라우터가 자체 prefix 보유)
+- **기본 엔드포인트**
+  - `/` : 간단 상태 요약(dict)
+  - `/health` : 헬스체크 스텁(TODO 존재)
+- **lifespan(shutdown)**
+  - scheduler/task stop → httpx 클라이언트 close → DB/Redis close 순서로 정리
 
-## 🧠 main.py 핵심 흐름
-- Startup
-  - 환경 정보 로그 출력
-  - DB 연결 확인 (`adapters.database.connection.engine`)
-  - Redis 연결 확인 (`adapters.cache.redis_client`)
-  - `auto_reauth` 활성화 시 KIS 토큰 발급 및 갱신 태스크 시작
-  - 레거시 전략 엔진 시작 (`strategy.engine`)
-  - 골든크로스 전략 스케줄러 시작 (`strategy.scheduler`)
-  - Telegram 알림 스케줄러 시작 (`strategy.notification_scheduler`)
-- Router 등록
-  - `/api/v1/auth`, `/api/v1/market`, `/api/v1/accounts`, `/api/v1/orders`, `/api/v1/strategies`
-  - `/api/v1/backtest` (라우터 내부 prefix)
-  - `/ws` (WebSocket)
-  - `/page/*` (대시보드)
-- 기본 엔드포인트
-  - `/` (서비스 상태 요약)
-  - `/health` (헬스체크 스텁)
-- Shutdown
-  - 스케줄러/엔진/토큰 태스크 정리
-  - KIS API HTTP 클라이언트 종료
-  - DB/Redis 연결 종료
+## 구현 규칙
+- `src/main.py`는 **조립/설정/라이프사이클**만 담당하고, 비즈니스 로직을 넣지 않습니다.
+- 라우터/서비스/인프라 코드는 각각:
+  - `application/interface`, `application/domain`, `adapters`로 이동합니다.
 
----
-
-## ✅ 레이어 의존성 규칙
-```
-Interface → Domain → Adapters
-         ↘ Common/Settings
-```
-- `main.py`는 라우터 등록/라이프사이클만 담당합니다.
-- 비즈니스 로직은 `application/domain`에만 위치합니다.
-- 외부 I/O는 `adapters`를 통해서만 수행합니다.
-
----
-
-## 🔗 관련 문서
+## 관련 문서
 - `src/application/CLAUDE.md`
+- `src/application/interface/CLAUDE.md`
+- `src/application/domain/CLAUDE.md`
 - `src/adapters/CLAUDE.md`
 - `src/settings/CLAUDE.md`
+
