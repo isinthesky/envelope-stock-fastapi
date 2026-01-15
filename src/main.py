@@ -208,9 +208,9 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="한국투자증권 Open API 기반 자동매매 서비스",
-    docs_url="/docs" if not settings.is_production else None,
-    redoc_url="/redoc" if not settings.is_production else None,
-    openapi_url="/openapi.json" if not settings.is_production else None,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
     lifespan=lifespan,
 )
 
@@ -222,6 +222,10 @@ app.add_middleware(
     allow_methods=settings.cors_allow_methods,
     allow_headers=settings.cors_allow_headers,
 )
+
+# 접근 로깅 미들웨어 추가 (/page/ 경로 외부 접근 기록)
+from src.application.common.middleware import AccessLoggingMiddleware
+app.add_middleware(AccessLoggingMiddleware)
 
 
 # ==================== Root Endpoint ====================
@@ -268,11 +272,12 @@ async def global_exception_handler(request, exc: Exception) -> JSONResponse:
 
 # ==================== Router 등록 ====================
 
+from src.application.interface.api.access_log_router import router as access_log_router
 from src.application.interface.api.account_router import router as account_router
 from src.application.interface.api.auth_router import router as auth_router
 from src.application.interface.api.backtest_router import router as backtest_router
 from src.application.interface.api.market_data_router import router as market_data_router
-from src.application.interface.api.ohlcv_router import router as ohlcv_router
+# from src.application.interface.api.ohlcv_router import router as ohlcv_router  # TODO: apscheduler 의존성 필요
 from src.application.interface.api.order_router import router as order_router
 from src.application.interface.api.screener_router import router as screener_router
 from src.application.interface.api.strategy_router import router as strategy_router
@@ -284,9 +289,10 @@ app.include_router(market_data_router, prefix="/api/v1/market", tags=["MarketDat
 app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
 app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
 app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
-app.include_router(ohlcv_router, prefix="/api/v1/ohlcv", tags=["OHLCV Cache"])
+# app.include_router(ohlcv_router, prefix="/api/v1/ohlcv", tags=["OHLCV Cache"])  # TODO: apscheduler 의존성 필요
 app.include_router(screener_router)  # 내부 prefix: /api/v1/screener
 app.include_router(backtest_router)  # 내부 prefix: /api/v1/backtest
+app.include_router(access_log_router)  # 내부 prefix: /api/v1/access-logs
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 
 # Page routers (각 라우터는 자체 prefix 포함)
