@@ -77,7 +77,7 @@ class StrategyEngine:
 
     async def _execute_active_strategies(self) -> None:
         """모든 활성 전략 실행"""
-        async for session in get_async_session():
+        async with get_async_session() as session:
             try:
                 strategy_repo = StrategyRepository(session)
                 active_strategies = await strategy_repo.get_active_strategies()

@@ -118,7 +118,7 @@ class StrategyScheduler:
 
         async with self._execution_lock:
             try:
-                async for session in get_async_session():
+                async with get_async_session() as session:
                     strategy_repo = StrategyRepository(session)
                     active_strategies = await strategy_repo.get_active_strategies()
 
@@ -258,7 +258,7 @@ class StrategyScheduler:
     async def _execute_now(self, strategy_id: int, dry_run: bool) -> dict:
         """수동 실행 실제 처리"""
         try:
-            async for session in get_async_session():
+            async with get_async_session() as session:
                 kis_client = get_kis_client()
                 engine = GoldenCrossEngine(session, kis_client)
 

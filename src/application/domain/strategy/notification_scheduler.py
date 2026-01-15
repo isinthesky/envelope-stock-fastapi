@@ -114,7 +114,7 @@ class NotificationScheduler:
             logger.info("[NotificationScheduler] Running buy notification job...")
 
             try:
-                async for session in get_async_session():
+                async with get_async_session() as session:
                     buy_service = BuyStrategyService(session)
 
                     # 골든크로스 스캔 (매수 관심/준비/적기 필터링)
@@ -156,8 +156,6 @@ class NotificationScheduler:
                         )
                         logger.info("[NotificationScheduler] No buy target stocks found, sent empty alert")
 
-                    break  # 세션 한 번만 사용
-
             except Exception as e:
                 logger.error(f"[NotificationScheduler] Buy notification error: {e}")
 
@@ -174,14 +172,14 @@ class NotificationScheduler:
             logger.info("[NotificationScheduler] Running sell notification job...")
 
             try:
-                async for session in get_async_session():
+                async with get_async_session() as session:
                     # 1. 활성 추적 종목 조회 (종목명 포함)
                     history_repo = AnalysisHistoryRepository(session)
                     active_items = await history_repo.get_active_symbols_with_names("sell")
 
                     if not active_items:
                         logger.info("[NotificationScheduler] No active sell tracking items")
-                        break
+                        return
 
                     logger.info(
                         f"[NotificationScheduler] Refreshing {len(active_items)} sell items"
@@ -231,8 +229,6 @@ class NotificationScheduler:
                         )
                     else:
                         logger.info("[NotificationScheduler] No SELL/STRONG_SELL stocks found")
-
-                    break  # 세션 한 번만 사용
 
             except Exception as e:
                 logger.error(f"[NotificationScheduler] Sell notification error: {e}")
