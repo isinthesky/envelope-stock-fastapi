@@ -76,7 +76,7 @@
     <span class="arrow">→</span>
     <span class="step">K 30~50<br><small>눌림목 대기</small></span>
     <span class="arrow">→</span>
-    <span class="step" style="background: rgba(22,163,74,0.2); border: 1px solid #16a34a;">K < 30<br><small>매수 준비</small></span>
+    <span class="step" style="background: rgba(22,163,74,0.2); border: 1px solid #16a34a;">K < 30<br><small>매수 관심</small></span>
     <span class="arrow">→</span>
     <span class="step" style="background: rgba(251,146,60,0.3); border: 1px solid #fb923c;">2개 조건↑<br><small>매수 관심</small></span>
     <span class="arrow">→</span>
@@ -160,7 +160,7 @@
     </div>
     <div class="stat-card">
       <div class="number" id="stat_ready">-</div>
-      <div class="label">매수 준비</div>
+      <div class="label">매수 관심</div>
     </div>
     <div class="stat-card" style="border: 2px solid #eab308;">
       <div class="number" id="stat_optimal" style="color: #854d0e;">-</div>
@@ -175,11 +175,10 @@
   <!-- Golden Cross 스캔 결과 -->
   <div id="gc_scan_container" style="display:none; margin-top: 16px;">
     <div class="tabs">
-      <button class="tab active" onclick="showGcTab('all')">전체</button>
+      <button class="tab active" onclick="showGcTab('BUY_TARGETS')" style="background: #bbf7d0; color: #166534;">매수 대상</button>
       <button class="tab" onclick="showGcTab('OPTIMAL_BUY')" style="background: #fef08a; color: #854d0e;">매수 적기</button>
-      <button class="tab" onclick="showGcTab('READY_TO_BUY')">매수 준비</button>
-      <button class="tab" onclick="showGcTab('WAITING_FOR_PULLBACK')">눌림목 대기</button>
-      <button class="tab" onclick="showGcTab('GC_ACTIVE')">GC 활성</button>
+      <button class="tab" onclick="showGcTab('READY_TO_BUY')">매수 관심</button>
+      <button class="tab" onclick="showGcTab('all')">전체</button>
     </div>
 
     <table class="stock-table">
@@ -671,20 +670,28 @@ const displayGcScanResults = (data) => {
   document.getElementById("stock_list_container").style.display = "none";
   document.getElementById("stats_row").style.display = "flex";
 
+  // 매수 관심/적기 종목만 필터링
+  const buyTargetStates = ['OPTIMAL_BUY', 'BUY_INTEREST', 'READY_TO_BUY'];
+  const buyTargetStocks = gcScanStocks.filter(s => buyTargetStates.includes(s.gc_state));
+
   // 통계 업데이트
   document.getElementById("stat_total").textContent = data.total_scanned;
   document.getElementById("stat_gc").textContent = data.gc_active_count;
   document.getElementById("stat_pullback").textContent = data.pullback_waiting_count;
-  document.getElementById("stat_ready").textContent = data.ready_to_buy_count;
+  document.getElementById("stat_ready").textContent = (data.ready_to_buy_count || 0) + (data.buy_interest_count || 0);
   document.getElementById("stat_optimal").textContent = data.optimal_buy_count || 0;
   document.getElementById("stat_position").textContent = '-';
 
+  // 기본값: 매수 대상 종목만 표시
+  gcFilter = 'BUY_TARGETS';
   renderGcScanTable(gcScanStocks);
 };
 
 // Golden Cross 테이블 렌더링
 const renderGcScanTable = (stocks) => {
+  const buyTargetStates = ['OPTIMAL_BUY', 'BUY_INTEREST', 'READY_TO_BUY'];
   const filtered = gcFilter === 'all' ? stocks :
+    gcFilter === 'BUY_TARGETS' ? stocks.filter(s => buyTargetStates.includes(s.gc_state)) :
     stocks.filter(s => s.gc_state === gcFilter);
 
   const tbody = document.getElementById("gc_scan_table_body");
@@ -739,7 +746,7 @@ const getGcStateLabel = (state) => {
     'NOT_GC': 'GC 비활성',
     'GC_ACTIVE': 'GC 활성',
     'WAITING_FOR_PULLBACK': '눌림목 대기',
-    'READY_TO_BUY': '매수 준비',
+    'READY_TO_BUY': '매수 관심',
     'BUY_INTEREST': '매수 관심',
     'OPTIMAL_BUY': '매수 적기'
   };

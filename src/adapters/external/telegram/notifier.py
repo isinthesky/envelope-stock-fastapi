@@ -137,7 +137,7 @@ class TelegramNotifier:
         state_label = {
             "OPTIMAL_BUY": "매수 적기",
             "BUY_INTEREST": "매수 관심",
-            "READY_TO_BUY": "매수 준비",
+            "READY_TO_BUY": "매수 관심",
         }.get(gc_state, gc_state)
 
         message = f"""🟢 <b>{state_label} 종목 알림</b>
@@ -174,7 +174,7 @@ class TelegramNotifier:
         lines = [
             "🟢 <b>매수 신호 종목 알림</b>",
             f"📅 {now}",
-            f"총 {len(stocks)}개 종목 (매수 적기 {optimal_count}, 매수 관심 {interest_count}, 매수 준비 {ready_count})",
+            f"총 {len(stocks)}개 종목 (매수 적기 {optimal_count}, 매수 관심 {interest_count + ready_count})",
             "",
         ]
 
@@ -182,7 +182,7 @@ class TelegramNotifier:
             state_label = {
                 "OPTIMAL_BUY": "매수 적기",
                 "BUY_INTEREST": "매수 관심",
-                "READY_TO_BUY": "매수 준비",
+                "READY_TO_BUY": "매수 관심",
             }.get(stock.get("gc_state"), stock.get("gc_state", "-"))
             lines.append(
                 f"• <b>{stock['name']}</b> ({stock['symbol']})\n"

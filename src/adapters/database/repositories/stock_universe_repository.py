@@ -38,7 +38,7 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
     async def get_eligible_stocks(
         self,
         market: MarketType | None = None,
-        limit: int = 100,
+        limit: int = 250,
         include_etf: bool = False,
         session: AsyncSession | None = None,
     ) -> Sequence[StockUniverseModel]:

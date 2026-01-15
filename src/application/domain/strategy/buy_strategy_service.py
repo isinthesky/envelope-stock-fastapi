@@ -117,6 +117,7 @@ class BuyStrategyService:
             market=market_type,
             include_etf=include_etf,
             session=session,
+            limit=300,  # 전체 유니버스 스캔
         )
 
         if not stocks:

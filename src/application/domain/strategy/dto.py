@@ -221,7 +221,7 @@ class StockScreenerConfigDTO(BaseDTO):
     )
 
     # 최대 종목 수
-    max_stocks: int = Field(default=100, description="최대 종목 수", ge=10, le=200)
+    max_stocks: int = Field(default=250, description="최대 종목 수", ge=10, le=500)
 
 
 class GoldenCrossConfigDTO(BaseStrategyConfig):
