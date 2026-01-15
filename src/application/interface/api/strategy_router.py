@@ -27,6 +27,7 @@ from src.application.domain.strategy.dto import (
     AnalysisHistoryDTO,
     AnalysisHistoryListDTO,
     AnalysisHistoryRefreshResultDTO,
+    AnalysisHistoryUpdateDTO,
     GoldenCrossConfigDTO,
     GoldenCrossScanListDTO,
     SellSignalAnalysisDTO,
@@ -376,6 +377,27 @@ async def update_analysis_history_active(
     """활성 추적 상태 변경 - @transaction이 세션을 관리"""
     history = await service.set_analysis_history_active(history_id, is_active)
     return ResponseDTO.success_response(history, "Analysis history active status updated")
+
+
+@router.patch(
+    "/analysis-history/{history_id}",
+    response_model=ResponseDTO[AnalysisHistoryDTO],
+    status_code=status.HTTP_200_OK,
+    summary="분석 이력 수정",
+    description="분석 이력의 진입가, 메모 등 수정",
+)
+async def update_analysis_history(
+    history_id: int,
+    request: AnalysisHistoryUpdateDTO,
+    service: StrategyServiceDep,
+) -> ResponseDTO[AnalysisHistoryDTO]:
+    """분석 이력 수정 - @transaction이 세션을 관리"""
+    history = await service.update_analysis_history(
+        history_id=history_id,
+        entry_price=request.entry_price,
+        note=request.note,
+    )
+    return ResponseDTO.success_response(history, "Analysis history updated successfully")
 
 
 @router.delete(

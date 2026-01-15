@@ -223,8 +223,9 @@ class TelegramNotifier:
         symbol: str,
         name: str | None,
         current_price: float,
-        sell_recommendation: str,
-        sell_signal_strength: int,
+        sell_phase: str,
+        sell_phase_name: str,
+        sell_phase_action: str,
         sell_reasons: list[str],
     ) -> bool:
         """
@@ -234,21 +235,23 @@ class TelegramNotifier:
             symbol: 종목코드
             name: 종목명
             current_price: 현재가
-            sell_recommendation: 매도 추천 등급
-            sell_signal_strength: 매도 시그널 강도 (0-5)
+            sell_phase: 매도 Phase (PHASE_1~5)
+            sell_phase_name: Phase 이름
+            sell_phase_action: Phase 권장 행동
             sell_reasons: 매도 근거 리스트
         """
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
         display_name = name or symbol
 
-        # 추천 등급에 따른 이모지
+        # Phase에 따른 이모지
         emoji_map = {
-            "STRONG_SELL": "🔴",
-            "SELL": "🟠",
-            "CONSIDER_SELL": "🟡",
-            "WEAK_SELL": "⚪",
+            "PHASE_5": "🔴",
+            "PHASE_4": "🟠",
+            "PHASE_3": "🟡",
+            "PHASE_2": "🟡",
+            "PHASE_1": "⚪",
         }
-        emoji = emoji_map.get(sell_recommendation, "⚪")
+        emoji = emoji_map.get(sell_phase, "⚪")
 
         reasons_text = "\n".join(f"• {r}" for r in sell_reasons[:5])
 
@@ -258,7 +261,8 @@ class TelegramNotifier:
 
 <b>종목:</b> {display_name} ({symbol})
 <b>현재가:</b> {current_price:,.0f}원
-<b>추천:</b> {sell_recommendation} (강도: {sell_signal_strength})
+<b>Phase:</b> {sell_phase_name}
+<b>권장:</b> {sell_phase_action}
 
 <b>매도 근거:</b>
 {reasons_text}"""
@@ -283,7 +287,7 @@ class TelegramNotifier:
         lines = [f"🔴 <b>매도 권장 종목 알림</b>", f"📅 {now} (KST)", f"총 {len(stocks)}개 종목", ""]
 
         for stock in stocks[:10]:  # 최대 10개
-            emoji = "🔴" if stock.get("sell_recommendation") == "STRONG_SELL" else "🟠"
+            emoji = "🔴" if stock.get("sell_phase") == "PHASE_5" else "🟠"
             name = stock.get("name") or stock.get("symbol")
 
             # Stochastic/RSI 과매수 관련 메시지 필터링
@@ -295,16 +299,19 @@ class TelegramNotifier:
             ]
             reasons_text = ", ".join(filtered_reasons[:3]) if filtered_reasons else ""
 
+            phase_name = stock.get("sell_phase_name", "")
+            phase_action = stock.get("sell_phase_action", "")
+
             if reasons_text:
                 lines.append(
                     f"{emoji} <b>{name}</b> ({stock['symbol']})\n"
-                    f"  {stock['sell_recommendation']} (강도: {stock.get('sell_signal_strength', 0)})\n"
+                    f"  {phase_name} - {phase_action}\n"
                     f"  💡 {reasons_text}"
                 )
             else:
                 lines.append(
                     f"{emoji} <b>{name}</b> ({stock['symbol']})\n"
-                    f"  {stock['sell_recommendation']} (강도: {stock.get('sell_signal_strength', 0)})"
+                    f"  {phase_name} - {phase_action}"
                 )
 
         if len(stocks) > 10:

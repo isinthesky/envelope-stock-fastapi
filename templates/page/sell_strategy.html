@@ -86,12 +86,35 @@
 .history-table tr.selected { background: #eff6ff; }
 .btn-delete { background: #fecaca; color: #991b1b; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .btn-delete:hover { background: #fca5a5; }
+.btn-edit { background: #e0f2fe; color: #0369a1; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-right: 4px; }
+.btn-edit:hover { background: #bae6fd; }
 .btn-refresh { background: #dbeafe; color: #1e40af; }
 .btn-refresh:hover { background: #bfdbfe; }
 .active-toggle { cursor: pointer; }
 .active-toggle.active { color: #16a34a; }
 .active-toggle.inactive { color: #9ca3af; }
 .loading { opacity: 0.6; pointer-events: none; }
+
+/* Modal 스타일 */
+.modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+.modal-overlay.show { display: flex; }
+.modal-content { background: white; border-radius: 12px; padding: 24px; min-width: 400px; max-width: 500px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.modal-header h3 { margin: 0; color: #1e293b; }
+.modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: #64748b; }
+.modal-close:hover { color: #1e293b; }
+.modal-body { margin-bottom: 20px; }
+.modal-body .form-group { margin-bottom: 16px; }
+.modal-body label { display: block; font-size: 13px; color: #64748b; margin-bottom: 6px; }
+.modal-body input, .modal-body textarea { width: 100%; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 14px; }
+.modal-body input:focus, .modal-body textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.modal-footer button { padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; }
+.btn-cancel { background: #f1f5f9; color: #64748b; border: none; }
+.btn-cancel:hover { background: #e2e8f0; }
+.btn-save { background: #3b82f6; color: white; border: none; }
+.btn-save:hover { background: #2563eb; }
+.entry-price-badge { background: #dcfce7; color: #166534; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 4px; }
 {% endblock %}
 
 {% block content %}
@@ -153,20 +176,52 @@
         <th>종목코드</th>
         <th>종목명</th>
         <th>현재가</th>
-        <th>추천</th>
         <th>Phase</th>
-        <th>강도</th>
         <th>Stoch K</th>
         <th>RSI</th>
         <th>분석시간</th>
-        <th style="width: 60px;"></th>
+        <th style="width: 100px;"></th>
       </tr>
     </thead>
     <tbody id="history_body">
-      <tr><td colspan="11" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
+      <tr><td colspan="9" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
     </tbody>
   </table>
 </section>
+
+<!-- 수정 Modal -->
+<div id="edit_modal" class="modal-overlay" onclick="closeEditModal(event)">
+  <div class="modal-content" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 id="modal_title">분석 이력 수정</h3>
+      <button class="modal-close" onclick="closeEditModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="edit_history_id" />
+      <div class="form-group">
+        <label>종목</label>
+        <input type="text" id="edit_symbol_display" disabled style="background: #f8fafc;" />
+      </div>
+      <div class="form-group">
+        <label>현재가</label>
+        <input type="text" id="edit_current_price" disabled style="background: #f8fafc;" />
+      </div>
+      <div class="form-group">
+        <label>진입가 (매수가)</label>
+        <input type="number" id="edit_entry_price" placeholder="예: 50000" step="1" />
+        <p style="font-size: 11px; color: #64748b; margin-top: 4px;">수익률 기반 동적 임계값 적용에 사용됩니다.</p>
+      </div>
+      <div class="form-group">
+        <label>메모</label>
+        <textarea id="edit_note" rows="3" placeholder="분석 관련 메모..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeEditModal()">취소</button>
+      <button class="btn-save" onclick="saveHistoryEdit()">저장</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -193,34 +248,22 @@ const formatPercent = (ratio) => {
   return (ratio * 100).toFixed(2) + '%';
 };
 
-const getRecommendationLabel = (rec) => {
-  const labels = {
-    'HOLD': '보유 유지',
-    'WATCH': '관망',
-    'WEAK_SELL': '약한 매도',
-    'CONSIDER_SELL': '매도 고려',
-    'SELL': '매도 권장',
-    'STRONG_SELL': '강력 매도'
+// Phase 이름에 번호 추가
+const getPhaseDisplayName = (phase, phaseName) => {
+  const phaseNumbers = {
+    'PHASE_1': 1, 'PHASE_2': 2, 'PHASE_3': 3, 'PHASE_4': 4, 'PHASE_5': 5
   };
-  return labels[rec] || rec;
-};
-
-const getPhaseLabel = (phase) => {
-  const labels = {
-    'NONE': '-',
-    'PHASE_1': 'P1',
-    'PHASE_2': 'P2',
-    'PHASE_3': 'P3',
-    'PHASE_4': 'P4',
-    'PHASE_5': 'P5'
-  };
-  return labels[phase] || phase;
+  const num = phaseNumbers[phase];
+  if (num) {
+    return `${phaseName}(${num})`;
+  }
+  return phaseName || '보유 유지';
 };
 
 // 페이지 로드 시 히스토리 조회
 const loadHistory = async () => {
   try {
-    const response = await fetch('/api/v1/strategies/analysis-history?analysis_type=sell&limit=50');
+    const response = await fetch('/api/v1/strategies/analysis-history?analysis_type=sell&limit=100');
     const data = await response.json();
 
     if (data.success && data.data) {
@@ -286,8 +329,7 @@ const saveToHistory = async (data) => {
       is_death_cross: data.is_death_cross,
       is_stoch_overbought: data.is_stoch_overbought,
       is_rsi_overbought: data.is_rsi_overbought,
-      sell_signal_strength: data.sell_signal_strength,
-      sell_recommendation: data.sell_recommendation,
+      sell_phase: data.sell_phase,
       sell_reasons: data.sell_reasons,
       is_active: true
     };
@@ -417,8 +459,6 @@ const showHistoryDetail = (id) => {
 const displayResult = (data) => {
   document.getElementById("result_section").style.display = "block";
 
-  const strengthClass = `bar-${data.sell_signal_strength}`;
-  const recClass = `recommendation-${data.sell_recommendation}`;
   const phaseClass = `phase-${data.sell_phase || 'NONE'}`;
 
   const stochStatus = data.is_stoch_overbought ? 'status-danger' : 'status-safe';
@@ -494,8 +534,7 @@ const displayResult = (data) => {
       <div class="result-header">
         <h3>${data.symbol} ${data.name || ''}</h3>
         <div>
-          <span class="recommendation-badge ${recClass}">${getRecommendationLabel(data.sell_recommendation)}</span>
-          ${data.sell_phase && data.sell_phase !== 'NONE' ? `<span class="phase-badge ${phaseClass}">${data.sell_phase_name || data.sell_phase}</span>` : ''}
+          <span class="phase-badge ${phaseClass}">${getPhaseDisplayName(data.sell_phase, data.sell_phase_name)}</span>
         </div>
       </div>
 
@@ -543,23 +582,6 @@ const displayResult = (data) => {
         ${trailingStopHtml}
       </div>
 
-      <div class="signal-strength">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-          <span style="font-weight: 600;">매도 시그널 강도</span>
-          <span style="font-weight: 700; color: #dc2626;">${data.sell_signal_strength} / 5</span>
-        </div>
-        <div class="bar-container">
-          <div class="bar ${strengthClass}"></div>
-        </div>
-        <div class="labels">
-          <span>보유</span>
-          <span>관망</span>
-          <span>약한매도</span>
-          <span>매도고려</span>
-          <span>매도권장</span>
-          <span>강력매도</span>
-        </div>
-      </div>
 
       ${sellReasons.length > 0 ? `
       <div class="reasons-list">
@@ -584,31 +606,31 @@ const renderHistoryTable = () => {
   const tbody = document.getElementById("history_body");
 
   if (analysisHistory.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
     return;
   }
 
   tbody.innerHTML = analysisHistory.map(item => {
-    const recClass = `recommendation-${item.sell_recommendation}`;
     const phaseClass = `phase-${item.sell_phase || 'NONE'}`;
     const activeIcon = item.is_active ? '●' : '○';
     const activeClass = item.is_active ? 'active' : 'inactive';
     const selectedClass = item.id === selectedHistoryId ? 'selected' : '';
 
+    const entryPriceBadge = item.entry_price ? `<span class="entry-price-badge">진입가: ${formatNumber(item.entry_price)}</span>` : '';
+
     return `<tr class="${selectedClass}" onclick="showHistoryDetail(${item.id})">
       <td>
         <span class="active-toggle ${activeClass}" onclick="toggleActive(${item.id}, event)" title="${item.is_active ? '활성 추적 중' : '추적 중지됨'}">${activeIcon}</span>
       </td>
-      <td><strong>${item.symbol}</strong></td>
+      <td><strong>${item.symbol}</strong>${entryPriceBadge}</td>
       <td>${item.name || '-'}</td>
       <td>${formatNumber(item.current_price)}</td>
-      <td><span class="recommendation-badge ${recClass}" style="font-size: 11px; padding: 4px 8px;">${getRecommendationLabel(item.sell_recommendation)}</span></td>
-      <td><span class="phase-badge ${phaseClass}" style="font-size: 10px; padding: 2px 6px;">${getPhaseLabel(item.sell_phase)}</span></td>
-      <td>${item.sell_signal_strength}/5</td>
+      <td><span class="phase-badge ${phaseClass}" style="font-size: 11px; padding: 4px 8px;">${getPhaseDisplayName(item.sell_phase, item.sell_phase_name)}</span></td>
       <td>${Number(item.stoch_k).toFixed(1)}</td>
       <td>${Number(item.rsi).toFixed(1)}</td>
       <td>${formatTime(item.analyzed_at)}</td>
       <td>
+        <button class="btn-edit" onclick="openEditModal(${item.id}, event)">수정</button>
         <button class="btn-delete" onclick="deleteHistory(${item.id}, event)">삭제</button>
       </td>
     </tr>`;
@@ -621,5 +643,76 @@ document.addEventListener('DOMContentLoaded', loadHistory);
 // Enter 키로 분석 실행
 document.getElementById("symbol_input").addEventListener("keypress", (e) => {
   if (e.key === "Enter") analyzeSellSignal();
+});
+
+// ==================== Modal 관련 함수 ====================
+
+// Modal 열기
+const openEditModal = (id, event) => {
+  event.stopPropagation();
+  const item = analysisHistory.find(h => h.id === id);
+  if (!item) return;
+
+  document.getElementById("edit_history_id").value = id;
+  document.getElementById("edit_symbol_display").value = `${item.symbol} - ${item.name || ''}`;
+  document.getElementById("edit_current_price").value = formatNumber(item.current_price);
+  document.getElementById("edit_entry_price").value = item.entry_price || '';
+  document.getElementById("edit_note").value = item.note || '';
+  document.getElementById("modal_title").textContent = `${item.symbol} 수정`;
+
+  document.getElementById("edit_modal").classList.add("show");
+};
+
+// Modal 닫기
+const closeEditModal = (event) => {
+  if (event && event.target !== event.currentTarget) return;
+  document.getElementById("edit_modal").classList.remove("show");
+};
+
+// 수정 저장
+const saveHistoryEdit = async () => {
+  const historyId = document.getElementById("edit_history_id").value;
+  const entryPrice = document.getElementById("edit_entry_price").value;
+  const note = document.getElementById("edit_note").value;
+
+  const payload = {};
+  if (entryPrice) {
+    payload.entry_price = parseFloat(entryPrice);
+  }
+  if (note !== null) {
+    payload.note = note || null;
+  }
+
+  try {
+    const response = await fetch(`/api/v1/strategies/analysis-history/${historyId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await response.json();
+    if (result.success && result.data) {
+      // 목록 업데이트
+      const idx = analysisHistory.findIndex(h => h.id == historyId);
+      if (idx >= 0) {
+        analysisHistory[idx] = result.data;
+        renderHistoryTable();
+      }
+      closeEditModal();
+      alert('수정되었습니다.');
+    } else {
+      alert('수정 실패: ' + (result.error || result.detail || '알 수 없는 오류'));
+    }
+  } catch (e) {
+    console.error('Failed to update history:', e);
+    alert('수정 실패');
+  }
+};
+
+// ESC 키로 Modal 닫기
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeEditModal();
+  }
 });
 {% endblock %}

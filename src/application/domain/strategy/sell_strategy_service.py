@@ -168,8 +168,8 @@ class SellStrategyService:
             rsi=rsi,
         )
 
-        # 8. 매도 근거 수집 및 점수 계산
-        sell_reasons, sell_score = self._calculate_sell_score(
+        # 8. 매도 근거 수집
+        sell_reasons = self._collect_sell_reasons(
             is_death_cross=is_death_cross,
             is_stoch_overbought=is_stoch_overbought,
             is_rsi_overbought=is_rsi_overbought,
@@ -183,17 +183,10 @@ class SellStrategyService:
             profit_ratio=profit_ratio,
             is_stop_loss_triggered=is_stop_loss_triggered,
             is_take_profit_triggered=is_take_profit_triggered,
-            sell_phase=sell_phase,
         )
 
         # Phase 근거 추가
         sell_reasons.extend(phase_reasons)
-
-        # 점수를 0-5 범위로 제한
-        sell_signal_strength = min(5, sell_score)
-
-        # 추천 등급 결정
-        sell_recommendation = self._get_recommendation(sell_signal_strength)
 
         if not sell_reasons:
             sell_reasons.append("현재 매도 시그널 없음 - 보유 유지")
@@ -207,8 +200,8 @@ class SellStrategyService:
         phase_info = SELL_PHASE_INFO.get(sell_phase.value, SELL_PHASE_INFO["NONE"])
 
         logger.info(
-            f"[Sell Signal] {symbol}: phase={sell_phase.value}, strength={sell_signal_strength}, "
-            f"recommendation={sell_recommendation}, profit_ratio={profit_ratio}"
+            f"[Sell Signal] {symbol}: phase={sell_phase.value}, "
+            f"phase_name={phase_info['name']}, profit_ratio={profit_ratio}"
         )
 
         return SellSignalAnalysisDTO(
@@ -226,13 +219,11 @@ class SellStrategyService:
             is_stoch_overbought=is_stoch_overbought,
             rsi=round(rsi, 2),
             is_rsi_overbought=is_rsi_overbought,
-            sell_signal_strength=sell_signal_strength,
-            sell_recommendation=sell_recommendation,
-            sell_reasons=sell_reasons,
-            # Phase 관련
+            # Phase 기반 매도 시그널
             sell_phase=sell_phase.value,
             sell_phase_name=phase_info["name"],
             sell_phase_action=phase_info["action"],
+            sell_reasons=sell_reasons,
             # 수익률 관련
             entry_price=Decimal(str(entry_price)) if entry_price else None,
             profit_ratio=round(profit_ratio, 4) if profit_ratio is not None else None,
@@ -325,7 +316,7 @@ class SellStrategyService:
 
         return SellPhaseEnum.NONE, reasons
 
-    def _calculate_sell_score(
+    def _collect_sell_reasons(
         self,
         is_death_cross: bool,
         is_stoch_overbought: bool,
@@ -340,58 +331,35 @@ class SellStrategyService:
         profit_ratio: float | None = None,
         is_stop_loss_triggered: bool = False,
         is_take_profit_triggered: bool = False,
-        sell_phase: SellPhaseEnum = SellPhaseEnum.NONE,
-    ) -> tuple[list[str], int]:
+    ) -> list[str]:
         """
-        매도 점수 및 근거 계산
+        매도 근거 수집
 
         Returns:
-            tuple[list[str], int]: (매도 근거 리스트, 매도 점수)
+            list[str]: 매도 근거 리스트
         """
         sell_reasons: list[str] = []
-        sell_score = 0
 
         # 긴급 손절 (최우선)
-        if is_stop_loss_triggered:
+        if is_stop_loss_triggered and profit_ratio is not None:
             sell_reasons.append(f"손절 라인 도달 (수익률 {profit_ratio * 100:.1f}% <= -7%)")
-            return sell_reasons, 5  # 강력 매도
+            return sell_reasons
 
-        # Phase 기반 점수
-        phase_scores = {
-            SellPhaseEnum.PHASE_1: 2,
-            SellPhaseEnum.PHASE_2: 3,
-            SellPhaseEnum.PHASE_3: 3,
-            SellPhaseEnum.PHASE_4: 4,
-            SellPhaseEnum.PHASE_5: 5,
-        }
-        if sell_phase in phase_scores:
-            sell_score = phase_scores[sell_phase]
-
-        # 데드크로스 (강력 매도 시그널)
+        # 데드크로스
         if is_death_cross:
             sell_reasons.append(f"데드크로스 발생 (MA55 {ma_short:,.0f} < MA165 {ma_long:,.0f})")
-            if sell_phase == SellPhaseEnum.NONE:
-                sell_score += 2
 
         # Stochastic 과매수
         if is_stoch_overbought:
             sell_reasons.append(f"Stochastic 과매수 (K={stoch_k:.1f} > {stoch_overbought})")
-            if sell_phase == SellPhaseEnum.NONE:
-                sell_score += 1
             if stoch_k > 80:
                 sell_reasons.append("Stochastic 극단적 과매수 (K > 80)")
-                if sell_phase == SellPhaseEnum.NONE:
-                    sell_score += 1
 
         # RSI 과매수
         if is_rsi_overbought:
             sell_reasons.append(f"RSI 과매수 (RSI={rsi:.1f} > {rsi_overbought})")
-            if sell_phase == SellPhaseEnum.NONE:
-                sell_score += 1
             if rsi > 80:
                 sell_reasons.append("RSI 극단적 과매수 (RSI > 80)")
-                if sell_phase == SellPhaseEnum.NONE:
-                    sell_score += 1
 
         # Stochastic + RSI 동시 과매수
         if is_stoch_overbought and is_rsi_overbought:
@@ -400,8 +368,6 @@ class SellStrategyService:
         # MA 갭이 너무 벌어진 경우 (과열)
         if ma_gap_ratio > 20:
             sell_reasons.append(f"MA 갭 과대 ({ma_gap_ratio:.1f}%) - 평균 회귀 예상")
-            if sell_phase == SellPhaseEnum.NONE:
-                sell_score += 1
 
         # 수익률 관련 정보
         if profit_ratio is not None:
@@ -413,17 +379,4 @@ class SellStrategyService:
             else:
                 sell_reasons.append(f"현재 손실률: {profit_pct:.1f}%")
 
-        return sell_reasons, sell_score
-
-    @staticmethod
-    def _get_recommendation(sell_signal_strength: int) -> str:
-        """매도 추천 등급 결정"""
-        recommendation_map = {
-            0: "HOLD",
-            1: "WATCH",
-            2: "WEAK_SELL",
-            3: "CONSIDER_SELL",
-            4: "SELL",
-            5: "STRONG_SELL",
-        }
-        return recommendation_map.get(sell_signal_strength, "HOLD")
+        return sell_reasons

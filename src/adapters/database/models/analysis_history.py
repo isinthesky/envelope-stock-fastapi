@@ -100,12 +100,8 @@ class AnalysisHistoryModel(Base, BaseModel):
         Boolean, nullable=True, comment="RSI 과매수 여부"
     )
 
-    sell_signal_strength: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="매도 시그널 강도 (0-5)"
-    )
-
-    sell_recommendation: Mapped[str | None] = mapped_column(
-        String(20), nullable=True, comment="매도 추천 (HOLD, WATCH, WEAK_SELL, CONSIDER_SELL, SELL, STRONG_SELL)"
+    sell_phase: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, comment="매도 Phase (NONE, PHASE_1~5)"
     )
 
     sell_reasons: Mapped[str | None] = mapped_column(
@@ -115,6 +111,10 @@ class AnalysisHistoryModel(Base, BaseModel):
     # ==================== 메타데이터 ====================
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, comment="분석 시각"
+    )
+
+    entry_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 2), nullable=True, comment="진입가 (수익률 계산용)"
     )
 
     note: Mapped[str | None] = mapped_column(

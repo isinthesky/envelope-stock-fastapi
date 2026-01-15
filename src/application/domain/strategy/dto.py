@@ -591,20 +591,11 @@ class SellSignalAnalysisDTO(BaseDTO):
     rsi: float = Field(description="RSI (14일)")
     is_rsi_overbought: bool = Field(description="RSI 과매수 (RSI > 70)")
 
-    # 종합 매도 시그널
-    sell_signal_strength: int = Field(
-        description="매도 시그널 강도 (0-5): "
-        "0=보유, 1=관망, 2=약한매도, 3=매도고려, 4=매도권장, 5=강력매도"
-    )
-    sell_recommendation: str = Field(
-        description="매도 추천 (HOLD, WATCH, WEAK_SELL, CONSIDER_SELL, SELL, STRONG_SELL)"
-    )
-    sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
-
-    # Phase 관련 (선제적 매도 시그널)
+    # 매도 시그널 (Phase 기반)
     sell_phase: str = Field(default="NONE", description="매도 Phase (NONE~PHASE_5)")
     sell_phase_name: str = Field(default="보유 유지", description="Phase 이름")
     sell_phase_action: str = Field(default="현 상태 유지", description="Phase 권장 행동")
+    sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
 
     # 수익률 관련 (entry_price 제공 시)
     entry_price: Decimal | None = Field(default=None, description="진입가")
@@ -661,12 +652,14 @@ class AnalysisHistoryDTO(BaseDTO):
     is_death_cross: bool | None = Field(default=None, description="데드크로스 여부")
     is_stoch_overbought: bool | None = Field(default=None, description="Stochastic 과매수 여부")
     is_rsi_overbought: bool | None = Field(default=None, description="RSI 과매수 여부")
-    sell_signal_strength: int | None = Field(default=None, description="매도 시그널 강도 (0-5)")
-    sell_recommendation: str | None = Field(default=None, description="매도 추천")
+    sell_phase: str | None = Field(default=None, description="매도 Phase (NONE~PHASE_5)")
+    sell_phase_name: str | None = Field(default=None, description="Phase 이름")
+    sell_phase_action: str | None = Field(default=None, description="Phase 권장 행동")
     sell_reasons: list[str] | None = Field(default=None, description="매도 근거")
 
     # 메타데이터
     analyzed_at: datetime = Field(description="분석 시각")
+    entry_price: Decimal | None = Field(default=None, description="진입가 (수익률 계산용)")
     note: str | None = Field(default=None, description="사용자 메모")
     is_active: bool = Field(description="활성 추적 여부")
     candle_count: int | None = Field(default=None, description="분석에 사용된 캔들 수")
@@ -705,14 +698,21 @@ class AnalysisHistoryCreateDTO(BaseDTO):
     is_death_cross: bool | None = Field(default=None, description="데드크로스 여부")
     is_stoch_overbought: bool | None = Field(default=None, description="Stochastic 과매수 여부")
     is_rsi_overbought: bool | None = Field(default=None, description="RSI 과매수 여부")
-    sell_signal_strength: int | None = Field(default=None, description="매도 시그널 강도")
-    sell_recommendation: str | None = Field(default=None, description="매도 추천")
+    sell_phase: str | None = Field(default=None, description="매도 Phase (NONE~PHASE_5)")
     sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
 
     # 메타데이터 (analyzed_at은 서버에서 자동 설정)
+    entry_price: Decimal | None = Field(default=None, description="진입가 (수익률 계산용)")
     note: str | None = Field(default=None, description="사용자 메모")
     is_active: bool = Field(default=True, description="활성 추적 여부")
     candle_count: int | None = Field(default=None, description="분석에 사용된 캔들 수")
+
+
+class AnalysisHistoryUpdateDTO(BaseDTO):
+    """분석 이력 업데이트 요청 DTO"""
+
+    entry_price: Decimal | None = Field(default=None, description="진입가 (수익률 계산용)")
+    note: str | None = Field(default=None, description="사용자 메모")
 
 
 class AnalysisHistoryRefreshResultDTO(BaseDTO):

@@ -115,7 +115,7 @@ class NotificationScheduler:
 
             try:
                 async with get_async_session() as session:
-                    buy_service = BuyStrategyService(session)
+                    buy_service = BuyStrategyService(session=session)
 
                     # 골든크로스 스캔 (매수 관심/준비/적기 필터링)
                     scan_result = await buy_service.scan_golden_cross_candidates(
@@ -199,16 +199,17 @@ class NotificationScheduler:
                         try:
                             result = await sell_service.analyze_sell_signal(symbol)
 
-                            # SELL 또는 STRONG_SELL인 경우 알림 대상
-                            if result.sell_recommendation in ["SELL", "STRONG_SELL"]:
+                            # PHASE_4 (매도 권장) 또는 PHASE_5 (강력 매도)인 경우 알림 대상
+                            if result.sell_phase in ["PHASE_4", "PHASE_5"]:
                                 # 종목명: 분석 결과에 있으면 사용, 없으면 DB에서 조회한 이름 사용
                                 stock_name = result.name or symbol_name_map.get(symbol)
                                 sell_alerts.append({
                                     "symbol": result.symbol,
                                     "name": stock_name,
                                     "current_price": float(result.current_price),
-                                    "sell_recommendation": result.sell_recommendation,
-                                    "sell_signal_strength": result.sell_signal_strength,
+                                    "sell_phase": result.sell_phase,
+                                    "sell_phase_name": result.sell_phase_name,
+                                    "sell_phase_action": result.sell_phase_action,
                                     "sell_reasons": result.sell_reasons,
                                 })
 
@@ -228,7 +229,7 @@ class NotificationScheduler:
                             f"[NotificationScheduler] Sent sell notification for {len(sell_alerts)} stocks"
                         )
                     else:
-                        logger.info("[NotificationScheduler] No SELL/STRONG_SELL stocks found")
+                        logger.info("[NotificationScheduler] No PHASE_4/PHASE_5 stocks found")
 
             except Exception as e:
                 logger.error(f"[NotificationScheduler] Sell notification error: {e}")

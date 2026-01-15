@@ -13,6 +13,7 @@ Strategy Service - 전략 관리 서비스
 
 import json
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,7 @@ from src.application.domain.strategy.dto import (
     AnalysisHistoryRefreshResultDTO,
     GoldenCrossConfigDTO,
     GoldenCrossScanListDTO,
+    SELL_PHASE_INFO,
     SellSignalAnalysisDTO,
     SignalListDTO,
     SignalStatisticsDTO,
@@ -598,7 +600,7 @@ class StrategyService:
         """
         from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
 
-        buy_service = BuyStrategyService(session)
+        buy_service = BuyStrategyService(session=session)
         return await buy_service.scan_golden_cross_candidates(
             market=market,
             stoch_threshold=stoch_threshold,
@@ -672,8 +674,7 @@ class StrategyService:
             is_death_cross=dto.is_death_cross,
             is_stoch_overbought=dto.is_stoch_overbought,
             is_rsi_overbought=dto.is_rsi_overbought,
-            sell_signal_strength=dto.sell_signal_strength,
-            sell_recommendation=dto.sell_recommendation,
+            sell_phase=dto.sell_phase,
             sell_reasons=sell_reasons_json,
             analyzed_at=datetime.now(),
             is_active=dto.is_active if dto.is_active is not None else True,
@@ -738,6 +739,36 @@ class StrategyService:
         updated = await history_repo.set_active(history_id, is_active, session=session)
         if not updated:
             raise NotFoundError(f"Analysis history not found: {history_id}")
+        return self._history_to_dto(updated)
+
+    @transaction
+    async def update_analysis_history(
+        self,
+        session: AsyncSession,
+        history_id: int,
+        entry_price: Decimal | None = None,
+        note: str | None = None,
+    ) -> AnalysisHistoryDTO:
+        """분석 이력 업데이트 (진입가, 메모)"""
+        history_repo = self._get_analysis_repo(session)
+
+        # 기존 레코드 확인
+        existing = await history_repo.get_by_id(history_id, session=session)
+        if not existing:
+            raise NotFoundError(f"Analysis history not found: {history_id}")
+
+        # 업데이트할 필드 준비
+        update_kwargs = {}
+        if entry_price is not None:
+            update_kwargs["entry_price"] = entry_price
+        if note is not None:
+            update_kwargs["note"] = note
+
+        if update_kwargs:
+            await history_repo.update_by_id(history_id, session=session, **update_kwargs)
+
+        # 업데이트된 레코드 반환
+        updated = await history_repo.get_by_id(history_id, session=session)
         return self._history_to_dto(updated)
 
     def _get_analysis_repo(self, session: AsyncSession):
@@ -819,8 +850,7 @@ class StrategyService:
                             "is_death_cross": sell_result.is_death_cross,
                             "is_stoch_overbought": sell_result.is_stoch_overbought,
                             "is_rsi_overbought": sell_result.is_rsi_overbought,
-                            "sell_signal_strength": sell_result.sell_signal_strength,
-                            "sell_recommendation": sell_result.sell_recommendation,
+                            "sell_phase": sell_result.sell_phase,
                             "sell_reasons": sell_reasons_json,
                             "analyzed_at": datetime.now(),
                         }
@@ -836,7 +866,7 @@ class StrategyService:
                     from src.application.domain.strategy.buy_strategy_service import (
                         BuyStrategyService,
                     )
-                    buy_service = BuyStrategyService(session)
+                    buy_service = BuyStrategyService(session=session)
                     # 단일 종목만 스캔 (force_refresh=True로 최신 데이터 요청)
                     scan_result = await buy_service.scan_symbols(
                         symbols=[{"symbol": symbol, "name": stock_name or symbol}],
@@ -885,6 +915,10 @@ class StrategyService:
             except (json.JSONDecodeError, TypeError):
                 sell_reasons = [model.sell_reasons] if model.sell_reasons else None
 
+        # Phase 정보 조회
+        sell_phase = model.sell_phase or "NONE"
+        phase_info = SELL_PHASE_INFO.get(sell_phase, SELL_PHASE_INFO["NONE"])
+
         return AnalysisHistoryDTO(
             id=model.id,
             analysis_type=model.analysis_type,
@@ -902,10 +936,12 @@ class StrategyService:
             is_death_cross=model.is_death_cross,
             is_stoch_overbought=model.is_stoch_overbought,
             is_rsi_overbought=model.is_rsi_overbought,
-            sell_signal_strength=model.sell_signal_strength,
-            sell_recommendation=model.sell_recommendation,
+            sell_phase=sell_phase,
+            sell_phase_name=phase_info["name"],
+            sell_phase_action=phase_info["action"],
             sell_reasons=sell_reasons,
             analyzed_at=model.analyzed_at,
+            entry_price=model.entry_price,
             note=model.note,
             is_active=model.is_active,
             created_at=model.created_at,
