@@ -3,6 +3,7 @@
 Database Connection - SQLAlchemy Async Engine 및 Session 관리
 """
 
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
@@ -76,9 +77,12 @@ async def get_db() -> AsyncIterator[AsyncSession]:
             await session.close()
 
 
+@asynccontextmanager
 async def get_async_session() -> AsyncIterator[AsyncSession]:
     """
     백그라운드 태스크에서 사용할 Database Session
+
+    async with get_async_session() as session: 형태로 사용
 
     Yields:
         AsyncSession: 비동기 데이터베이스 세션
