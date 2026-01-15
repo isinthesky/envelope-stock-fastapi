@@ -210,6 +210,16 @@ class Settings(BaseSettings):
     telegram_chat_id: str = Field(default="", description="Telegram Chat ID")
     telegram_enabled: bool = Field(default=False, description="Telegram 알림 활성화")
 
+    # ==================== DART API 설정 ====================
+    dart_open_api_key: str = Field(default="", description="DART Open API 키")
+    dart_api_base_url: str = Field(
+        default="https://opendart.fss.or.kr", description="DART API Base URL"
+    )
+    dart_api_rate_limit: int = Field(
+        default=10000, ge=1, description="DART API 일일 호출 제한"
+    )
+    dart_api_timeout: int = Field(default=30, ge=1, description="DART API 타임아웃 (초)")
+
     # ==================== Computed Properties ====================
 
     @property

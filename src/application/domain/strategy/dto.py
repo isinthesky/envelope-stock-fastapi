@@ -502,6 +502,16 @@ class GoldenCrossScanItemDTO(BaseDTO):
     market_cap: Decimal | None = Field(default=None, description="시가총액")
     screening_score: Decimal | None = Field(default=None, description="스크리닝 점수")
 
+    # 재무 필터 (2차 필터) - DART API에서 조회
+    financial_filter_status: str | None = Field(
+        default=None,
+        description="재무 필터 상태 (PASS, FAIL, TURNAROUND, PENDING, ERROR)"
+    )
+    revenue_yoy: float | None = Field(default=None, description="매출 YoY 증가율 (%)")
+    operating_margin: float | None = Field(default=None, description="영업이익률 (%)")
+    is_consecutive_profit: bool | None = Field(default=None, description="2년 연속 흑자 여부")
+    is_turnaround: bool | None = Field(default=None, description="적자→흑자 전환 여부")
+
 
 class GoldenCrossScanListDTO(BaseDTO):
     """골든크로스 스캔 결과 목록 DTO"""
@@ -515,6 +525,13 @@ class GoldenCrossScanListDTO(BaseDTO):
     optimal_buy_count: int = Field(default=0, description="매수 적기 종목 수")
     scan_time: datetime = Field(description="스캔 시각")
     errors: list[str] = Field(default_factory=list, description="오류 메시지")
+
+    # 재무 필터 통계
+    financial_pass_count: int = Field(default=0, description="재무 필터 통과 종목 수")
+    financial_fail_count: int = Field(default=0, description="재무 필터 미통과 종목 수 (조건 불충족)")
+    financial_error_count: int = Field(default=0, description="재무 필터 오류 종목 수 (조회 실패/데이터 없음)")
+    turnaround_count: int = Field(default=0, description="턴어라운드(적자→흑자) 종목 수")
+    financial_pending_count: int = Field(default=0, description="재무 필터 미조회 종목 수")
 
 
 # ==================== Execute Request/Response DTOs ====================

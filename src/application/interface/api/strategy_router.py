@@ -196,6 +196,47 @@ async def scan_golden_cross_symbols(
     return ResponseDTO.success_response(result, "Golden cross scan completed")
 
 
+@router.post(
+    "/universe/financial-filter",
+    response_model=ResponseDTO[GoldenCrossScanListDTO],
+    status_code=status.HTTP_200_OK,
+    summary="재무 필터 적용 (2차 필터)",
+    description="골든크로스 스캔 결과에 DART 재무제표 기반 필터 적용",
+)
+async def apply_financial_filter(
+    scan_result: GoldenCrossScanListDTO,
+    buy_service: BuyStrategyServiceDep,
+    target_states: list[str] | None = Query(
+        default=None,
+        description="필터 적용 대상 상태 (기본: OPTIMAL_BUY, BUY_INTEREST, READY_TO_BUY)"
+    ),
+) -> ResponseDTO[GoldenCrossScanListDTO]:
+    """
+    재무 필터 적용 (2차 필터) - DART API 기반
+
+    골든크로스 스캔 결과에 대해 재무제표 데이터를 조회하여 필터링합니다.
+
+    필터 조건:
+    - 매출 YoY ≥ 0% (구조적 성장/유지)
+    - 영업이익 2년 연속 흑자 (턴어라운드 제외)
+    - 적자→흑자 전환은 TURNAROUND로 별도 분류
+
+    결과 상태:
+    - PASS: 재무 필터 통과
+    - FAIL: 재무 필터 미통과
+    - TURNAROUND: 적자→흑자 전환 (별도 버킷)
+    - PENDING: 필터 대상 아님
+    - ERROR: 데이터 조회 실패
+
+    주의: DART API 일일 호출 한도(10,000건)가 있으므로 과도한 요청 주의
+    """
+    result = await buy_service.apply_financial_filter(
+        scan_result=scan_result,
+        target_states=target_states,
+    )
+    return ResponseDTO.success_response(result, "Financial filter applied")
+
+
 @router.get(
     "/sell-signal/{symbol}",
     response_model=ResponseDTO[SellSignalAnalysisDTO],

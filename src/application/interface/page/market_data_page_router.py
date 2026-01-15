@@ -12,7 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 router = APIRouter(
-    prefix="/page/market-data", tags=["Page-MarketData"], include_in_schema=False
+    prefix="/mypage/market-data", tags=["MyPage-MarketData"], include_in_schema=False
 )
 
 

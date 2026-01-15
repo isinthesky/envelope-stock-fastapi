@@ -355,6 +355,17 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
         Returns:
             list[tuple[datetime, datetime]]: 결측 구간 리스트
         """
+        from datetime import timezone as tz
+
+        # 타임존 정규화 (tz-aware vs tz-naive 비교 오류 방지)
+        def to_utc(dt: datetime) -> datetime:
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=tz.utc)
+            return dt.astimezone(tz.utc)
+
+        start_date_utc = to_utc(start_date)
+        end_date_utc = to_utc(end_date)
+
         availability = await self.check_data_availability(
             symbol=symbol,
             start_date=start_date,
@@ -364,7 +375,7 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
 
         if not availability["has_data"]:
             # 전체 구간 결측
-            return [(start_date, end_date)]
+            return [(start_date_utc, end_date_utc)]
 
         if availability["is_complete"]:
             # 결측 없음
@@ -372,13 +383,13 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
 
         missing_ranges = []
 
-        # 시작 부분 결측 확인
-        if availability["earliest"] > start_date:
-            missing_ranges.append((start_date, availability["earliest"]))
+        # 시작 부분 결측 확인 (둘 다 UTC-aware)
+        if availability["earliest"] > start_date_utc:
+            missing_ranges.append((start_date_utc, availability["earliest"]))
 
-        # 종료 부분 결측 확인
-        if availability["latest"] < end_date:
-            missing_ranges.append((availability["latest"], end_date))
+        # 종료 부분 결측 확인 (둘 다 UTC-aware)
+        if availability["latest"] < end_date_utc:
+            missing_ranges.append((availability["latest"], end_date_utc))
 
         return missing_ranges
 

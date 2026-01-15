@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-router = APIRouter(prefix="/page/account", tags=["Page-Account"], include_in_schema=False)
+router = APIRouter(prefix="/mypage/account", tags=["MyPage-Account"], include_in_schema=False)
 
 
 @router.get("", response_class=HTMLResponse)

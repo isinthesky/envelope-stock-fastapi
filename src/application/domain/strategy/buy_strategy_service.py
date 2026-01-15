@@ -21,6 +21,7 @@ from src.adapters.database.models.stock_universe import MarketType
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
 )
+from src.adapters.external.dart_api import get_dart_client, FinancialScreeningDTO
 from src.application.common.decorators import transaction
 from src.application.common.exceptions import StrategyError
 from src.application.common.indicators import TechnicalIndicators
@@ -526,3 +527,155 @@ class BuyStrategyService:
         else:
             # Stochastic이 높으면 일반 골든크로스 활성
             return "GC_ACTIVE"
+
+    # ==================== 재무 필터링 (2차 필터) ====================
+
+    async def apply_financial_filter(
+        self,
+        scan_result: GoldenCrossScanListDTO,
+        target_states: list[str] | None = None,
+        max_concurrent: int = 3,
+    ) -> GoldenCrossScanListDTO:
+        """
+        스캔 결과에 재무 필터 적용 (2차 필터)
+
+        DART API를 통해 재무제표를 조회하여 필터링합니다.
+        - 매출 YoY ≥ 0%
+        - 영업이익 2년 연속 흑자
+        - 적자→흑자 전환 별도 분류
+
+        Args:
+            scan_result: 골든크로스 스캔 결과
+            target_states: 필터 적용 대상 상태 (기본: OPTIMAL_BUY, BUY_INTEREST, READY_TO_BUY)
+            max_concurrent: DART API 동시 요청 수 (기본 3, 너무 높으면 rate limit)
+
+        Returns:
+            재무 필터가 적용된 스캔 결과
+        """
+        if target_states is None:
+            target_states = ["OPTIMAL_BUY", "BUY_INTEREST", "READY_TO_BUY"]
+
+        # 필터 대상 종목 추출
+        target_stocks = [
+            stock for stock in scan_result.stocks
+            if stock.gc_state in target_states
+        ]
+
+        if not target_stocks:
+            logger.info("[Financial Filter] No target stocks to filter")
+            return scan_result
+
+        logger.info(f"[Financial Filter] Applying to {len(target_stocks)} stocks")
+
+        # DART 클라이언트로 재무 스크리닝
+        dart_client = await get_dart_client()
+        await dart_client.load_corp_codes()
+
+        # 종목별 재무 스크리닝 결과
+        screening_results: dict[str, FinancialScreeningDTO] = {}
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def screen_one(symbol: str) -> tuple[str, FinancialScreeningDTO | None]:
+            async with semaphore:
+                try:
+                    result = await dart_client.get_financial_screening(symbol)
+                    return symbol, result
+                except Exception as e:
+                    logger.warning(f"[Financial Filter] {symbol} error: {e}")
+                    return symbol, None
+
+        tasks = [screen_one(stock.symbol) for stock in target_stocks]
+        completed = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for item in completed:
+            if isinstance(item, Exception):
+                continue
+            symbol, result = item
+            if result:
+                screening_results[symbol] = result
+
+        logger.info(f"[Financial Filter] Got {len(screening_results)} screening results")
+
+        # 스캔 결과에 재무 필터 정보 적용
+        updated_stocks: list[GoldenCrossScanItemDTO] = []
+        financial_pass = 0
+        financial_fail = 0
+        financial_error = 0
+        turnaround = 0
+        pending = 0
+
+        for stock in scan_result.stocks:
+            screening = screening_results.get(stock.symbol)
+
+            if screening:
+                # 재무 스크리닝 결과 적용
+                revenue_yoy_value = (
+                    float(screening.revenue_yoy) if screening.revenue_yoy is not None else None
+                )
+                updated_stock = stock.model_copy(update={
+                    "financial_filter_status": screening.filter_status,
+                    "revenue_yoy": revenue_yoy_value,
+                    "operating_margin": float(screening.latest_operating_margin),
+                    "is_consecutive_profit": screening.is_consecutive_profit,
+                    "is_turnaround": screening.is_turnaround,
+                })
+
+                # 통계 업데이트
+                if screening.filter_status == "PASS":
+                    financial_pass += 1
+                elif screening.filter_status == "TURNAROUND":
+                    turnaround += 1
+                else:
+                    financial_fail += 1
+            elif stock.gc_state in target_states:
+                # 조회 실패 또는 데이터 없음 (ERROR는 FAIL과 분리)
+                updated_stock = stock.model_copy(update={
+                    "financial_filter_status": "ERROR",
+                })
+                financial_error += 1
+            else:
+                # 필터 대상 아님
+                updated_stock = stock.model_copy(update={
+                    "financial_filter_status": "PENDING",
+                })
+                pending += 1
+
+            updated_stocks.append(updated_stock)
+
+        # 결과 재정렬 (재무 필터 PASS > TURNAROUND > FAIL > PENDING)
+        def sort_key(stock: GoldenCrossScanItemDTO) -> tuple:
+            state_order = {
+                "OPTIMAL_BUY": 0, "BUY_INTEREST": 1, "READY_TO_BUY": 2,
+                "WAITING_FOR_PULLBACK": 3, "GC_ACTIVE": 4, "NOT_GC": 5,
+            }
+            fin_order = {"PASS": 0, "TURNAROUND": 1, "FAIL": 2, "ERROR": 3, "PENDING": 4, None: 5}
+            return (
+                state_order.get(stock.gc_state, 99),
+                fin_order.get(stock.financial_filter_status, 99),
+                -float(stock.screening_score or 0),
+            )
+
+        updated_stocks.sort(key=sort_key)
+
+        logger.info(
+            f"[Financial Filter] Complete: PASS={financial_pass}, "
+            f"TURNAROUND={turnaround}, FAIL={financial_fail}, "
+            f"ERROR={financial_error}, PENDING={pending}"
+        )
+
+        return GoldenCrossScanListDTO(
+            stocks=updated_stocks,
+            total_scanned=scan_result.total_scanned,
+            gc_active_count=scan_result.gc_active_count,
+            pullback_waiting_count=scan_result.pullback_waiting_count,
+            buy_interest_count=scan_result.buy_interest_count,
+            ready_to_buy_count=scan_result.ready_to_buy_count,
+            optimal_buy_count=scan_result.optimal_buy_count,
+            scan_time=scan_result.scan_time,
+            errors=scan_result.errors,
+            financial_pass_count=financial_pass,
+            financial_fail_count=financial_fail,
+            financial_error_count=financial_error,
+            turnaround_count=turnaround,
+            financial_pending_count=pending,
+        )

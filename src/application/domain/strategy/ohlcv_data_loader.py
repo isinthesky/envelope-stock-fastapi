@@ -309,6 +309,9 @@ class OHLCVDataLoader:
         if not self.session:
             return {"status": "none", "df": None, "latest": None, "count": 0}
 
+        # 타임존 정규화 (tz-naive와 tz-aware 혼합 비교 오류 방지)
+        end_date = normalize_timestamp(end_date)
+
         ohlcv_repo = OHLCVRepository(self.session)
 
         try:
