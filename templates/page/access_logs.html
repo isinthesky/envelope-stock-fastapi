@@ -211,13 +211,13 @@ async function loadLogs() {
       const referer = log.referer ? truncate(log.referer, 30) : '-';
 
       return `<tr>
-        <td>${time}</td>
-        <td>${log.method}</td>
-        <td title="${escapeHtml(log.path + (log.query_string ? '?' + log.query_string : ''))}">${truncate(log.path, 40)}</td>
-        <td>${log.ip_address}</td>
+        <td>${escapeHtml(time)}</td>
+        <td>${escapeHtml(log.method)}</td>
+        <td title="${escapeHtml(log.path + (log.query_string ? '?' + log.query_string : ''))}">${escapeHtml(truncate(log.path, 40))}</td>
+        <td>${escapeHtml(log.ip_address)}</td>
         <td><span class="status-badge ${statusClass}">${log.status_code}</span></td>
         <td>${log.response_time_ms}ms</td>
-        <td title="${escapeHtml(log.referer || '')}">${referer}</td>
+        <td title="${escapeHtml(log.referer || '')}">${escapeHtml(referer)}</td>
       </tr>`;
     }).join('');
   } else {

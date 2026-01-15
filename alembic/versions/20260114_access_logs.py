@@ -63,10 +63,12 @@ def upgrade() -> None:
     op.create_index('ix_access_logs_accessed_at', 'access_logs', ['accessed_at'], unique=False)
     op.create_index('ix_access_logs_path_accessed', 'access_logs', ['path', 'accessed_at'], unique=False)
     op.create_index('ix_access_logs_ip_accessed', 'access_logs', ['ip_address', 'accessed_at'], unique=False)
+    op.create_index('ix_access_logs_accessed_at_desc', 'access_logs', ['accessed_at'], unique=False, postgresql_using='btree')
 
 
 def downgrade() -> None:
     """Downgrade schema."""
+    op.drop_index('ix_access_logs_accessed_at_desc', table_name='access_logs')
     op.drop_index('ix_access_logs_ip_accessed', table_name='access_logs')
     op.drop_index('ix_access_logs_path_accessed', table_name='access_logs')
     op.drop_index('ix_access_logs_accessed_at', table_name='access_logs')

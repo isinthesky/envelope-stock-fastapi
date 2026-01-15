@@ -14,6 +14,7 @@ NOTE: 라우터 순서 중요!
 from fastapi import APIRouter, HTTPException, Query, status
 
 from src.application.common.dependencies import (
+    AdminAccessDep,
     BuyStrategyServiceDep,
     DatabaseSession,
     MarketDataServiceDep,
@@ -335,11 +336,12 @@ async def analyze_sell_signal(
     response_model=ResponseDTO[AnalysisHistoryDTO],
     status_code=status.HTTP_201_CREATED,
     summary="분석 이력 저장",
-    description="매수/매도 분석 결과를 DB에 저장",
+    description="매수/매도 분석 결과를 DB에 저장 (관리자 IP만 허용)",
 )
 async def create_analysis_history(
     request: AnalysisHistoryCreateDTO,
     service: StrategyServiceDep,
+    _admin_ip: AdminAccessDep,
 ) -> ResponseDTO[AnalysisHistoryDTO]:
     """분석 이력 저장 - @transaction이 세션을 관리"""
     history = await service.save_analysis_history(request)
@@ -391,11 +393,12 @@ async def get_analysis_history(
     response_model=ResponseDTO[AnalysisHistoryRefreshResultDTO],
     status_code=status.HTTP_200_OK,
     summary="분석 이력 일괄 갱신",
-    description="활성 추적 중인 종목들의 분석 이력을 일괄 갱신",
+    description="활성 추적 중인 종목들의 분석 이력을 일괄 갱신 (관리자 IP만 허용)",
 )
 async def refresh_analysis_history(
     service: StrategyServiceDep,
     market_data_service: MarketDataServiceDep,
+    _admin_ip: AdminAccessDep,
     analysis_type: str = Query(..., description="분석 유형 (buy/sell)"),
 ) -> ResponseDTO[AnalysisHistoryRefreshResultDTO]:
     """분석 이력 일괄 갱신 - @transaction이 세션을 관리"""
@@ -408,11 +411,12 @@ async def refresh_analysis_history(
     response_model=ResponseDTO[AnalysisHistoryDTO],
     status_code=status.HTTP_200_OK,
     summary="활성 추적 상태 변경",
-    description="분석 이력의 활성 추적 상태 변경",
+    description="분석 이력의 활성 추적 상태 변경 (관리자 IP만 허용)",
 )
 async def update_analysis_history_active(
     history_id: int,
     service: StrategyServiceDep,
+    _admin_ip: AdminAccessDep,
     is_active: bool = Query(..., description="활성 추적 여부"),
 ) -> ResponseDTO[AnalysisHistoryDTO]:
     """활성 추적 상태 변경 - @transaction이 세션을 관리"""
@@ -425,12 +429,13 @@ async def update_analysis_history_active(
     response_model=ResponseDTO[AnalysisHistoryDTO],
     status_code=status.HTTP_200_OK,
     summary="분석 이력 수정",
-    description="분석 이력의 진입가, 메모 등 수정",
+    description="분석 이력의 진입가, 메모 등 수정 (관리자 IP만 허용)",
 )
 async def update_analysis_history(
     history_id: int,
     request: AnalysisHistoryUpdateDTO,
     service: StrategyServiceDep,
+    _admin_ip: AdminAccessDep,
 ) -> ResponseDTO[AnalysisHistoryDTO]:
     """분석 이력 수정 - @transaction이 세션을 관리"""
     history = await service.update_analysis_history(
@@ -445,11 +450,12 @@ async def update_analysis_history(
     "/analysis-history/{history_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="분석 이력 삭제",
-    description="분석 이력 삭제",
+    description="분석 이력 삭제 (관리자 IP만 허용)",
 )
 async def delete_analysis_history(
     history_id: int,
     service: StrategyServiceDep,
+    _admin_ip: AdminAccessDep,
 ) -> None:
     """분석 이력 삭제 - @transaction이 세션을 관리"""
     await service.delete_analysis_history(history_id)

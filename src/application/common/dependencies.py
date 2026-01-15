@@ -5,11 +5,12 @@ Dependencies - 의존성 주입 중앙 관리
 FastAPI Dependency Injection을 위한 공통 의존성 함수 정의
 """
 
+import ipaddress
 from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.cache.redis_client import RedisClient, get_redis_client
@@ -282,3 +283,80 @@ def get_buy_strategy_service(
 
 # Type alias for Buy Strategy Service
 BuyStrategyServiceDep = Annotated["BuyStrategyService", Depends(get_buy_strategy_service)]
+
+
+# ==================== Admin Access Control ====================
+
+
+def _get_client_ip(request: Request) -> str:
+    """클라이언트 IP 추출"""
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip
+
+    if request.client:
+        return request.client.host
+
+    return "unknown"
+
+
+def _is_ip_allowed(client_ip: str, allowed_ips: list[str]) -> bool:
+    """IP가 허용 목록에 있는지 확인 (CIDR 지원)"""
+    if client_ip == "unknown":
+        return False
+
+    try:
+        client_addr = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+
+    for allowed in allowed_ips:
+        try:
+            if "/" in allowed:
+                network = ipaddress.ip_network(allowed, strict=False)
+                if client_addr in network:
+                    return True
+            else:
+                if client_addr == ipaddress.ip_address(allowed):
+                    return True
+        except ValueError:
+            continue
+
+    return False
+
+
+async def verify_admin_access(request: Request) -> str:
+    """
+    관리자 API 접근 검증
+
+    허용된 IP에서만 접근 가능합니다.
+
+    Args:
+        request: FastAPI Request 객체
+
+    Returns:
+        str: 클라이언트 IP
+
+    Raises:
+        HTTPException: 접근이 거부된 경우
+    """
+    from src.settings.config import get_settings
+
+    settings = get_settings()
+    client_ip = _get_client_ip(request)
+
+    if not _is_ip_allowed(client_ip, settings.admin_allowed_ips):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied from IP: {client_ip}",
+        )
+
+    return client_ip
+
+
+# Type alias for Admin Access
+AdminAccessDep = Annotated[str, Depends(verify_admin_access)]

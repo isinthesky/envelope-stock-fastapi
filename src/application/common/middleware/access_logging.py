@@ -7,7 +7,7 @@ Access Logging Middleware - 페이지 접근 로깅 미들웨어
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -101,7 +101,7 @@ class AccessLoggingMiddleware(BaseHTTPMiddleware):
             referer=request.headers.get("referer"),
             status_code=response.status_code,
             response_time_ms=response_time_ms,
-            accessed_at=datetime.now(),
+            accessed_at=datetime.now(timezone.utc),
         )
 
         # DB 저장

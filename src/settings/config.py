@@ -196,6 +196,12 @@ class Settings(BaseSettings):
         default=5, ge=1, description="대시보드 새로고침 간격 (초)"
     )
 
+    # ==================== 관리자 접근 제어 ====================
+    admin_allowed_ips: list[str] = Field(
+        default=["127.0.0.1", "::1", "172.17.0.1", "192.168.0.0/16", "10.0.0.0/8"],
+        description="관리자 API 허용 IP 목록 (CIDR 표기 지원)",
+    )
+
     # ==================== WebSocket 설정 ====================
     ws_max_connections: int = Field(default=100, ge=1, description="WebSocket 최대 연결 수")
     ws_ping_interval: int = Field(default=20, ge=1, description="WebSocket Ping 간격 (초)")
