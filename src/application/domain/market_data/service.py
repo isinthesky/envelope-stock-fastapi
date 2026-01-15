@@ -3,11 +3,13 @@
 MarketData Service - 시세 데이터 조회 서비스
 """
 
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from src.adapters.cache.redis_client import RedisClient
 from src.adapters.external.kis_api.client import KISAPIClient
+
 from src.application.common.decorators import cache
 from src.application.common.exceptions import KISAPIServiceError
 from src.application.domain.market_data.dto import (
@@ -17,6 +19,8 @@ from src.application.domain.market_data.dto import (
     PriceResponseDTO,
 )
 from src.settings.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class MarketDataService:
@@ -366,6 +370,8 @@ class MarketDataService:
             response = await self.kis_client.get(path, params=params, headers=headers)
             output = response.get("output", {})
 
+            logger.debug(f"[get_stock_info] {symbol}: prdt_name={output.get('prdt_name', '')}")
+
             if output:
                 return {
                     "symbol": symbol,
@@ -377,7 +383,8 @@ class MarketDataService:
                 }
             return None
 
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[get_stock_info] {symbol}: error={e}")
             return None
 
     async def get_stock_name(self, symbol: str) -> str | None:

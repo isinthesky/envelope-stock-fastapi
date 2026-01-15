@@ -65,6 +65,7 @@ class SellStrategyService:
         entry_price: float | None = None,
         highest_price: float | None = None,
         trailing_stop_activated: bool = False,
+        force_refresh: bool = False,
     ) -> SellSignalAnalysisDTO:
         """
         매도 시그널 분석
@@ -83,6 +84,7 @@ class SellStrategyService:
             entry_price: 진입가 (수익률 계산용)
             highest_price: 포지션 최고가 (트레일링 스탑용)
             trailing_stop_activated: 트레일링 스탑 활성화 여부
+            force_refresh: True면 캐시와 관계없이 최신 데이터 요청
 
         Returns:
             SellSignalAnalysisDTO: 매도 시그널 분석 결과
@@ -98,6 +100,7 @@ class SellStrategyService:
                 days=300,  # MA165 + 충분한 버퍼
                 interval="1d",
                 min_candles=165,
+                force_refresh=force_refresh,
             )
         except ValueError as e:
             raise StrategyError(str(e))

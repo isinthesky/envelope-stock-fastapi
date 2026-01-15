@@ -76,6 +76,18 @@ class MissingFieldError(ValidationError):
 # ==================== Resource Exceptions ====================
 
 
+class NotFoundError(ApplicationError):
+    """
+    Not Found 예외
+
+    HTTP 404에 대응하는 도메인 예외.
+    FastAPI HTTPException 대신 사용합니다.
+    """
+
+    def __init__(self, message: str = "Resource not found"):
+        super().__init__(message, code="NOT_FOUND", status_code=404)
+
+
 class ResourceNotFoundError(ApplicationError):
     """리소스를 찾을 수 없음 예외"""
 

@@ -4,10 +4,16 @@ Strategy Service - 전략 관리 서비스
 
 전략 CRUD, 상태 관리, 유니버스 관리 등 핵심 기능 제공
 매수/매도 분석은 별도 서비스로 위임
+
+세션 계약 (2026-01-14 업데이트):
+- Repository는 DI로 주입받고, session은 @transaction 데코레이터가 메서드에 주입
+- 새 패턴: 생성자에서 Repository만 받고 session 받지 않음
+- 기존 패턴: 하위 호환을 위해 생성자에서 session 받는 것도 지원
 """
 
 import json
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +31,7 @@ from src.adapters.database.repositories.strategy_symbol_state_repository import 
 )
 from src.adapters.external.kis_api.client import get_kis_client
 from src.application.common.decorators import transaction
-from src.application.common.exceptions import StrategyError
+from src.application.common.exceptions import NotFoundError, StrategyError
 from src.application.domain.strategy.dto import (
     AnalysisHistoryCreateDTO,
     AnalysisHistoryDTO,
@@ -50,18 +56,61 @@ from src.application.domain.strategy.dto import (
 )
 from src.settings.config import settings
 
+if TYPE_CHECKING:
+    from src.adapters.database.repositories.analysis_history_repository import (
+        AnalysisHistoryRepository,
+    )
+
 
 class StrategyService:
     """
     전략 서비스
 
     전략 생성, 조회, 수정, 삭제 및 실행 관리
+
+    세션 계약:
+    - 새 패턴: Repository를 DI로 주입, @transaction이 session 주입
+    - 기존 패턴: session을 생성자에 전달 (하위 호환)
     """
 
-    def __init__(self, session: AsyncSession | None = None) -> None:
-        self.session = session
-        if session:
+    def __init__(
+        self,
+        strategy_repo: StrategyRepository | None = None,
+        analysis_repo: "AnalysisHistoryRepository | None" = None,
+        session: AsyncSession | None = None,
+    ) -> None:
+        """
+        Args:
+            strategy_repo: Strategy Repository (새 패턴: DI 주입)
+            analysis_repo: Analysis History Repository (새 패턴: DI 주입)
+            session: AsyncSession (기존 패턴: 하위 호환)
+        """
+        # 새 패턴: Repository가 DI로 주입된 경우
+        if strategy_repo is not None:
+            self.strategy_repo = strategy_repo
+            self.analysis_repo = analysis_repo
+            self._session = None
+        # 기존 패턴: session으로 Repository 생성 (하위 호환)
+        elif session is not None:
             self.strategy_repo = StrategyRepository(session)
+            self.analysis_repo = None
+            self._session = session
+        else:
+            # session 없이 생성 (나중에 @transaction으로 주입)
+            self.strategy_repo = StrategyRepository()
+            self.analysis_repo = None
+            self._session = None
+
+    # 하위 호환을 위한 session property
+    @property
+    def session(self) -> AsyncSession | None:
+        """기존 코드 호환을 위한 session 접근자"""
+        return self._session
+
+    @session.setter
+    def session(self, value: AsyncSession | None) -> None:
+        """session 설정"""
+        self._session = value
 
     # ==================== 전략 생성 ====================
 
@@ -73,7 +122,7 @@ class StrategyService:
         전략 생성
 
         Args:
-            session: Database Session
+            session: Database Session (@transaction이 주입)
             request: 전략 생성 요청
 
         Returns:
@@ -81,9 +130,8 @@ class StrategyService:
         """
         account_no = request.account_no or settings.current_kis_account_no
 
-        # 전략명 중복 체크
-        strategy_repo = StrategyRepository(session)
-        existing = await strategy_repo.get_by_name(request.name)
+        # 전략명 중복 체크 (session을 메서드 파라미터로 전달)
+        existing = await self.strategy_repo.get_by_name(request.name, session=session)
         if existing:
             raise StrategyError(f"Strategy with name '{request.name}' already exists")
 
@@ -101,8 +149,9 @@ class StrategyService:
         else:
             config_json = StrategyConfigDTO().model_dump_json()
 
-        # 전략 생성
-        strategy = await strategy_repo.create(
+        # 전략 생성 (session을 메서드 파라미터로 전달)
+        strategy = await self.strategy_repo.create(
+            session=session,
             name=request.name,
             description=request.description or "",
             strategy_type=request.strategy_type,
@@ -116,29 +165,31 @@ class StrategyService:
 
     # ==================== 전략 조회 ====================
 
-    async def get_strategy(self, strategy_id: int) -> StrategyDetailResponseDTO:
+    @transaction
+    async def get_strategy(
+        self, session: AsyncSession, strategy_id: int
+    ) -> StrategyDetailResponseDTO:
         """
         전략 상세 조회
 
         Args:
+            session: Database Session (@transaction이 주입)
             strategy_id: 전략 ID
 
         Returns:
             StrategyDetailResponseDTO: 전략 상세 정보
         """
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
-        strategy_repo = StrategyRepository(self.session)
-        strategy = await strategy_repo.get_by_id(strategy_id)
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
 
         if not strategy:
             raise StrategyError(f"Strategy not found: {strategy_id}")
 
         return self._to_detail_dto(strategy)
 
+    @transaction
     async def get_strategy_list(
         self,
+        session: AsyncSession,
         account_no: str | None = None,
         status: str | None = None,
         limit: int = 100,
@@ -148,6 +199,7 @@ class StrategyService:
         전략 목록 조회
 
         Args:
+            session: Database Session (@transaction이 주입)
             account_no: 계좌번호
             status: 전략 상태 필터
             limit: 조회 개수
@@ -156,19 +208,15 @@ class StrategyService:
         Returns:
             StrategyListResponseDTO: 전략 목록
         """
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
         account_no = account_no or settings.current_kis_account_no
-        strategy_repo = StrategyRepository(self.session)
 
         if status:
-            strategies = await strategy_repo.get_by_status(
-                StrategyStatus(status), limit=limit, offset=offset
+            strategies = await self.strategy_repo.get_by_status(
+                StrategyStatus(status), limit=limit, offset=offset, session=session
             )
         else:
-            strategies = await strategy_repo.get_by_account(
-                account_no, limit=limit, offset=offset
+            strategies = await self.strategy_repo.get_by_account(
+                account_no, limit=limit, offset=offset, session=session
             )
 
         strategy_list = [self._to_detail_dto(s) for s in strategies]
@@ -187,15 +235,14 @@ class StrategyService:
         전략 수정
 
         Args:
-            session: Database Session
+            session: Database Session (@transaction이 주입)
             strategy_id: 전략 ID
             request: 전략 수정 요청
 
         Returns:
             StrategyDetailResponseDTO: 수정된 전략 정보
         """
-        strategy_repo = StrategyRepository(session)
-        strategy = await strategy_repo.get_by_id(strategy_id)
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
 
         if not strategy:
             raise StrategyError(f"Strategy not found: {strategy_id}")
@@ -216,11 +263,11 @@ class StrategyService:
         if request.status:
             update_data["status"] = request.status
 
-        # 전략 업데이트
-        await strategy_repo.update(strategy_id, **update_data)
+        # 전략 업데이트 (session을 메서드 파라미터로 전달)
+        await self.strategy_repo.update_by_id(strategy_id, session=session, **update_data)
 
         # 업데이트된 전략 조회
-        updated_strategy = await strategy_repo.get_by_id(strategy_id)
+        updated_strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
         if not updated_strategy:
             raise StrategyError("Failed to retrieve updated strategy")
 
@@ -234,11 +281,10 @@ class StrategyService:
         전략 삭제 (Soft Delete)
 
         Args:
-            session: Database Session
+            session: Database Session (@transaction이 주입)
             strategy_id: 전략 ID
         """
-        strategy_repo = StrategyRepository(session)
-        strategy = await strategy_repo.get_by_id(strategy_id)
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
 
         if not strategy:
             raise StrategyError(f"Strategy not found: {strategy_id}")
@@ -247,7 +293,7 @@ class StrategyService:
         if strategy.is_active:
             raise StrategyError("Cannot delete active strategy. Stop it first.")
 
-        await strategy_repo.delete(strategy_id)
+        await self.strategy_repo.delete_by_id(strategy_id, session=session)
 
     # ==================== 전략 상태 관리 ====================
 
@@ -256,10 +302,9 @@ class StrategyService:
         self, session: AsyncSession, strategy_id: int
     ) -> StrategyDetailResponseDTO:
         """전략 시작 (활성화)"""
-        strategy_repo = StrategyRepository(session)
-        await strategy_repo.activate_strategy(strategy_id)
+        await self.strategy_repo.activate_strategy(strategy_id, session=session)
 
-        strategy = await strategy_repo.get_by_id(strategy_id)
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
         if not strategy:
             raise StrategyError("Failed to retrieve strategy")
 
@@ -270,10 +315,9 @@ class StrategyService:
         self, session: AsyncSession, strategy_id: int
     ) -> StrategyDetailResponseDTO:
         """전략 일시정지"""
-        strategy_repo = StrategyRepository(session)
-        await strategy_repo.pause_strategy(strategy_id)
+        await self.strategy_repo.pause_strategy(strategy_id, session=session)
 
-        strategy = await strategy_repo.get_by_id(strategy_id)
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
         if not strategy:
             raise StrategyError("Failed to retrieve strategy")
 
@@ -284,10 +328,9 @@ class StrategyService:
         self, session: AsyncSession, strategy_id: int
     ) -> StrategyDetailResponseDTO:
         """전략 중지"""
-        strategy_repo = StrategyRepository(session)
-        await strategy_repo.stop_strategy(strategy_id)
+        await self.strategy_repo.stop_strategy(strategy_id, session=session)
 
-        strategy = await strategy_repo.get_by_id(strategy_id)
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
         if not strategy:
             raise StrategyError("Failed to retrieve strategy")
 
@@ -338,13 +381,12 @@ class StrategyService:
 
     # ==================== Golden Cross Strategy Methods ====================
 
-    async def get_golden_cross_config(self, strategy_id: int) -> GoldenCrossConfigDTO:
+    @transaction
+    async def get_golden_cross_config(
+        self, session: AsyncSession, strategy_id: int
+    ) -> GoldenCrossConfigDTO:
         """골든크로스 전략 설정 조회"""
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
-        strategy_repo = StrategyRepository(self.session)
-        strategy = await strategy_repo.get_by_id(strategy_id)
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
 
         if not strategy:
             raise StrategyError(f"Strategy not found: {strategy_id}")
@@ -363,23 +405,22 @@ class StrategyService:
         config: GoldenCrossConfigDTO,
     ) -> GoldenCrossConfigDTO:
         """골든크로스 전략 설정 수정"""
-        strategy_repo = StrategyRepository(session)
-        strategy = await strategy_repo.get_by_id(strategy_id)
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
 
         if not strategy:
             raise StrategyError(f"Strategy not found: {strategy_id}")
 
         config_json = config.model_dump_json()
-        await strategy_repo.update(strategy_id, config_json=config_json)
+        await self.strategy_repo.update_by_id(strategy_id, session=session, config_json=config_json)
 
         return config
 
-    async def get_symbol_states(self, strategy_id: int) -> SymbolStateListDTO:
+    @transaction
+    async def get_symbol_states(
+        self, session: AsyncSession, strategy_id: int
+    ) -> SymbolStateListDTO:
         """종목별 상태 조회"""
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
-        state_repo = StrategySymbolStateRepository(self.session)
+        state_repo = StrategySymbolStateRepository(session)
         states = await state_repo.get_all_by_strategy(strategy_id)
         state_counts = await state_repo.count_by_state(strategy_id)
 
@@ -413,14 +454,12 @@ class StrategyService:
             state_counts=state_counts,
         )
 
+    @transaction
     async def get_signals(
-        self, strategy_id: int, limit: int = 50, offset: int = 0
+        self, session: AsyncSession, strategy_id: int, limit: int = 50, offset: int = 0
     ) -> SignalListDTO:
         """시그널 이력 조회"""
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
-        signal_repo = StrategySignalRepository(self.session)
+        signal_repo = StrategySignalRepository(session)
         signals = await signal_repo.get_by_strategy(strategy_id, limit, offset)
 
         signal_dtos = [
@@ -456,14 +495,12 @@ class StrategyService:
             total_count=len(signal_dtos),
         )
 
+    @transaction
     async def get_signal_statistics(
-        self, strategy_id: int, days: int = 30
+        self, session: AsyncSession, strategy_id: int, days: int = 30
     ) -> SignalStatisticsDTO:
         """시그널 통계 조회"""
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
-        signal_repo = StrategySignalRepository(self.session)
+        signal_repo = StrategySignalRepository(session)
         stats = await signal_repo.get_statistics(strategy_id, days)
 
         return SignalStatisticsDTO(**stats)
@@ -471,10 +508,7 @@ class StrategyService:
     async def execute_golden_cross(
         self, strategy_id: int, dry_run: bool = True, force: bool = False
     ) -> StrategyExecuteResultDTO:
-        """골든크로스 전략 수동 실행"""
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
+        """골든크로스 전략 수동 실행 (스케줄러 사용, 별도 세션)"""
         from src.application.domain.strategy.scheduler import get_strategy_scheduler
 
         scheduler = get_strategy_scheduler()
@@ -487,14 +521,12 @@ class StrategyService:
 
     # ==================== Stock Universe Methods ====================
 
+    @transaction
     async def get_stock_universe(
-        self, market: str | None = None, eligible_only: bool = True
+        self, session: AsyncSession, market: str | None = None, eligible_only: bool = True
     ) -> StockUniverseListDTO:
         """종목 유니버스 조회"""
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
-        universe_repo = StockUniverseRepository(self.session)
+        universe_repo = StockUniverseRepository(session)
 
         market_type = MarketType(market) if market else None
 
@@ -529,15 +561,13 @@ class StrategyService:
             eligible_count=eligible_count,
         )
 
-    async def refresh_universe(self) -> dict:
+    @transaction
+    async def refresh_universe(self, session: AsyncSession) -> dict:
         """유니버스 갱신"""
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
         from src.application.domain.strategy.stock_screener import StockScreener
 
         kis_client = get_kis_client()
-        screener = StockScreener(self.session, kis_client)
+        screener = StockScreener(session, kis_client)
 
         # TODO: KIS API에서 종목 정보 수집
         # 현재는 빈 데이터로 반환
@@ -547,8 +577,10 @@ class StrategyService:
 
     # ==================== Buy/Sell Strategy Delegation ====================
 
+    @transaction
     async def scan_golden_cross_candidates(
         self,
+        session: AsyncSession,
         market: str | None = None,
         stoch_threshold: float = 30.0,
         gc_only: bool = True,
@@ -558,6 +590,7 @@ class StrategyService:
         골든크로스 종목 스캔 (BuyStrategyService로 위임)
 
         Args:
+            session: Database Session (@transaction이 주입)
             market: 시장 필터 (KOSPI/KOSDAQ/ETF)
             stoch_threshold: Stochastic 과매도 임계값
             gc_only: 골든크로스 활성 종목만 반환
@@ -565,7 +598,7 @@ class StrategyService:
         """
         from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
 
-        buy_service = BuyStrategyService(self.session)
+        buy_service = BuyStrategyService(session)
         return await buy_service.scan_golden_cross_candidates(
             market=market,
             stoch_threshold=stoch_threshold,
@@ -573,8 +606,10 @@ class StrategyService:
             include_etf=include_etf,
         )
 
+    @transaction
     async def analyze_sell_signal(
         self,
+        session: AsyncSession,
         symbol: str,
         stoch_overbought: float = 70.0,
         rsi_overbought: float = 70.0,
@@ -586,6 +621,7 @@ class StrategyService:
         매도 시그널 분석 (SellStrategyService로 위임)
 
         Args:
+            session: Database Session (@transaction이 주입)
             symbol: 종목코드
             stoch_overbought: Stochastic 과매수 임계값
             rsi_overbought: RSI 과매수 임계값
@@ -595,7 +631,7 @@ class StrategyService:
         """
         from src.application.domain.strategy.sell_strategy_service import SellStrategyService
 
-        sell_service = SellStrategyService(self.session)
+        sell_service = SellStrategyService(session)
         return await sell_service.analyze_sell_signal(
             symbol=symbol,
             stoch_overbought=stoch_overbought,
@@ -612,9 +648,7 @@ class StrategyService:
         self, session: AsyncSession, dto: AnalysisHistoryCreateDTO
     ) -> AnalysisHistoryDTO:
         """분석 이력 저장"""
-        from src.adapters.database.repositories import AnalysisHistoryRepository
-
-        history_repo = AnalysisHistoryRepository(session)
+        history_repo = self._get_analysis_repo(session)
 
         # sell_reasons를 JSON 문자열로 변환
         sell_reasons_json = None
@@ -622,6 +656,7 @@ class StrategyService:
             sell_reasons_json = json.dumps(dto.sell_reasons, ensure_ascii=False)
 
         model = await history_repo.create(
+            session=session,
             analysis_type=dto.analysis_type,
             symbol=dto.symbol,
             name=dto.name,
@@ -646,46 +681,40 @@ class StrategyService:
 
         return self._history_to_dto(model)
 
-    async def get_analysis_history(self, history_id: int) -> AnalysisHistoryDTO:
+    @transaction
+    async def get_analysis_history(
+        self, session: AsyncSession, history_id: int
+    ) -> AnalysisHistoryDTO:
         """분석 이력 상세 조회"""
-        from fastapi import HTTPException, status
-        from src.adapters.database.repositories import AnalysisHistoryRepository
-
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
-        history_repo = AnalysisHistoryRepository(self.session)
-        model = await history_repo.get_by_id(history_id)
+        history_repo = self._get_analysis_repo(session)
+        model = await history_repo.get_by_id(history_id, session=session)
 
         if not model:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Analysis history not found: {history_id}",
-            )
+            raise NotFoundError(f"Analysis history not found: {history_id}")
 
         return self._history_to_dto(model)
 
+    @transaction
     async def list_analysis_history(
         self,
+        session: AsyncSession,
         analysis_type: str,
         is_active: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> AnalysisHistoryListDTO:
         """분석 이력 목록 조회"""
-        from src.adapters.database.repositories import AnalysisHistoryRepository
-
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
-        history_repo = AnalysisHistoryRepository(self.session)
+        history_repo = self._get_analysis_repo(session)
         histories = await history_repo.get_by_type(
             analysis_type=analysis_type,
             is_active=is_active,
             limit=limit,
             offset=offset,
+            session=session,
         )
-        total_count = await history_repo.count_by_type(analysis_type, is_active)
+        total_count = await history_repo.count_by_type(
+            analysis_type, is_active, session=session
+        )
 
         items = [self._history_to_dto(h) for h in histories]
 
@@ -697,27 +726,29 @@ class StrategyService:
     @transaction
     async def delete_analysis_history(self, session: AsyncSession, history_id: int) -> bool:
         """분석 이력 삭제"""
-        from src.adapters.database.repositories import AnalysisHistoryRepository
-
-        history_repo = AnalysisHistoryRepository(session)
-        return await history_repo.delete_by_id(history_id)
+        history_repo = self._get_analysis_repo(session)
+        return await history_repo.delete_by_id(history_id, session=session)
 
     @transaction
     async def set_analysis_history_active(
         self, session: AsyncSession, history_id: int, is_active: bool
     ) -> AnalysisHistoryDTO:
         """분석 이력 활성 추적 상태 변경"""
-        from fastapi import HTTPException, status
-        from src.adapters.database.repositories import AnalysisHistoryRepository
-
-        history_repo = AnalysisHistoryRepository(session)
-        updated = await history_repo.set_active(history_id, is_active)
+        history_repo = self._get_analysis_repo(session)
+        updated = await history_repo.set_active(history_id, is_active, session=session)
         if not updated:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Analysis history not found: {history_id}",
-            )
+            raise NotFoundError(f"Analysis history not found: {history_id}")
         return self._history_to_dto(updated)
+
+    def _get_analysis_repo(self, session: AsyncSession):
+        """Analysis History Repository 획득 헬퍼"""
+        if self.analysis_repo is not None:
+            return self.analysis_repo
+        # DI로 주입되지 않은 경우 임시 생성
+        from src.adapters.database.repositories.analysis_history_repository import (
+            AnalysisHistoryRepository,
+        )
+        return AnalysisHistoryRepository(session)
 
     @transaction
     async def refresh_analysis_history(
@@ -725,14 +756,13 @@ class StrategyService:
     ) -> AnalysisHistoryRefreshResultDTO:
         """활성 추적 종목 분석 갱신"""
         import logging
-        from src.adapters.database.repositories import AnalysisHistoryRepository
 
         logger = logging.getLogger(__name__)
         errors: list[str] = []
         updated_items: list[AnalysisHistoryDTO] = []
 
-        history_repo = AnalysisHistoryRepository(session)
-        active_symbols = await history_repo.get_active_symbols(analysis_type)
+        history_repo = self._get_analysis_repo(session)
+        active_symbols = await history_repo.get_active_symbols(analysis_type, session=session)
 
         if not active_symbols:
             return AnalysisHistoryRefreshResultDTO(
@@ -750,7 +780,9 @@ class StrategyService:
             try:
                 # 종목명 조회 (DB에 없는 경우)
                 stock_name = None
-                latest = await history_repo.get_latest_by_symbol(symbol, analysis_type)
+                latest = await history_repo.get_latest_by_symbol(
+                    symbol, analysis_type, session=session
+                )
                 if latest and not latest.name:
                     # DB 유니버스에서 조회
                     universe_stock = await universe_repo.get_by_symbol(symbol)
@@ -764,7 +796,15 @@ class StrategyService:
                             pass
 
                 if analysis_type == "sell":
-                    sell_result = await self.analyze_sell_signal(symbol)
+                    # SellStrategyService는 별도 세션 사용 (내부에서 처리)
+                    from src.application.domain.strategy.sell_strategy_service import (
+                        SellStrategyService,
+                    )
+                    sell_service = SellStrategyService(session)
+                    # force_refresh=True로 최신 데이터 요청
+                    sell_result = await sell_service.analyze_sell_signal(
+                        symbol=symbol, force_refresh=True
+                    )
                     sell_reasons_json = json.dumps(sell_result.sell_reasons, ensure_ascii=False)
 
                     if latest:
@@ -787,17 +827,24 @@ class StrategyService:
                         if stock_name:
                             update_kwargs["name"] = stock_name
 
-                        await history_repo.update_by_id(latest.id, **update_kwargs)
-                        updated = await history_repo.get_by_id(latest.id)
+                        await history_repo.update_by_id(latest.id, session=session, **update_kwargs)
+                        updated = await history_repo.get_by_id(latest.id, session=session)
                         if updated:
                             updated_items.append(self._history_to_dto(updated))
 
                 elif analysis_type == "buy":
-                    from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
+                    from src.application.domain.strategy.buy_strategy_service import (
+                        BuyStrategyService,
+                    )
                     buy_service = BuyStrategyService(session)
-                    scan_result = await buy_service.scan_golden_cross_candidates(gc_only=False)
+                    # 단일 종목만 스캔 (force_refresh=True로 최신 데이터 요청)
+                    scan_result = await buy_service.scan_symbols(
+                        symbols=[{"symbol": symbol, "name": stock_name or symbol}],
+                        gc_only=False,
+                        force_refresh=True,
+                    )
 
-                    stock_data = next((s for s in scan_result.stocks if s.symbol == symbol), None)
+                    stock_data = scan_result.stocks[0] if scan_result.stocks else None
                     if stock_data and latest:
                         update_kwargs = {
                             "current_price": stock_data.current_price,
@@ -813,8 +860,8 @@ class StrategyService:
                         if stock_name:
                             update_kwargs["name"] = stock_name
 
-                        await history_repo.update_by_id(latest.id, **update_kwargs)
-                        updated = await history_repo.get_by_id(latest.id)
+                        await history_repo.update_by_id(latest.id, session=session, **update_kwargs)
+                        updated = await history_repo.get_by_id(latest.id, session=session)
                         if updated:
                             updated_items.append(self._history_to_dto(updated))
 
@@ -864,3 +911,45 @@ class StrategyService:
             created_at=model.created_at,
             updated_at=model.updated_at,
         )
+
+    # ==================== Sell Signal Helper Methods ====================
+
+    @transaction
+    async def get_symbol_state_for_sell_signal(
+        self,
+        session: AsyncSession,
+        strategy_id: int,
+        symbol: str,
+    ) -> dict | None:
+        """
+        매도 시그널용 종목 상태 조회
+
+        Router에서 session 없이 Repository 호출이 어려워 Service에서 처리
+        """
+        state_repo = StrategySymbolStateRepository(session)
+        state = await state_repo.get_by_strategy_and_symbol(strategy_id, symbol, session=session)
+        if not state:
+            return None
+
+        return {
+            "entry_price": float(state.entry_price) if state.entry_price else None,
+            "highest_price": float(state.highest_price) if state.highest_price else None,
+            "trailing_stop_activated": state.trailing_stop_activated,
+        }
+
+    @transaction
+    async def get_stock_name_for_sell_signal(
+        self,
+        session: AsyncSession,
+        symbol: str,
+    ) -> str | None:
+        """
+        매도 시그널용 종목명 조회
+
+        DB 유니버스에서 종목명 조회
+        """
+        universe_repo = StockUniverseRepository(session)
+        stock = await universe_repo.get_by_symbol(symbol, session=session)
+        if stock and stock.name:
+            return stock.name
+        return None

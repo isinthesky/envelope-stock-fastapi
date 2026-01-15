@@ -3,6 +3,10 @@
 Buy Strategy Service - 매수 전략 서비스
 
 골든크로스 기반 매수 종목 스캔 및 분석
+
+세션 계약 (2026-01-14 업데이트):
+- Repository는 DI로 주입받거나 session으로 생성
+- @transaction 데코레이터가 session을 자동 주입
 """
 
 import asyncio
@@ -17,6 +21,7 @@ from src.adapters.database.models.stock_universe import MarketType
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
 )
+from src.application.common.decorators import transaction
 from src.application.common.exceptions import StrategyError
 from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.strategy.dto import (
@@ -36,27 +41,47 @@ class BuyStrategyService:
     골든크로스 기반 매수 후보 종목을 스캔하고 분석합니다.
     """
 
-    def __init__(self, session: AsyncSession | None = None) -> None:
+    def __init__(
+        self,
+        universe_repo: StockUniverseRepository | None = None,
+        session: AsyncSession | None = None,
+    ) -> None:
         """
         Args:
-            session: Database Session
+            universe_repo: StockUniverseRepository (DI 주입)
+            session: Database Session (레거시 호환)
         """
-        self.session = session
+        # DI 패턴: Repository가 주입된 경우
+        if universe_repo is not None:
+            self.universe_repo = universe_repo
+            self._session = None
+        # 레거시 패턴: session이 주입된 경우
+        elif session is not None:
+            self.universe_repo = StockUniverseRepository(session)
+            self._session = session
+        # 기본: 빈 Repository (세션은 @transaction에서 주입)
+        else:
+            self.universe_repo = StockUniverseRepository()
+            self._session = None
+
         self._data_loader: OHLCVDataLoader | None = None
 
-    def _get_data_loader(self) -> OHLCVDataLoader:
+    def _get_data_loader(self, session: AsyncSession | None = None) -> OHLCVDataLoader:
         """OHLCVDataLoader 인스턴스 반환"""
         if self._data_loader is None:
-            self._data_loader = OHLCVDataLoader(self.session)
+            self._data_loader = OHLCVDataLoader(session or self._session)
         return self._data_loader
 
+    @transaction
     async def scan_golden_cross_candidates(
         self,
+        session: AsyncSession,
         market: str | None = None,
         stoch_threshold: float = 30.0,
         gc_only: bool = True,
         include_etf: bool = True,
         cache_freshness_days: int = 1,
+        force_refresh: bool = False,
     ) -> GoldenCrossScanListDTO:
         """
         골든크로스 종목 스캔
@@ -69,6 +94,7 @@ class BuyStrategyService:
         - MA55/MA165 지표 사용
 
         Args:
+            session: Database Session (@transaction에서 주입)
             market: 시장 필터 (KOSPI/KOSDAQ/ETF)
             stoch_threshold: Stochastic 과매도 임계값 (기본 30)
             gc_only: 골든크로스 활성 종목만 반환 (기본 True)
@@ -76,23 +102,21 @@ class BuyStrategyService:
             cache_freshness_days: 캐시 신선도 기준 (일).
                 기본 1일 - 당일 데이터가 없으면 API 호출.
                 장 마감 후 스캔 시 1일, 주말에는 3일 권장.
+            force_refresh: True면 캐시와 관계없이 최신 데이터 요청
 
         Returns:
             GoldenCrossScanListDTO: 스캔 결과
         """
-        if not self.session:
-            raise StrategyError("Database session not provided")
-
         scan_time = datetime.now()
         errors: list[str] = []
         results: list[GoldenCrossScanItemDTO] = []
 
         # 1. 유니버스에서 스크리닝 통과 종목 조회 (ETF 포함 옵션)
-        universe_repo = StockUniverseRepository(self.session)
         market_type = MarketType(market) if market else None
-        stocks = await universe_repo.get_eligible_stocks(
+        stocks = await self.universe_repo.get_eligible_stocks(
             market=market_type,
             include_etf=include_etf,
+            session=session,
         )
 
         if not stocks:
@@ -109,7 +133,7 @@ class BuyStrategyService:
         logger.info(f"[GC Scan] Scanning {len(stocks)} eligible stocks with MA55/MA165")
 
         # 2. 종목별 기술적 지표 계산
-        data_loader = self._get_data_loader()
+        data_loader = self._get_data_loader(session)
 
         # 캐시 통계 추적
         cache_stats = {
@@ -129,6 +153,7 @@ class BuyStrategyService:
                     interval="1d",
                     min_candles=160,
                     cache_freshness_days=cache_freshness_days,
+                    force_refresh=force_refresh,
                 )
                 df = load_result.df
 
@@ -253,11 +278,14 @@ class BuyStrategyService:
             errors=errors,
         )
 
+    @transaction
     async def scan_symbols(
         self,
+        session: AsyncSession,
         symbols: list[dict],
         stoch_threshold: float = 30.0,
         gc_only: bool = True,
+        force_refresh: bool = False,
     ) -> GoldenCrossScanListDTO:
         """
         특정 종목 목록에 대해 골든크로스 스캔
@@ -265,9 +293,11 @@ class BuyStrategyService:
         stock_universe에 없는 종목(ETF 등)도 직접 스캔 가능합니다.
 
         Args:
+            session: Database Session (@transaction에서 주입)
             symbols: 스캔할 종목 목록 [{"symbol": "...", "name": "...", "market": "..."}]
             stoch_threshold: Stochastic 과매도 임계값 (기본 30)
             gc_only: 골든크로스 활성 종목만 반환 (기본 True)
+            force_refresh: True면 캐시와 관계없이 최신 데이터 요청
 
         Returns:
             GoldenCrossScanListDTO: 스캔 결과
@@ -289,7 +319,7 @@ class BuyStrategyService:
 
         logger.info(f"[GC Scan] Scanning {len(symbols)} symbols with MA55/MA165")
 
-        data_loader = self._get_data_loader()
+        data_loader = self._get_data_loader(session)
 
         # 종목명 조회를 위한 서비스 준비
         from src.adapters.cache.redis_client import get_redis_client
@@ -326,6 +356,7 @@ class BuyStrategyService:
                     days=400,
                     interval="1d",
                     min_candles=160,
+                    force_refresh=force_refresh,
                 )
 
                 # 지표 계산 (MA55/MA165)

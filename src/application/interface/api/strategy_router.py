@@ -5,11 +5,22 @@ Strategy Router - 전략 관리 API 엔드포인트
 NOTE: 라우터 순서 중요!
 - 정적 경로 (/universe, /scheduler/status)를 동적 경로 (/{strategy_id}) 앞에 정의
 - FastAPI는 순서대로 경로를 매칭하므로 동적 경로가 먼저 오면 정적 경로가 무시됨
+
+세션 계약 (2026-01-14 업데이트):
+- StrategyService는 DI로 주입받음 (StrategyServiceDep)
+- 서비스 메서드는 @transaction 데코레이터가 session을 자동 주입
 """
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from src.application.common.dependencies import DatabaseSession, MarketDataServiceDep
+from src.application.common.dependencies import (
+    BuyStrategyServiceDep,
+    DatabaseSession,
+    MarketDataServiceDep,
+    StrategyServiceDep,
+    StrategySymbolStateRepositoryDep,
+    StockUniverseRepositoryDep,
+)
 from src.application.common.dto import ResponseDTO
 from src.application.domain.strategy.dto import (
     AnalysisHistoryCreateDTO,
@@ -30,7 +41,6 @@ from src.application.domain.strategy.dto import (
     StrategyUpdateRequestDTO,
     SymbolStateListDTO,
 )
-from src.application.domain.strategy.strategy_service import StrategyService
 
 router = APIRouter()
 
@@ -47,9 +57,9 @@ router = APIRouter()
 )
 async def create_strategy(
     request: StrategyCreateRequestDTO,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 생성 - @transaction이 세션을 관리"""
-    service = StrategyService()
     strategy_data = await service.create_strategy(request)
     return ResponseDTO.success_response(strategy_data, "Strategy created successfully")
 
@@ -62,12 +72,11 @@ async def create_strategy(
     description="계좌별 전략 목록 조회",
 )
 async def get_strategy_list(
+    service: StrategyServiceDep,
     account_no: str | None = None,
     status_filter: str | None = None,
-    session: DatabaseSession = None,
 ) -> ResponseDTO[StrategyListResponseDTO]:
-    """전략 목록 조회"""
-    service = StrategyService(session)
+    """전략 목록 조회 - @transaction이 세션을 관리"""
     strategy_list = await service.get_strategy_list(account_no, status_filter)
     return ResponseDTO.success_response(strategy_list, "Strategy list retrieved successfully")
 
@@ -83,12 +92,11 @@ async def get_strategy_list(
     description="스크리닝 통과 종목 목록 조회",
 )
 async def get_universe(
-    session: DatabaseSession,
+    service: StrategyServiceDep,
     market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ)"),
     eligible_only: bool = Query(default=True, description="스크리닝 통과 종목만"),
 ) -> ResponseDTO[StockUniverseListDTO]:
-    """종목 유니버스 조회"""
-    service = StrategyService(session)
+    """종목 유니버스 조회 - @transaction이 세션을 관리"""
     universe = await service.get_stock_universe(market, eligible_only)
     return ResponseDTO.success_response(universe, "Universe retrieved successfully")
 
@@ -101,17 +109,16 @@ async def get_universe(
     description="종목 유니버스 데이터 갱신",
 )
 async def refresh_universe(
-    session: DatabaseSession,
+    service: StrategyServiceDep,
     market_data_service: MarketDataServiceDep,
 ) -> ResponseDTO[dict]:
-    """유니버스 갱신"""
+    """유니버스 갱신 - @transaction이 세션을 관리"""
     if not market_data_service.has_valid_credentials():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="KIS API credentials not configured",
         )
 
-    service = StrategyService(session)
     result = await service.refresh_universe()
     return ResponseDTO.success_response(result, "Universe refresh completed")
 
@@ -124,14 +131,14 @@ async def refresh_universe(
     description="유니버스 종목에 대해 기술적 지표를 계산하고 골든크로스 조건에 부합하는 종목 필터링",
 )
 async def scan_golden_cross(
-    session: DatabaseSession,
+    service: StrategyServiceDep,
     market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
     stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
     gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
     include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
 ) -> ResponseDTO[GoldenCrossScanListDTO]:
     """
-    골든크로스 종목 스캔
+    골든크로스 종목 스캔 - @transaction이 세션을 관리
 
     스크리닝 통과 종목에 대해 MA55, MA165, Stochastic K/D 지표를 계산하고
     골든크로스 전략 조건에 따라 종목을 필터링합니다.
@@ -145,7 +152,6 @@ async def scan_golden_cross(
 
     ETF 종목은 시가총액/거래량 조건이 완화되어 적용됩니다.
     """
-    service = StrategyService(session)
     result = await service.scan_golden_cross_candidates(
         market=market,
         stoch_threshold=stoch_threshold,
@@ -164,12 +170,12 @@ async def scan_golden_cross(
 )
 async def scan_golden_cross_symbols(
     symbols: list[dict],
-    session: DatabaseSession,
+    buy_service: BuyStrategyServiceDep,
     stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
     gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
 ) -> ResponseDTO[GoldenCrossScanListDTO]:
     """
-    특정 종목 목록에 대해 골든크로스 스캔
+    특정 종목 목록에 대해 골든크로스 스캔 - @transaction이 세션을 관리
 
     stock_universe에 없는 ETF, ETN 등의 종목도 직접 스캔할 수 있습니다.
 
@@ -181,9 +187,6 @@ async def scan_golden_cross_symbols(
     ]
     ```
     """
-    from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
-
-    buy_service = BuyStrategyService(session)
     result = await buy_service.scan_symbols(
         symbols=symbols,
         stoch_threshold=stoch_threshold,
@@ -201,15 +204,17 @@ async def scan_golden_cross_symbols(
 )
 async def analyze_sell_signal(
     symbol: str,
-    session: DatabaseSession,
+    service: StrategyServiceDep,
     market_data_service: MarketDataServiceDep,
+    state_repo: StrategySymbolStateRepositoryDep,
+    universe_repo: StockUniverseRepositoryDep,
     stoch_overbought: float = Query(default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값"),
     rsi_overbought: float = Query(default=70.0, ge=50.0, le=90.0, description="RSI 과매수 임계값"),
     entry_price: float | None = Query(default=None, ge=0.0, description="진입가 (수익률 기반 동적 임계값 적용)"),
     strategy_id: int | None = Query(default=None, ge=1, description="전략 ID (보유 종목 진입가 자동 조회)"),
 ) -> ResponseDTO[SellSignalAnalysisDTO]:
     """
-    매도 시그널 분석
+    매도 시그널 분석 - @transaction이 세션을 관리
 
     종목의 기술적 지표를 분석하여 매도 추천을 제공합니다.
 
@@ -240,21 +245,20 @@ async def analyze_sell_signal(
     trailing_stop_activated: bool = False
 
     if strategy_id is not None and entry_price is None:
-        from src.adapters.database.repositories.strategy_symbol_state_repository import (
-            StrategySymbolStateRepository,
-        )
         try:
-            state_repo = StrategySymbolStateRepository(session)
-            state = await state_repo.get_by_strategy_and_symbol(strategy_id, symbol)
-            if state and state.entry_price:
-                entry_price = float(state.entry_price)
-                if state.highest_price:
-                    highest_price = float(state.highest_price)
-                trailing_stop_activated = state.trailing_stop_activated
+            # NOTE: state_repo는 DI로 주입받고, @transaction이 없으므로 session 없이 조회
+            # Repository는 _get_session에서 session 없으면 에러 발생
+            # 여기서는 단순 조회이므로 새 session으로 조회 필요 - 서비스 메서드로 위임 권장
+            # 임시 해결: get_by_strategy_and_symbol이 session 없이 동작하도록 adapter 패턴 유지
+            state = await service.get_symbol_state_for_sell_signal(strategy_id, symbol)
+            if state and state.get("entry_price"):
+                entry_price = state["entry_price"]
+                if state.get("highest_price"):
+                    highest_price = state["highest_price"]
+                trailing_stop_activated = state.get("trailing_stop_activated", False)
         except Exception:
             pass  # 조회 실패 시 무시
 
-    service = StrategyService(session)
     result = await service.analyze_sell_signal(
         symbol=symbol,
         stoch_overbought=stoch_overbought,
@@ -266,14 +270,10 @@ async def analyze_sell_signal(
 
     # 종목명 조회 및 추가 (DB 우선, API 폴백 - ETF 지원)
     if result.name is None:
-        from src.adapters.database.repositories.stock_universe_repository import (
-            StockUniverseRepository,
-        )
         try:
-            universe_repo = StockUniverseRepository(session)
-            stock = await universe_repo.get_by_symbol(symbol)
-            if stock and stock.name:
-                result.name = stock.name
+            stock_name = await service.get_stock_name_for_sell_signal(symbol)
+            if stock_name:
+                result.name = stock_name
             else:
                 # DB에 없으면 API로 조회 (일반주식 + ETF 지원)
                 stock_name = await market_data_service.get_stock_name(symbol)
@@ -297,9 +297,9 @@ async def analyze_sell_signal(
 )
 async def create_analysis_history(
     request: AnalysisHistoryCreateDTO,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[AnalysisHistoryDTO]:
     """분석 이력 저장 - @transaction이 세션을 관리"""
-    service = StrategyService()
     history = await service.save_analysis_history(request)
     return ResponseDTO.success_response(history, "Analysis history saved successfully")
 
@@ -312,14 +312,13 @@ async def create_analysis_history(
     description="매수/매도 분석 이력 목록 조회",
 )
 async def get_analysis_history_list(
-    session: DatabaseSession,
+    service: StrategyServiceDep,
     analysis_type: str = Query(..., description="분석 유형 (buy/sell)"),
     is_active: bool | None = Query(default=None, description="활성 추적 여부 필터"),
     limit: int = Query(default=50, ge=1, le=200, description="최대 조회 개수"),
     offset: int = Query(default=0, ge=0, description="시작 위치"),
 ) -> ResponseDTO[AnalysisHistoryListDTO]:
-    """분석 이력 목록 조회"""
-    service = StrategyService(session)
+    """분석 이력 목록 조회 - @transaction이 세션을 관리"""
     history_list = await service.list_analysis_history(
         analysis_type=analysis_type,
         is_active=is_active,
@@ -338,10 +337,9 @@ async def get_analysis_history_list(
 )
 async def get_analysis_history(
     history_id: int,
-    session: DatabaseSession,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[AnalysisHistoryDTO]:
-    """분석 이력 상세 조회"""
-    service = StrategyService(session)
+    """분석 이력 상세 조회 - @transaction이 세션을 관리"""
     history = await service.get_analysis_history(history_id)
     return ResponseDTO.success_response(history, "Analysis history retrieved successfully")
 
@@ -354,11 +352,11 @@ async def get_analysis_history(
     description="활성 추적 중인 종목들의 분석 이력을 일괄 갱신",
 )
 async def refresh_analysis_history(
+    service: StrategyServiceDep,
     market_data_service: MarketDataServiceDep,
     analysis_type: str = Query(..., description="분석 유형 (buy/sell)"),
 ) -> ResponseDTO[AnalysisHistoryRefreshResultDTO]:
     """분석 이력 일괄 갱신 - @transaction이 세션을 관리"""
-    service = StrategyService()
     result = await service.refresh_analysis_history(analysis_type, market_data_service)
     return ResponseDTO.success_response(result, "Analysis history refresh completed")
 
@@ -372,10 +370,10 @@ async def refresh_analysis_history(
 )
 async def update_analysis_history_active(
     history_id: int,
+    service: StrategyServiceDep,
     is_active: bool = Query(..., description="활성 추적 여부"),
 ) -> ResponseDTO[AnalysisHistoryDTO]:
     """활성 추적 상태 변경 - @transaction이 세션을 관리"""
-    service = StrategyService()
     history = await service.set_analysis_history_active(history_id, is_active)
     return ResponseDTO.success_response(history, "Analysis history active status updated")
 
@@ -388,9 +386,9 @@ async def update_analysis_history_active(
 )
 async def delete_analysis_history(
     history_id: int,
+    service: StrategyServiceDep,
 ) -> None:
     """분석 이력 삭제 - @transaction이 세션을 관리"""
-    service = StrategyService()
     await service.delete_analysis_history(history_id)
 
 
@@ -425,10 +423,9 @@ async def get_scheduler_status() -> ResponseDTO[dict]:
 )
 async def get_strategy(
     strategy_id: int,
-    session: DatabaseSession,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
-    """전략 상세 조회"""
-    service = StrategyService(session)
+    """전략 상세 조회 - @transaction이 세션을 관리"""
     strategy_data = await service.get_strategy(strategy_id)
     return ResponseDTO.success_response(strategy_data, "Strategy retrieved successfully")
 
@@ -443,9 +440,9 @@ async def get_strategy(
 async def update_strategy(
     strategy_id: int,
     request: StrategyUpdateRequestDTO,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 수정 - @transaction이 세션을 관리"""
-    service = StrategyService()
     strategy_data = await service.update_strategy(strategy_id, request)
     return ResponseDTO.success_response(strategy_data, "Strategy updated successfully")
 
@@ -458,9 +455,9 @@ async def update_strategy(
 )
 async def delete_strategy(
     strategy_id: int,
+    service: StrategyServiceDep,
 ) -> None:
     """전략 삭제 - @transaction이 세션을 관리"""
-    service = StrategyService()
     await service.delete_strategy(strategy_id)
 
 
@@ -476,9 +473,9 @@ async def delete_strategy(
 )
 async def start_strategy(
     strategy_id: int,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 시작 - @transaction이 세션을 관리"""
-    service = StrategyService()
     strategy_data = await service.start_strategy(strategy_id)
     return ResponseDTO.success_response(strategy_data, "Strategy started successfully")
 
@@ -492,9 +489,9 @@ async def start_strategy(
 )
 async def pause_strategy(
     strategy_id: int,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 일시정지 - @transaction이 세션을 관리"""
-    service = StrategyService()
     strategy_data = await service.pause_strategy(strategy_id)
     return ResponseDTO.success_response(strategy_data, "Strategy paused successfully")
 
@@ -508,9 +505,9 @@ async def pause_strategy(
 )
 async def stop_strategy(
     strategy_id: int,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 중지 - @transaction이 세션을 관리"""
-    service = StrategyService()
     strategy_data = await service.stop_strategy(strategy_id)
     return ResponseDTO.success_response(strategy_data, "Strategy stopped successfully")
 
@@ -527,10 +524,9 @@ async def stop_strategy(
 )
 async def get_strategy_config(
     strategy_id: int,
-    session: DatabaseSession,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[GoldenCrossConfigDTO]:
-    """전략 설정 조회"""
-    service = StrategyService(session)
+    """전략 설정 조회 - @transaction이 세션을 관리"""
     config = await service.get_golden_cross_config(strategy_id)
     return ResponseDTO.success_response(config, "Strategy config retrieved successfully")
 
@@ -545,9 +541,9 @@ async def get_strategy_config(
 async def update_strategy_config(
     strategy_id: int,
     config: GoldenCrossConfigDTO,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[GoldenCrossConfigDTO]:
     """전략 설정 수정 - @transaction이 세션을 관리"""
-    service = StrategyService()
     updated_config = await service.update_golden_cross_config(strategy_id, config)
     return ResponseDTO.success_response(updated_config, "Strategy config updated successfully")
 
@@ -561,10 +557,9 @@ async def update_strategy_config(
 )
 async def get_symbol_states(
     strategy_id: int,
-    session: DatabaseSession,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[SymbolStateListDTO]:
-    """종목별 상태 조회"""
-    service = StrategyService(session)
+    """종목별 상태 조회 - @transaction이 세션을 관리"""
     states = await service.get_symbol_states(strategy_id)
     return ResponseDTO.success_response(states, "Symbol states retrieved successfully")
 
@@ -578,12 +573,11 @@ async def get_symbol_states(
 )
 async def get_signals(
     strategy_id: int,
-    session: DatabaseSession,
+    service: StrategyServiceDep,
     limit: int = Query(default=50, ge=1, le=200, description="최대 조회 개수"),
     offset: int = Query(default=0, ge=0, description="시작 위치"),
 ) -> ResponseDTO[SignalListDTO]:
-    """시그널 이력 조회"""
-    service = StrategyService(session)
+    """시그널 이력 조회 - @transaction이 세션을 관리"""
     signals = await service.get_signals(strategy_id, limit, offset)
     return ResponseDTO.success_response(signals, "Signals retrieved successfully")
 
@@ -597,11 +591,10 @@ async def get_signals(
 )
 async def get_signal_statistics(
     strategy_id: int,
-    session: DatabaseSession,
+    service: StrategyServiceDep,
     days: int = Query(default=30, ge=1, le=365, description="조회 기간 (일)"),
 ) -> ResponseDTO[SignalStatisticsDTO]:
-    """시그널 통계 조회"""
-    service = StrategyService(session)
+    """시그널 통계 조회 - @transaction이 세션을 관리"""
     stats = await service.get_signal_statistics(strategy_id, days)
     return ResponseDTO.success_response(stats, "Signal statistics retrieved successfully")
 
@@ -616,10 +609,9 @@ async def get_signal_statistics(
 async def execute_strategy(
     strategy_id: int,
     request: StrategyExecuteRequestDTO,
-    session: DatabaseSession,
+    service: StrategyServiceDep,
 ) -> ResponseDTO[StrategyExecuteResultDTO]:
-    """전략 수동 실행"""
-    service = StrategyService(session)
+    """전략 수동 실행 - @transaction이 세션을 관리"""
     result = await service.execute_golden_cross(
         strategy_id,
         request.dry_run,

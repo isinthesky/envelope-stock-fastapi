@@ -123,6 +123,7 @@ class OHLCVDataLoader:
         interval: str = "1d",
         min_candles: int = 165,
         cache_freshness_days: int = 1,
+        force_refresh: bool = False,
     ) -> pd.DataFrame:
         """
         OHLCV 데이터를 DataFrame으로 로딩 (증분 업데이트 지원)
@@ -142,6 +143,7 @@ class OHLCVDataLoader:
             min_candles: 최소 필요 캔들 수, 기본 165
             cache_freshness_days: 캐시 유효 기간 (일), 기본 1일.
                 장 마감 후 스캔 시 1일, 주말에는 3일 권장.
+            force_refresh: True면 캐시 신선도와 관계없이 증분 업데이트 시도
 
         Returns:
             pd.DataFrame: OHLCV 데이터프레임 (timestamp, open, high, low, close, volume)
@@ -155,6 +157,7 @@ class OHLCVDataLoader:
             interval=interval,
             min_candles=min_candles,
             cache_freshness_days=cache_freshness_days,
+            force_refresh=force_refresh,
         )
         return result.df
 
@@ -165,6 +168,7 @@ class OHLCVDataLoader:
         interval: str = "1d",
         min_candles: int = 165,
         cache_freshness_days: int = 1,
+        force_refresh: bool = False,
     ) -> LoadResult:
         """
         OHLCV 데이터를 DataFrame으로 로딩 (통계 포함)
@@ -175,6 +179,7 @@ class OHLCVDataLoader:
             interval: 캔들 간격
             min_candles: 최소 필요 캔들 수
             cache_freshness_days: 캐시 유효 기간 (일), 기본 1일
+            force_refresh: True면 캐시 신선도와 관계없이 증분 업데이트 시도
 
         Returns:
             LoadResult: DataFrame과 로딩 통계
@@ -198,13 +203,19 @@ class OHLCVDataLoader:
         api_calls = 0
         new_candles = 0
 
-        if cache_result["status"] == "fresh":
+        # force_refresh가 True면 fresh 상태도 stale로 처리
+        cache_status = cache_result["status"]
+        if force_refresh and cache_status == "fresh":
+            cache_status = "stale"
+            logger.debug(f"[OHLCVLoader] {symbol}: Force refresh - treating cache as stale")
+
+        if cache_status == "fresh":
             # 캐시 완전 히트
             df = cache_result["df"]
             load_type = LoadType.CACHE_HIT
-            logger.debug(f"[OHLCVLoader] {symbol}: Cache hit ({len(df)} candles)")
+            logger.debug(f"[OHLCVLoader] {symbol}: Cache hit ({len(df) if df is not None else 0} candles)")
 
-        elif cache_result["status"] == "stale" and cache_result["df"] is not None:
+        elif cache_status == "stale" and cache_result["df"] is not None:
             # 증분 업데이트
             cached_df = cache_result["df"]
             latest = cache_result["latest"]
@@ -462,7 +473,7 @@ class OHLCVDataLoader:
         interval: str,
     ) -> tuple[pd.DataFrame | None, int]:
         """
-        KIS API에서 데이터 로딩 (2회 호출)
+        KIS API에서 데이터 로딩 (요청 기간을 MAX_API_DAYS_PER_CALL 단위로 chunking)
 
         Returns:
             tuple: (DataFrame, API 호출 횟수)
@@ -471,31 +482,34 @@ class OHLCVDataLoader:
         all_candles: list = []
         api_calls = 0
 
-        try:
-            # 첫 번째 호출: 최근 100일 (MAX_API_DAYS_PER_CALL)
-            mid_date = end_date - timedelta(days=MAX_API_DAYS_PER_CALL)
-            chart_data1 = await market_data_service.get_chart_data(
-                symbol=symbol,
-                interval=interval,
-                start_date=mid_date,
-                end_date=end_date,
-            )
-            api_calls += 1
-            if chart_data1.candles:
-                all_candles.extend(chart_data1.candles)
+        # 타임존 정규화
+        start_date = normalize_timestamp(start_date)
+        end_date = normalize_timestamp(end_date)
 
-            # 두 번째 호출: 이전 100일
-            if all_candles:
-                earliest = min(c.timestamp for c in all_candles)
-                chart_data2 = await market_data_service.get_chart_data(
+        try:
+            # 전체 기간을 MAX_API_DAYS_PER_CALL 단위로 분할하여 역순으로 조회
+            # (최신 데이터부터 과거로)
+            chunk_end = end_date
+
+            while chunk_end > start_date:
+                chunk_start = max(
+                    chunk_end - timedelta(days=MAX_API_DAYS_PER_CALL),
+                    start_date,
+                )
+
+                chart_data = await market_data_service.get_chart_data(
                     symbol=symbol,
                     interval=interval,
-                    start_date=earliest - timedelta(days=MAX_API_DAYS_PER_CALL),
-                    end_date=earliest - timedelta(days=1),
+                    start_date=chunk_start,
+                    end_date=chunk_end,
                 )
                 api_calls += 1
-                if chart_data2.candles:
-                    all_candles.extend(chart_data2.candles)
+
+                if chart_data.candles:
+                    all_candles.extend(chart_data.candles)
+
+                # 다음 chunk로 이동 (과거 방향)
+                chunk_end = chunk_start - timedelta(days=1)
 
         except Exception as e:
             logger.warning(f"[OHLCVLoader] API call failed for {symbol}: {e}")

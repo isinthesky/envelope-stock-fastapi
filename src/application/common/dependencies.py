@@ -56,10 +56,76 @@ def get_order_repository(session: DatabaseSession) -> OrderRepository:
 # Type aliases for Repositories
 OrderRepositoryDep = Annotated[OrderRepository, Depends(get_order_repository)]
 
-# TODO: 다른 Repository 추가
-# AccountRepositoryDep = Annotated[AccountRepository, Depends(get_account_repository)]
-# PositionRepositoryDep = Annotated[PositionRepository, Depends(get_position_repository)]
-# StrategyRepositoryDep = Annotated[StrategyRepository, Depends(get_strategy_repository)]
+# ==================== Strategy Repositories (새 세션 계약) ====================
+# NOTE: 새 패턴 - Repository는 생성자에서 session을 받지 않고,
+#       메서드에서 session을 파라미터로 받습니다.
+
+
+def get_strategy_repository() -> "StrategyRepository":
+    """
+    Strategy Repository Dependency (새 세션 계약)
+
+    Returns:
+        StrategyRepository: 전략 Repository (세션 없이 생성)
+    """
+    from src.adapters.database.repositories.strategy_repository import StrategyRepository
+
+    return StrategyRepository()
+
+
+def get_analysis_history_repository() -> "AnalysisHistoryRepository":
+    """
+    Analysis History Repository Dependency (새 세션 계약)
+
+    Returns:
+        AnalysisHistoryRepository: 분석 이력 Repository (세션 없이 생성)
+    """
+    from src.adapters.database.repositories.analysis_history_repository import (
+        AnalysisHistoryRepository,
+    )
+
+    return AnalysisHistoryRepository()
+
+
+def get_stock_universe_repository() -> "StockUniverseRepository":
+    """
+    Stock Universe Repository Dependency (새 세션 계약)
+
+    Returns:
+        StockUniverseRepository: 종목 유니버스 Repository (세션 없이 생성)
+    """
+    from src.adapters.database.repositories.stock_universe_repository import (
+        StockUniverseRepository,
+    )
+
+    return StockUniverseRepository()
+
+
+def get_strategy_symbol_state_repository() -> "StrategySymbolStateRepository":
+    """
+    Strategy Symbol State Repository Dependency (새 세션 계약)
+
+    Returns:
+        StrategySymbolStateRepository: 전략 종목 상태 Repository (세션 없이 생성)
+    """
+    from src.adapters.database.repositories.strategy_symbol_state_repository import (
+        StrategySymbolStateRepository,
+    )
+
+    return StrategySymbolStateRepository()
+
+
+# Type aliases for Strategy Repositories
+StrategyRepositoryDep = Annotated["StrategyRepository", Depends(get_strategy_repository)]
+AnalysisHistoryRepositoryDep = Annotated[
+    "AnalysisHistoryRepository", Depends(get_analysis_history_repository)
+]
+StockUniverseRepositoryDep = Annotated[
+    "StockUniverseRepository", Depends(get_stock_universe_repository)
+]
+StrategySymbolStateRepositoryDep = Annotated[
+    "StrategySymbolStateRepository", Depends(get_strategy_symbol_state_repository)
+]
 
 
 # ==================== KIS API ====================
@@ -165,3 +231,54 @@ async def get_market_data_service(
 
 # Type alias for Domain Services
 MarketDataServiceDep = Annotated["MarketDataService", Depends(get_market_data_service)]
+
+
+def get_strategy_service(
+    strategy_repo: StrategyRepositoryDep,
+    analysis_repo: AnalysisHistoryRepositoryDep,
+) -> "StrategyService":
+    """
+    Strategy Service Dependency (새 세션 계약)
+
+    Repository는 DI로 주입받고, session은 @transaction 데코레이터가 메서드에 주입합니다.
+
+    Args:
+        strategy_repo: Strategy Repository
+        analysis_repo: Analysis History Repository
+
+    Returns:
+        StrategyService: 전략 서비스
+    """
+    from src.application.domain.strategy.strategy_service import StrategyService
+
+    return StrategyService(
+        strategy_repo=strategy_repo,
+        analysis_repo=analysis_repo,
+    )
+
+
+# Type alias for Strategy Service
+StrategyServiceDep = Annotated["StrategyService", Depends(get_strategy_service)]
+
+
+def get_buy_strategy_service(
+    universe_repo: StockUniverseRepositoryDep,
+) -> "BuyStrategyService":
+    """
+    Buy Strategy Service Dependency (새 세션 계약)
+
+    Repository는 DI로 주입받고, session은 @transaction 데코레이터가 메서드에 주입합니다.
+
+    Args:
+        universe_repo: Stock Universe Repository
+
+    Returns:
+        BuyStrategyService: 매수 전략 서비스
+    """
+    from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
+
+    return BuyStrategyService(universe_repo=universe_repo)
+
+
+# Type alias for Buy Strategy Service
+BuyStrategyServiceDep = Annotated["BuyStrategyService", Depends(get_buy_strategy_service)]
