@@ -3,7 +3,9 @@
 Notification Scheduler - 전략 알림 스케줄러
 
 APScheduler 기반 스케줄링:
+- 14:57 (월~금): 매수 알림용 OHLCV 캐시 업데이트
 - 15:00 (월~금): 골든크로스 스캔 후 "매수 준비/매수 적기" 종목 Telegram 알림
+- 09:07 (월~금): 매도 알림용 OHLCV 캐시 업데이트
 - 09:10 (월~금): 분석 이력 갱신 후 "매도 권장/강력매도" 종목 Telegram 알림
 """
 
@@ -19,6 +21,7 @@ from src.application.domain.strategy.sell_strategy_service import SellStrategySe
 from src.adapters.database.repositories.analysis_history_repository import (
     AnalysisHistoryRepository,
 )
+from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +57,20 @@ class NotificationScheduler:
 
             self.scheduler = AsyncIOScheduler(timezone=KST)
 
+            # 매수 알림용 데이터 업데이트 (월~금 14:57)
+            self.scheduler.add_job(
+                self._buy_data_update_job,
+                CronTrigger(
+                    day_of_week="mon-fri",
+                    hour=14,
+                    minute=57,
+                    timezone=KST,
+                ),
+                id="buy_data_update",
+                name="Buy Data Update (14:57)",
+                replace_existing=True,
+            )
+
             # 매수 알림 (월~금 15:00)
             self.scheduler.add_job(
                 self._buy_notification_job,
@@ -65,6 +82,20 @@ class NotificationScheduler:
                 ),
                 id="buy_notification",
                 name="Buy Signal Notification (15:00)",
+                replace_existing=True,
+            )
+
+            # 매도 알림용 데이터 업데이트 (월~금 09:07)
+            self.scheduler.add_job(
+                self._sell_data_update_job,
+                CronTrigger(
+                    day_of_week="mon-fri",
+                    hour=9,
+                    minute=7,
+                    timezone=KST,
+                ),
+                id="sell_data_update",
+                name="Sell Data Update (09:07)",
                 replace_existing=True,
             )
 
@@ -84,7 +115,10 @@ class NotificationScheduler:
 
             self.scheduler.start()
             self.is_running = True
-            logger.info("[NotificationScheduler] Started - Buy: 15:00, Sell: 09:10 (Mon-Fri)")
+            logger.info(
+                "[NotificationScheduler] Started - "
+                "Data Update: 09:07/14:57, Notifications: 09:10/15:00 (Mon-Fri)"
+            )
 
         except ImportError:
             logger.warning("[NotificationScheduler] APScheduler not installed, skipping")
@@ -101,6 +135,81 @@ class NotificationScheduler:
         # Telegram 클라이언트 정리
         notifier = get_telegram_notifier()
         await notifier.aclose()
+
+    # ==================== 데이터 업데이트 Job ====================
+
+    async def _buy_data_update_job(self) -> None:
+        """
+        매수 알림용 데이터 업데이트 Job (14:57)
+
+        유니버스 전체 종목의 OHLCV 캐시를 최신으로 업데이트
+        """
+        logger.info("[NotificationScheduler] Running buy data update job (14:57)...")
+
+        try:
+            async with get_async_session() as session:
+                warmup_service = OHLCVWarmupService(session)
+
+                # 오래된 데이터 (3일 이상) 보유 종목만 업데이트
+                result = await warmup_service.update_stale_symbols(
+                    freshness_days=1,  # 1일 이상 지난 데이터 업데이트
+                    concurrency=5,
+                )
+
+                logger.info(
+                    f"[NotificationScheduler] Buy data update completed: "
+                    f"{result.success_count} updated, {result.api_calls_made} API calls, "
+                    f"{result.duration_seconds}s"
+                )
+
+        except Exception as e:
+            logger.error(f"[NotificationScheduler] Buy data update error: {e}")
+
+    async def _sell_data_update_job(self) -> None:
+        """
+        매도 알림용 데이터 업데이트 Job (09:07)
+
+        매도 추적 중인 종목의 OHLCV 캐시를 최신으로 업데이트
+        """
+        logger.info("[NotificationScheduler] Running sell data update job (09:07)...")
+
+        try:
+            async with get_async_session() as session:
+                # 활성 추적 종목 조회
+                history_repo = AnalysisHistoryRepository(session)
+                active_items = await history_repo.get_active_symbols_with_names("sell")
+
+                if not active_items:
+                    logger.info("[NotificationScheduler] No active sell tracking items to update")
+                    return
+
+                symbols = [item["symbol"] for item in active_items if item["symbol"]]
+                if not symbols:
+                    logger.info("[NotificationScheduler] No valid symbols to update")
+                    return
+                logger.info(f"[NotificationScheduler] Updating {len(symbols)} sell tracking symbols")
+
+                # 해당 종목들만 업데이트
+                warmup_service = OHLCVWarmupService(session)
+                from src.application.domain.ohlcv.dto import WarmupRequestDTO
+
+                request = WarmupRequestDTO(
+                    symbols=symbols,
+                    days=300,  # 매도 분석에 필요한 기간
+                    interval="1d",
+                    force_refresh=True,  # 강제 업데이트
+                )
+
+                result = await warmup_service.warmup_symbols(request, concurrency=5)
+
+                logger.info(
+                    f"[NotificationScheduler] Sell data update completed: "
+                    f"{result.success_count} updated, {result.api_calls_made} API calls, "
+                    f"{result.duration_seconds}s"
+                )
+
+        except Exception as e:
+            logger.error(f"[NotificationScheduler] Sell data update error: {e}")
 
     # ==================== 매수 알림 Job ====================
 
@@ -141,7 +250,7 @@ class NotificationScheduler:
                     ]
 
                     state_order = {"OPTIMAL_BUY": 0, "BUY_INTEREST": 1, "READY_TO_BUY": 2}
-                    buy_targets.sort(key=lambda s: state_order.get(s.get("gc_state"), 99))
+                    buy_targets.sort(key=lambda s: state_order.get(str(s.get("gc_state", "")), 99))
 
                     notifier = get_telegram_notifier()
                     if buy_targets:
@@ -196,6 +305,8 @@ class NotificationScheduler:
 
                     for item in active_items:
                         symbol = item["symbol"]
+                        if not symbol:
+                            continue
                         try:
                             result = await sell_service.analyze_sell_signal(symbol)
 
