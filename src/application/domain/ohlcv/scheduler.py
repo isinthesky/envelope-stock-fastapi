@@ -6,7 +6,6 @@ OHLCV Cache Scheduler - OHLCV 캐시 정기 작업 스케줄러
 """
 
 import logging
-from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -15,6 +14,7 @@ from src.adapters.database.connection import get_async_session
 from src.application.domain.ohlcv.cache_manager import OHLCVCacheManager
 from src.application.domain.ohlcv.dto import CacheRetentionPolicyDTO
 from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
+from src.settings.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +93,8 @@ class OHLCVCacheScheduler:
             async with get_async_session() as session:
                 manager = OHLCVCacheManager(session)
                 policy = CacheRetentionPolicyDTO(
-                    retention_days=365,
-                    cleanup_batch_size=1000,
+                    retention_days=settings.ohlcv_retention_days,
+                    cleanup_batch_size=settings.ohlcv_cleanup_batch_size,
                 )
                 result = await manager.cleanup_old_data(policy, dry_run=False)
 
@@ -116,7 +116,7 @@ class OHLCVCacheScheduler:
             async with get_async_session() as session:
                 service = OHLCVWarmupService(session)
                 result = await service.update_stale_symbols(
-                    freshness_days=3,
+                    freshness_days=None,  # settings.ohlcv_warmup_freshness_days 사용
                     concurrency=3,
                 )
 
@@ -139,8 +139,8 @@ class OHLCVCacheScheduler:
             async with get_async_session() as session:
                 manager = OHLCVCacheManager(session)
                 policy = CacheRetentionPolicyDTO(
-                    retention_days=365,
-                    cleanup_batch_size=1000,
+                    retention_days=settings.ohlcv_retention_days,
+                    cleanup_batch_size=settings.ohlcv_cleanup_batch_size,
                 )
                 result = await manager.cleanup_old_data(policy, dry_run=False)
 

@@ -23,7 +23,7 @@ from src.application.domain.strategy.dto import (
     GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
 )
-from src.application.domain.strategy.ohlcv_data_loader import LoadType, OHLCVDataLoader
+from src.application.domain.ohlcv.data_loader import LoadType, OHLCVDataLoader
 
 
 logger = logging.getLogger(__name__)

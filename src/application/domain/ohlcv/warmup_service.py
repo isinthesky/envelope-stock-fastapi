@@ -8,18 +8,18 @@ OHLCV Warmup Service - OHLCV 캐시 워밍업 및 프리페칭
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.repositories.ohlcv_repository import OHLCVRepository
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
 )
-from src.adapters.external.kis_api.client import get_kis_client
-from src.application.domain.market_data.service import MarketDataService
+from src.application.domain.ohlcv.core_loader import OHLCVCoreLoader
 from src.application.domain.ohlcv.dto import WarmupRequestDTO, WarmupResultDTO
+from src.settings.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +36,7 @@ class OHLCVWarmupService:
         """
         self.session = session
         self.ohlcv_repo = OHLCVRepository(session)
-        self._market_data_service: MarketDataService | None = None
-
-    async def _get_market_data_service(self) -> MarketDataService:
-        """MarketDataService 인스턴스 반환 (Lazy 초기화)"""
-        if self._market_data_service is None:
-            kis_client = get_kis_client()
-            redis_client = await get_redis_client()
-            self._market_data_service = MarketDataService(kis_client, redis_client)
-        return self._market_data_service
+        self.core_loader = OHLCVCoreLoader(session)
 
     # ==================== 배치 워밍업 ====================
 
@@ -150,7 +142,7 @@ class OHLCVWarmupService:
         Returns:
             tuple[int, int]: (캐시된 캔들 수, API 호출 수)
         """
-        end_date = datetime.now()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
 
         # 캐시 확인 (force_refresh가 아닌 경우)
@@ -166,56 +158,22 @@ class OHLCVWarmupService:
                 logger.debug(f"[WarmupService] {symbol}: Already cached, skipping")
                 return 0, 0
 
-        # API 호출로 데이터 수집
-        market_data_service = await self._get_market_data_service()
-        all_candles = []
-        api_calls = 0
+        # CoreLoader로 API 호출
+        df, api_calls = await self.core_loader.load_from_api(
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval,
+        )
 
-        try:
-            # 첫 번째 호출: 최근 120일
-            mid_date = end_date - timedelta(days=120)
-            chart_data1 = await market_data_service.get_chart_data(
-                symbol=symbol,
-                interval=interval,
-                start_date=mid_date,
-                end_date=end_date,
-            )
-            api_calls += 1
-
-            if chart_data1.candles:
-                all_candles.extend(chart_data1.candles)
-
-            # 두 번째 호출: 이전 120일 (필요시)
-            if all_candles and days > 120:
-                earliest = min(c.timestamp for c in all_candles)
-                chart_data2 = await market_data_service.get_chart_data(
-                    symbol=symbol,
-                    interval=interval,
-                    start_date=earliest - timedelta(days=120),
-                    end_date=earliest - timedelta(days=1),
-                )
-                api_calls += 1
-
-                if chart_data2.candles:
-                    all_candles.extend(chart_data2.candles)
-
-        except Exception as e:
-            logger.warning(f"[WarmupService] API call failed for {symbol}: {e}")
-            raise
-
-        if not all_candles:
+        if df.empty:
             return 0, api_calls
 
-        # 중복 제거
-        candles_by_date = {c.timestamp: c for c in all_candles}
-        unique_candles = list(candles_by_date.values())
-
         # DB 저장
-        saved_count = await self.ohlcv_repo.save_candles_bulk(
+        saved_count = await self.core_loader.cache_to_db(
             symbol=symbol,
-            candles=unique_candles,
+            df=df,
             interval=interval,
-            source="kis",
         )
         await self.session.commit()
 
@@ -278,7 +236,7 @@ class OHLCVWarmupService:
 
     async def update_stale_symbols(
         self,
-        freshness_days: int = 3,
+        freshness_days: Optional[int] = None,
         concurrency: int = 3,
     ) -> WarmupResultDTO:
         """
@@ -287,12 +245,16 @@ class OHLCVWarmupService:
         캐시된 마지막 날짜 이후 ~ 오늘까지만 API 호출
 
         Args:
-            freshness_days: 신선도 기준 (일)
+            freshness_days: 신선도 기준 (일), None이면 설정값 사용
             concurrency: 동시 처리 수
 
         Returns:
             WarmupResultDTO: 업데이트 결과
         """
+        # 기본값 설정
+        if freshness_days is None:
+            freshness_days = settings.ohlcv_warmup_freshness_days
+
         start_time = time.time()
 
         # 오래된 데이터 보유 종목 조회
@@ -375,42 +337,50 @@ class OHLCVWarmupService:
             tuple[int, int]: (캐시된 캔들 수, API 호출 수)
         """
         # 타임존 정규화
-        if from_date.tzinfo is not None:
-            from_date = from_date.replace(tzinfo=None)
+        from src.application.domain.ohlcv.core_loader import normalize_timestamp
+        from_date = normalize_timestamp(from_date)
 
-        end_date = datetime.now()
-        start_date = from_date + timedelta(days=1)  # 다음 날부터
+        end_date = datetime.now(timezone.utc)
 
-        if start_date >= end_date:
-            return 0, 0  # 업데이트 불필요
+        # 이미 최신이면 업데이트 불필요
+        if (end_date - from_date).days <= 1:
+            return 0, 0
 
-        market_data_service = await self._get_market_data_service()
+        # 캐시된 데이터 조회
+        start_date = end_date - timedelta(days=365)  # 1년치 조회
+        cached_df = await self.ohlcv_repo.get_candles_to_dataframe(
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval,
+        )
 
+        # CoreLoader로 증분 업데이트
         try:
-            chart_data = await market_data_service.get_chart_data(
+            merged_df, new_candles, api_calls = await self.core_loader.incremental_update(
                 symbol=symbol,
-                interval=interval,
-                start_date=start_date,
+                cached_df=cached_df,
+                last_cached_date=from_date,
                 end_date=end_date,
-            )
-
-            if not chart_data.candles:
-                return 0, 1
-
-            # 중복 제거
-            candles_by_date = {c.timestamp: c for c in chart_data.candles}
-            unique_candles = list(candles_by_date.values())
-
-            # DB 저장
-            saved_count = await self.ohlcv_repo.save_candles_bulk(
-                symbol=symbol,
-                candles=unique_candles,
                 interval=interval,
-                source="kis",
             )
-            await self.session.commit()
 
-            return saved_count, 1
+            if new_candles == 0:
+                return 0, api_calls
+
+            # 새 데이터만 DB 저장 (전체가 아닌 증분만)
+            # merged_df에서 from_date 이후 데이터만 추출
+            if not merged_df.empty:
+                new_df = merged_df[merged_df["timestamp"] > from_date]
+                saved_count = await self.core_loader.cache_to_db(
+                    symbol=symbol,
+                    df=new_df,
+                    interval=interval,
+                )
+                await self.session.commit()
+                return saved_count, api_calls
+
+            return 0, api_calls
 
         except Exception as e:
             logger.warning(f"[WarmupService] Incremental update failed for {symbol}: {e}")

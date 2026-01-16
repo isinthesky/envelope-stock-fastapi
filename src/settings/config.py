@@ -68,6 +68,23 @@ class Settings(BaseSettings):
         default=365, ge=1, description="주문/체결 기록 보관 기간 (일)"
     )
 
+    # ==================== OHLCV 캐시 설정 ====================
+    ohlcv_cache_freshness_days: int = Field(
+        default=1, ge=1, le=7, description="OHLCV 캐시 신선도 기준 (일)"
+    )
+    ohlcv_warmup_freshness_days: int = Field(
+        default=3, ge=1, le=7, description="OHLCV 워밍업/스케줄러 신선도 기준 (일)"
+    )
+    ohlcv_retention_days: int = Field(
+        default=365, ge=30, le=3650, description="OHLCV 데이터 보존 기간 (일)"
+    )
+    ohlcv_cleanup_batch_size: int = Field(
+        default=1000, ge=100, le=10000, description="OHLCV 정리 배치 크기"
+    )
+    ohlcv_max_api_days_per_call: int = Field(
+        default=100, ge=1, le=365, description="KIS API 단일 호출 최대 조회 기간 (일)"
+    )
+
     # ==================== KIS API 설정 (실전투자) ====================
     kis_app_key: str = Field(default="", description="KIS 실전투자 앱키")
     kis_app_secret: str = Field(default="", description="KIS 실전투자 앱시크릿")

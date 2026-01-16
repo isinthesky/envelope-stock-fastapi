@@ -22,7 +22,7 @@ from src.application.domain.strategy.dto import (
     SellPhaseEnum,
     SellSignalAnalysisDTO,
 )
-from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
+from src.application.domain.ohlcv.data_loader import OHLCVDataLoader
 
 
 logger = logging.getLogger(__name__)

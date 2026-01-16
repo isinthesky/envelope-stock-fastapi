@@ -17,13 +17,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from src.application.domain.strategy.ohlcv_data_loader import (
-    MAX_API_DAYS_PER_CALL,
+from src.application.domain.ohlcv.data_loader import (
     LoadType,
     OHLCVDataLoader,
+)
+from src.application.domain.ohlcv.core_loader import (
     normalize_df_timestamps,
     normalize_timestamp,
 )
+from src.settings.config import settings
 
 
 def create_mock_candle(date: datetime, close: float = 100.0) -> MagicMock:
@@ -142,13 +144,13 @@ class TestLongTermStaleChunking:
             MagicMock(candles=[create_mock_candle(datetime(2024, 9, 1))]),  # chunk 3
         ]
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(side_effect=chunk_responses)
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -169,12 +171,12 @@ class TestLongTermStaleChunking:
 
         mock_response = MagicMock(candles=[create_mock_candle(datetime(2024, 4, 1))])
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(return_value=mock_response)
             mock_service.return_value = mock_mds
 
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -198,9 +200,10 @@ class TestLongTermStaleChunking:
         ]
 
         for days, expected_chunks in test_cases:
-            actual_chunks = (days // MAX_API_DAYS_PER_CALL) + (1 if days % MAX_API_DAYS_PER_CALL > 0 else 0)
-            # MAX_API_DAYS_PER_CALL=100이면 days/100 올림
-            if days <= MAX_API_DAYS_PER_CALL:
+            max_days = settings.ohlcv_max_api_days_per_call
+            actual_chunks = (days // max_days) + (1 if days % max_days > 0 else 0)
+            # ohlcv_max_api_days_per_call=100이면 days/100 올림
+            if days <= max_days:
                 assert actual_chunks == 1, f"days={days}"
             else:
                 assert actual_chunks == expected_chunks, f"days={days}, expected={expected_chunks}, actual={actual_chunks}"
@@ -225,7 +228,7 @@ class TestAPICallStatistics:
             MagicMock(candles=chunk2_candles),
         ]
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(side_effect=mock_responses)
             mock_service.return_value = mock_mds
@@ -233,7 +236,7 @@ class TestAPICallStatistics:
             start_date = datetime(2023, 9, 1, tzinfo=timezone.utc)
             end_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
 
-            result_df, api_calls = await loader._load_from_api(
+            result_df, api_calls = await loader.core_loader.load_from_api(
                 symbol="005930",
                 start_date=start_date,
                 end_date=end_date,
@@ -257,12 +260,12 @@ class TestAPICallStatistics:
             MagicMock(candles=[create_mock_candle(datetime(2024, 7, 1))]),
         ]
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(side_effect=mock_responses)
             mock_service.return_value = mock_mds
 
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -282,7 +285,7 @@ class TestCacheFreshnessDays:
         return OHLCVDataLoader(session=None)
 
     def test_default_freshness_is_1_day(self):
-        """기본 cache_freshness_days는 1일"""
+        """기본 cache_freshness_days는 None (내부에서 settings 사용)"""
         loader = OHLCVDataLoader(session=None)
 
         # 메서드 시그니처 확인 (inspect 사용)
@@ -290,7 +293,9 @@ class TestCacheFreshnessDays:
         sig = inspect.signature(loader.load_ohlcv_dataframe)
         default = sig.parameters["cache_freshness_days"].default
 
-        assert default == 1
+        # None이 기본값이고, 내부에서 settings.ohlcv_cache_freshness_days(1)를 사용
+        assert default is None
+        assert settings.ohlcv_cache_freshness_days == 1
 
     def test_freshness_calculation_logic(self):
         """신선도 계산 로직 검증"""
@@ -324,18 +329,18 @@ class TestFallbackBehavior:
         return OHLCVDataLoader(session=None)
 
     @pytest.mark.asyncio
-    async def test_incremental_failure_returns_none(self, loader):
-        """증분 업데이트 실패 시 None 반환 → 호출자가 full load"""
+    async def test_incremental_failure_returns_empty(self, loader):
+        """증분 업데이트 실패 시 캐시 그대로 반환 (API가 빈 결과 반환)"""
         last_cached = datetime(2024, 1, 1, tzinfo=timezone.utc)
         end_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
         cached_df = create_tz_aware_df([datetime(2024, 1, 1)])
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(side_effect=Exception("Network Error"))
             mock_service.return_value = mock_mds
 
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -343,13 +348,15 @@ class TestFallbackBehavior:
                 interval="1d",
             )
 
-            # 실패 시 None 반환
-            assert result_df is None
-            # 호출자(load_ohlcv_with_stats)가 full load로 fallback 해야 함
+            # 실패 시 캐시 그대로 반환 (load_from_api가 empty DataFrame 반환)
+            assert result_df is not None
+            assert len(result_df) == len(cached_df)
+            assert new_count == 0
+            assert api_calls == 1  # API 호출은 시도됨
 
     @pytest.mark.asyncio
-    async def test_partial_chunk_failure_returns_none(self, loader):
-        """multi-chunk 중 일부 실패 시 None 반환"""
+    async def test_partial_chunk_failure_returns_partial(self, loader):
+        """multi-chunk 중 일부 실패 시 성공한 chunk만 반환"""
         last_cached = datetime(2024, 1, 1, tzinfo=timezone.utc)
         end_date = datetime(2024, 7, 15, tzinfo=timezone.utc)  # ~195일 (2 chunks)
         cached_df = create_tz_aware_df([datetime(2024, 1, 1)])
@@ -360,12 +367,12 @@ class TestFallbackBehavior:
             Exception("API Error on chunk 2"),
         ]
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(side_effect=mock_responses)
             mock_service.return_value = mock_mds
 
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -373,8 +380,10 @@ class TestFallbackBehavior:
                 interval="1d",
             )
 
-            # 중간 실패 시 None 반환
-            assert result_df is None
+            # 일부 실패 시 성공한 chunk만 병합하여 반환
+            assert result_df is not None
+            assert len(result_df) > len(cached_df)  # 첫 번째 chunk는 병합됨
+            assert api_calls == 2  # 2번 시도
 
 
 class TestEdgeCases:
@@ -394,6 +403,6 @@ class TestEdgeCases:
         assert result["timestamp"].dt.tz is not None
 
     def test_max_api_days_constant(self):
-        """MAX_API_DAYS_PER_CALL 상수 값"""
-        assert MAX_API_DAYS_PER_CALL == 100
-        assert isinstance(MAX_API_DAYS_PER_CALL, int)
+        """ohlcv_max_api_days_per_call 설정값"""
+        assert settings.ohlcv_max_api_days_per_call == 100
+        assert isinstance(settings.ohlcv_max_api_days_per_call, int)
