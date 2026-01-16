@@ -65,16 +65,26 @@ class BacktestRequestDTO(BaseDTO):
         symbol: 종목코드
         start_date: 시작일
         end_date: 종료일
-        strategy_config: 전략 설정
+        strategy_type: 전략 유형 (golden_cross, mean_reversion 등)
+        strategy_params: 전략별 추가 파라미터
+        strategy_config: 전략 설정 (볼린저/엔벨로프 전략용)
         backtest_config: 백테스팅 설정
     """
 
     symbol: str = Field(description="종목코드", min_length=6, max_length=20)
     start_date: datetime = Field(description="시작일")
     end_date: datetime = Field(description="종료일")
+    strategy_type: str = Field(
+        default="mean_reversion",
+        description="전략 유형 (golden_cross, mean_reversion)"
+    )
+    strategy_params: dict | None = Field(
+        default=None,
+        description="전략별 추가 파라미터 (골든크로스: short_period, long_period, stoch_oversold, stoch_overbought 등)"
+    )
     strategy_config: StrategyConfigDTO = Field(
         default_factory=StrategyConfigDTO,
-        description="전략 설정"
+        description="전략 설정 (볼린저/엔벨로프 전략용)"
     )
     backtest_config: BacktestConfigDTO = Field(
         default_factory=BacktestConfigDTO,
@@ -99,16 +109,26 @@ class MultiSymbolBacktestRequestDTO(BaseDTO):
         symbols: 종목코드 리스트
         start_date: 시작일
         end_date: 종료일
-        strategy_config: 전략 설정
+        strategy_type: 전략 유형 (golden_cross, mean_reversion 등)
+        strategy_params: 전략별 추가 파라미터
+        strategy_config: 전략 설정 (볼린저/엔벨로프 전략용)
         backtest_config: 백테스팅 설정
     """
 
     symbols: list[str] = Field(description="종목코드 리스트", min_length=1)
     start_date: datetime = Field(description="시작일")
     end_date: datetime = Field(description="종료일")
+    strategy_type: str = Field(
+        default="mean_reversion",
+        description="전략 유형 (golden_cross, mean_reversion)"
+    )
+    strategy_params: dict | None = Field(
+        default=None,
+        description="전략별 추가 파라미터"
+    )
     strategy_config: StrategyConfigDTO = Field(
         default_factory=StrategyConfigDTO,
-        description="전략 설정"
+        description="전략 설정 (볼린저/엔벨로프 전략용)"
     )
     backtest_config: BacktestConfigDTO = Field(
         default_factory=BacktestConfigDTO,

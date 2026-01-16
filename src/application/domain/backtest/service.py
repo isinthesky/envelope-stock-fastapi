@@ -82,7 +82,9 @@ class BacktestService:
             engine = BacktestEngine(
                 symbol=request.symbol,
                 strategy_config=request.strategy_config,
-                backtest_config=request.backtest_config
+                backtest_config=request.backtest_config,
+                strategy_type=request.strategy_type,
+                strategy_params=request.strategy_params,
             )
 
             # 3. 백테스팅 실행
@@ -137,6 +139,8 @@ class BacktestService:
                     symbol=symbol,
                     start_date=request.start_date,
                     end_date=request.end_date,
+                    strategy_type=request.strategy_type,
+                    strategy_params=request.strategy_params,
                     strategy_config=request.strategy_config,
                     backtest_config=request.backtest_config
                 )

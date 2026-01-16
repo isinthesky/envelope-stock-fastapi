@@ -20,6 +20,10 @@ from src.application.domain.backtest.dto import (
 )
 from src.application.domain.backtest.order_manager import BacktestOrderManager
 from src.application.domain.backtest.position_manager import PositionManager
+from src.application.domain.backtest.signal_generators import (
+    BaseSignalGenerator,
+    create_signal_generator,
+)
 from src.application.domain.strategy.dto import StrategyConfigDTO
 
 
@@ -30,17 +34,60 @@ class BacktestEngine:
         self,
         symbol: str,
         strategy_config: StrategyConfigDTO,
-        backtest_config: BacktestConfigDTO
+        backtest_config: BacktestConfigDTO,
+        strategy_type: str = "mean_reversion",
+        strategy_params: dict | None = None,
     ):
         """
         Args:
             symbol: 종목코드
             strategy_config: 전략 설정
             backtest_config: 백테스팅 설정
+            strategy_type: 전략 유형 ("golden_cross", "mean_reversion" 등)
+            strategy_params: 전략별 추가 파라미터
         """
         self.symbol = symbol
         self.strategy_config = strategy_config
         self.backtest_config = backtest_config
+        self.strategy_type = strategy_type
+
+        # 시그널 생성기 초기화
+        params = strategy_params or {}
+        if strategy_type == "golden_cross":
+            # 골든크로스 전략 파라미터
+            self.signal_generator: BaseSignalGenerator = create_signal_generator(
+                strategy_type="golden_cross",
+                short_period=params.get("short_period", 55),
+                long_period=params.get("long_period", 165),
+                stoch_k_period=params.get("stoch_k_period", 14),
+                stoch_d_period=params.get("stoch_d_period", 3),
+                stoch_oversold=params.get("stoch_oversold", 30.0),
+                stoch_overbought=params.get("stoch_overbought", 70.0),
+                require_k_above_d_for_buy=params.get("require_k_above_d_for_buy", False),
+                require_k_below_d_for_sell=params.get("require_k_below_d_for_sell", False),
+            )
+        elif strategy_type == "ma5_breakout":
+            # MA5 엔벨로프 상단 돌파 전략
+            self.signal_generator = create_signal_generator(
+                strategy_type="ma5_breakout",
+                short_ma_period=params.get("short_ma_period", 5),
+                long_ma_period=params.get("long_ma_period", 300),
+                envelope_percentage=params.get("envelope_percentage", 0.7),
+                secondary_ma_period=params.get("secondary_ma_period", 400),
+                secondary_envelope_percentage=params.get("secondary_envelope_percentage", 0.7),
+                volume_ma_period=params.get("volume_ma_period", 20),
+                volume_ratio_threshold=params.get("volume_ratio_threshold", 1.0),
+                use_volume_filter=params.get("use_volume_filter", True),
+            )
+        else:
+            # 볼린저밴드 + 엔벨로프 전략 (기존 방식)
+            self.signal_generator = create_signal_generator(
+                strategy_type="mean_reversion",
+                bb_period=strategy_config.bollinger_band.period,
+                bb_std_multiplier=strategy_config.bollinger_band.std_multiplier,
+                env_period=strategy_config.envelope.period,
+                env_percentage=strategy_config.envelope.percentage,
+            )
 
         # 관리자 초기화
         self.order_manager = BacktestOrderManager(backtest_config)
@@ -142,9 +189,13 @@ class BacktestEngine:
         self.price_history.clear()
         self.position_manager.clear_all_positions()
 
+        # 시그널 생성기 상태 초기화
+        if hasattr(self.signal_generator, "reset"):
+            self.signal_generator.reset()
+
     def _generate_signal(self, current_price: Decimal) -> str:
         """
-        매매 시그널 생성
+        매매 시그널 생성 (시그널 생성기에 위임)
 
         Args:
             current_price: 현재가
@@ -152,37 +203,10 @@ class BacktestEngine:
         Returns:
             str: "buy" (매수), "sell" (매도), "hold" (보유)
         """
-        # 최소 기간 데이터 확인
-        bb_period = self.strategy_config.bollinger_band.period
-        env_period = self.strategy_config.envelope.period
-        min_period = max(bb_period, env_period)
-
-        if len(self.price_history) < min_period:
-            return "hold"
-
-        # 볼린저 밴드 계산
-        bb_bands = TechnicalIndicators.calculate_bollinger_bands(
-            self.price_history,
-            period=bb_period,
-            std_multiplier=self.strategy_config.bollinger_band.std_multiplier
+        return self.signal_generator.generate_signal(
+            price_history=self.price_history,
+            current_price=current_price,
         )
-
-        # 엔벨로프 계산
-        env_bands = TechnicalIndicators.calculate_envelope(
-            self.price_history,
-            period=env_period,
-            percentage=self.strategy_config.envelope.percentage
-        )
-
-        # 결합 시그널 생성
-        signal = TechnicalIndicators.generate_combined_signal(
-            current_price=float(current_price),
-            bb_bands=bb_bands,
-            envelope_bands=env_bands,
-            use_strict_mode=True  # 엄격 모드 사용
-        )
-
-        return signal
 
     async def _execute_buy(self, date: datetime, price: Decimal) -> None:
         """
