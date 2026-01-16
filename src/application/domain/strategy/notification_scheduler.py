@@ -217,7 +217,7 @@ class NotificationScheduler:
         """
         매수 알림 Job (15:00)
 
-        골든크로스 스캔 후 BUY_INTEREST/READY_TO_BUY/OPTIMAL_BUY 상태 종목을 Telegram으로 알림
+        골든크로스 스캔 → 재무 필터 → BUY_INTEREST/READY_TO_BUY/OPTIMAL_BUY 종목 Telegram 알림
         """
         async with self._execution_lock:
             logger.info("[NotificationScheduler] Running buy notification job...")
@@ -226,15 +226,31 @@ class NotificationScheduler:
                 async with get_async_session() as session:
                     buy_service = BuyStrategyService(session=session)
 
-                    # 골든크로스 스캔 (매수 관심/준비/적기 필터링)
+                    # 1. 골든크로스 스캔 (매수 관심/준비/적기 필터링)
                     scan_result = await buy_service.scan_golden_cross_candidates(
                         market=None,
                         stoch_threshold=30.0,
                         gc_only=True,
                     )
 
-                    # BUY_INTEREST/READY_TO_BUY/OPTIMAL_BUY 종목 필터
-                    target_states = {"BUY_INTEREST", "READY_TO_BUY", "OPTIMAL_BUY"}
+                    logger.info(
+                        f"[NotificationScheduler] Golden cross scan: {len(scan_result.stocks)} candidates"
+                    )
+
+                    # 2. 재무 필터 적용 (DART API)
+                    target_states = ["OPTIMAL_BUY", "BUY_INTEREST", "READY_TO_BUY"]
+                    filtered_result = await buy_service.apply_financial_filter(
+                        scan_result=scan_result,
+                        target_states=target_states,
+                        max_concurrent=3,
+                    )
+
+                    logger.info(
+                        f"[NotificationScheduler] After financial filter: {len(filtered_result.stocks)} stocks"
+                    )
+
+                    # 3. 대상 상태 필터링 및 변환
+                    target_states_set = set(target_states)
                     buy_targets = [
                         {
                             "symbol": s.symbol,
@@ -245,13 +261,15 @@ class NotificationScheduler:
                             "stoch_k": s.stoch_k,
                             "gc_state": s.gc_state,
                         }
-                        for s in scan_result.stocks
-                        if s.gc_state in target_states
+                        for s in filtered_result.stocks
+                        if s.gc_state in target_states_set
                     ]
 
+                    # 4. 상태별 정렬 (OPTIMAL_BUY 우선)
                     state_order = {"OPTIMAL_BUY": 0, "BUY_INTEREST": 1, "READY_TO_BUY": 2}
                     buy_targets.sort(key=lambda s: state_order.get(str(s.get("gc_state", "")), 99))
 
+                    # 5. 텔레그램 전송
                     notifier = get_telegram_notifier()
                     if buy_targets:
                         await notifier.send_buy_signals_summary(buy_targets)
