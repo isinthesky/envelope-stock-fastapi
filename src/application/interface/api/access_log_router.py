@@ -3,7 +3,6 @@
 Access Log Router - 접근 로그 API
 
 외부 접근 로그 조회 API를 제공합니다.
-관리자 IP에서만 접근 가능합니다.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -12,7 +11,6 @@ from fastapi import APIRouter, Query
 
 from src.adapters.database.connection import get_async_session
 from src.adapters.database.repositories.access_log_repository import AccessLogRepository
-from src.application.common.dependencies import AdminAccessDep
 from src.application.common.dto import ResponseDTO
 
 router = APIRouter(prefix="/api/v1/access-logs", tags=["AccessLogs"])
@@ -20,7 +18,6 @@ router = APIRouter(prefix="/api/v1/access-logs", tags=["AccessLogs"])
 
 @router.get("", response_model=ResponseDTO)
 async def get_access_logs(
-    _admin_ip: AdminAccessDep,
     limit: int = Query(default=100, ge=1, le=500, description="조회 개수"),
     offset: int = Query(default=0, ge=0, description="시작 위치"),
     path_filter: str | None = Query(default=None, description="경로 필터"),
@@ -69,7 +66,6 @@ async def get_access_logs(
 
 @router.get("/stats", response_model=ResponseDTO)
 async def get_access_stats(
-    _admin_ip: AdminAccessDep,
     hours: int = Query(default=24, ge=1, le=168, description="통계 기간 (시간)"),
 ) -> ResponseDTO:
     """
@@ -112,7 +108,6 @@ async def get_access_stats(
 
 @router.get("/unique-ips", response_model=ResponseDTO)
 async def get_unique_ips(
-    _admin_ip: AdminAccessDep,
     hours: int = Query(default=24, ge=1, le=168, description="기간 (시간)"),
 ) -> ResponseDTO:
     """
@@ -138,7 +133,6 @@ async def get_unique_ips(
 
 @router.delete("/cleanup", response_model=ResponseDTO)
 async def cleanup_old_logs(
-    _admin_ip: AdminAccessDep,
     days: int = Query(default=30, ge=7, le=365, description="보관 기간 (일)"),
 ) -> ResponseDTO:
     """
