@@ -551,3 +551,109 @@ class TechnicalIndicators:
         )
 
         return result_df
+
+    @staticmethod
+    def calculate_atr(
+        high_prices: list[float],
+        low_prices: list[float],
+        close_prices: list[float],
+        period: int = 14,
+    ) -> float | None:
+        """
+        ATR (Average True Range) 계산
+
+        변동성을 측정하는 지표로, 동적 손절에 활용
+
+        Args:
+            high_prices: 고가 리스트
+            low_prices: 저가 리스트
+            close_prices: 종가 리스트
+            period: ATR 기간 (기본: 14)
+
+        Returns:
+            float | None: ATR 값 (데이터 부족 시 None)
+        """
+        if len(high_prices) < period + 1 or len(low_prices) < period + 1 or len(close_prices) < period + 1:
+            return None
+
+        true_ranges = []
+        for i in range(1, len(close_prices)):
+            high = high_prices[i]
+            low = low_prices[i]
+            prev_close = close_prices[i - 1]
+
+            # True Range = max(고가-저가, |고가-전일종가|, |저가-전일종가|)
+            tr = max(
+                high - low,
+                abs(high - prev_close),
+                abs(low - prev_close)
+            )
+            true_ranges.append(tr)
+
+        if len(true_ranges) < period:
+            return None
+
+        # ATR = TR의 이동평균
+        return sum(true_ranges[-period:]) / period
+
+    @staticmethod
+    def calculate_atr_from_ohlcv(
+        ohlcv_data: list[dict],
+        period: int = 14,
+    ) -> float | None:
+        """
+        OHLCV 데이터에서 ATR 계산
+
+        Args:
+            ohlcv_data: OHLCV 딕셔너리 리스트 [{"high": ..., "low": ..., "close": ...}, ...]
+            period: ATR 기간 (기본: 14)
+
+        Returns:
+            float | None: ATR 값
+        """
+        if len(ohlcv_data) < period + 1:
+            return None
+
+        high_prices = [d.get("high", d.get("high_price", 0)) for d in ohlcv_data]
+        low_prices = [d.get("low", d.get("low_price", 0)) for d in ohlcv_data]
+        close_prices = [d.get("close", d.get("close_price", 0)) for d in ohlcv_data]
+
+        return TechnicalIndicators.calculate_atr(high_prices, low_prices, close_prices, period)
+
+    @staticmethod
+    def calculate_atr_stop_loss_price(
+        entry_price: float,
+        atr: float,
+        multiplier: float = 2.0,
+    ) -> float:
+        """
+        ATR 기반 손절가 계산
+
+        Args:
+            entry_price: 진입가
+            atr: ATR 값
+            multiplier: ATR 배수 (기본: 2.0)
+
+        Returns:
+            float: 손절가
+        """
+        return entry_price - (atr * multiplier)
+
+    @staticmethod
+    def calculate_atr_trailing_stop_price(
+        highest_price: float,
+        atr: float,
+        multiplier: float = 2.0,
+    ) -> float:
+        """
+        ATR 기반 트레일링 스톱가 계산
+
+        Args:
+            highest_price: 최고가
+            atr: ATR 값
+            multiplier: ATR 배수 (기본: 2.0)
+
+        Returns:
+            float: 트레일링 스톱가
+        """
+        return highest_price - (atr * multiplier)

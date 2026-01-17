@@ -28,6 +28,8 @@ from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.strategy.dto import (
     GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
+    MA5BreakoutScanItemDTO,
+    MA5BreakoutScanListDTO,
 )
 from src.application.domain.strategy.ohlcv_data_loader import LoadType, OHLCVDataLoader
 
@@ -678,4 +680,334 @@ class BuyStrategyService:
             financial_error_count=financial_error,
             turnaround_count=turnaround,
             financial_pending_count=pending,
+        )
+
+    # ==================== MA5 돌파 전략 스캔 ====================
+
+    @transaction
+    async def scan_ma5_breakout_candidates(
+        self,
+        session: AsyncSession,
+        market: str | None = None,
+        short_period: int = 5,
+        long_period: int = 300,
+        envelope_pct: float = 0.7,
+        use_volume_filter: bool = True,
+        include_etf: bool = True,
+    ) -> MA5BreakoutScanListDTO:
+        """
+        MA5 엔벨로프 상단 돌파 종목 스캔
+
+        Args:
+            session: Database Session (@transaction에서 주입)
+            market: 시장 필터 (KOSPI/KOSDAQ/ETF)
+            short_period: 단기 MA 기간 (기본 5)
+            long_period: 장기 MA 기간 (기본 300)
+            envelope_pct: 엔벨로프 % (기본 0.7)
+            use_volume_filter: 거래량 필터 사용 여부
+            include_etf: ETF 종목 포함 여부
+
+        Returns:
+            MA5BreakoutScanListDTO: 스캔 결과
+        """
+        scan_time = datetime.now()
+        errors: list[str] = []
+        results: list[MA5BreakoutScanItemDTO] = []
+
+        # 1. 유니버스에서 스크리닝 통과 종목 조회
+        market_type = MarketType(market) if market else None
+        stocks = await self.universe_repo.get_eligible_stocks(
+            market=market_type,
+            include_etf=include_etf,
+            session=session,
+            limit=300,
+        )
+
+        if not stocks:
+            return MA5BreakoutScanListDTO(
+                stocks=[],
+                total_scanned=0,
+                scan_time=scan_time,
+                errors=["No eligible stocks found in universe"],
+            )
+
+        logger.info(f"[MA5 Scan] Scanning {len(stocks)} eligible stocks with MA{short_period}/MA{long_period}")
+
+        # 2. 종목별 기술적 지표 계산
+        data_loader = self._get_data_loader(session)
+
+        for stock in stocks:
+            try:
+                # OHLCV 데이터 로딩 (MA300 계산을 위해 충분한 데이터 필요)
+                load_result = await data_loader.load_ohlcv_with_stats(
+                    symbol=stock.symbol,
+                    days=500,
+                    interval="1d",
+                    min_candles=long_period + 20,
+                    cache_freshness_days=1,
+                )
+                df = load_result.df
+
+                if len(df) < long_period:
+                    continue
+
+                # MA 계산
+                df["ma_short"] = df["close"].rolling(window=short_period).mean()
+                df["ma_long"] = df["close"].rolling(window=long_period).mean()
+
+                # 거래량 평균 계산
+                df["volume_ma20"] = df["volume"].rolling(window=20).mean()
+
+                # 최신 행 추출
+                latest = df.iloc[-1]
+                prev = df.iloc[-2] if len(df) > 1 else latest
+
+                ma5 = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
+                ma300 = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
+                close = float(latest["close"])
+                volume = float(latest["volume"]) if pd.notna(latest["volume"]) else 0
+                volume_ma20 = float(latest["volume_ma20"]) if pd.notna(latest["volume_ma20"]) else 1
+
+                prev_ma5 = float(prev["ma_short"]) if pd.notna(prev["ma_short"]) else 0
+
+                if ma300 <= 0:
+                    continue
+
+                # 엔벨로프 상단 계산
+                upper_band = ma300 * (1 + envelope_pct / 100)
+
+                # 상태 결정
+                ma5_above_upper = ma5 > upper_band
+                prev_ma5_above_upper = prev_ma5 > (ma300 * (1 + envelope_pct / 100))  # 근사값
+                price_above_upper = close > upper_band
+
+                # 돌파 판정: 이전에 상단 아래 → 현재 상단 위
+                is_breakout = ma5_above_upper and not prev_ma5_above_upper and price_above_upper
+
+                # 거래량 비율
+                volume_ratio = volume / volume_ma20 if volume_ma20 > 0 else 1.0
+
+                # 거래량 필터
+                if use_volume_filter and is_breakout and volume_ratio < 1.0:
+                    is_breakout = False  # 거래량 부족하면 돌파로 인정하지 않음
+
+                # 상태 결정
+                if is_breakout:
+                    ma5_state = "BREAKOUT"
+                elif ma5_above_upper:
+                    ma5_state = "ABOVE"
+                else:
+                    ma5_state = "BELOW"
+
+                # MA5와 상단 괴리율
+                gap_ratio = ((ma5 - upper_band) / upper_band * 100) if upper_band > 0 else 0
+
+                results.append(
+                    MA5BreakoutScanItemDTO(
+                        symbol=stock.symbol,
+                        name=stock.name,
+                        market=stock.market,
+                        current_price=close,
+                        ma5=round(ma5, 2),
+                        ma300=round(ma300, 2),
+                        upper_band=round(upper_band, 2),
+                        ma5_state=ma5_state,
+                        gap_ratio=round(gap_ratio, 2),
+                        volume_ratio=round(volume_ratio, 2),
+                    )
+                )
+
+                await asyncio.sleep(0.05)
+
+            except Exception as e:
+                error_msg = f"{stock.symbol}: {str(e)}"
+                logger.warning(f"[MA5 Scan] Error processing {error_msg}")
+                errors.append(error_msg)
+
+        # 3. 결과 정렬 (BREAKOUT > ABOVE > BELOW)
+        state_order = {"BREAKOUT": 0, "ABOVE": 1, "BELOW": 2}
+        results.sort(key=lambda x: (state_order.get(x.ma5_state, 99), -x.gap_ratio))
+
+        # 4. 통계 계산
+        breakout_count = sum(1 for r in results if r.ma5_state == "BREAKOUT")
+        above_count = sum(1 for r in results if r.ma5_state == "ABOVE")
+        below_count = sum(1 for r in results if r.ma5_state == "BELOW")
+
+        logger.info(
+            f"[MA5 Scan] Complete: {len(results)} results, "
+            f"BREAKOUT: {breakout_count}, ABOVE: {above_count}, BELOW: {below_count}, Errors: {len(errors)}"
+        )
+
+        return MA5BreakoutScanListDTO(
+            stocks=results,
+            total_scanned=len(stocks),
+            breakout_count=breakout_count,
+            above_count=above_count,
+            below_count=below_count,
+            scan_time=scan_time,
+            errors=errors,
+        )
+
+    @transaction
+    async def scan_ma5_breakout_symbols(
+        self,
+        session: AsyncSession,
+        symbols: list[dict],
+        short_period: int = 5,
+        long_period: int = 300,
+        envelope_pct: float = 0.7,
+        use_volume_filter: bool = True,
+    ) -> MA5BreakoutScanListDTO:
+        """
+        특정 종목 목록에 대해 MA5 돌파 스캔
+
+        Args:
+            session: Database Session (@transaction에서 주입)
+            symbols: 스캔할 종목 목록 [{"symbol": "...", "name": "...", "market": "..."}]
+            short_period: 단기 MA 기간 (기본 5)
+            long_period: 장기 MA 기간 (기본 300)
+            envelope_pct: 엔벨로프 % (기본 0.7)
+            use_volume_filter: 거래량 필터 사용 여부
+
+        Returns:
+            MA5BreakoutScanListDTO: 스캔 결과
+        """
+        scan_time = datetime.now()
+        errors: list[str] = []
+        results: list[MA5BreakoutScanItemDTO] = []
+
+        if not symbols:
+            return MA5BreakoutScanListDTO(
+                stocks=[],
+                total_scanned=0,
+                scan_time=scan_time,
+                errors=["No symbols provided"],
+            )
+
+        logger.info(f"[MA5 Scan] Scanning {len(symbols)} symbols with MA{short_period}/MA{long_period}")
+
+        data_loader = self._get_data_loader(session)
+
+        # 종목명 조회 서비스
+        from src.adapters.cache.redis_client import get_redis_client
+        from src.adapters.external.kis_api.client import get_kis_client
+        from src.application.domain.market_data.service import MarketDataService
+
+        try:
+            kis_client = get_kis_client()
+            redis_client = await get_redis_client()
+            market_data_service = MarketDataService(kis_client, redis_client)
+        except Exception:
+            market_data_service = None
+
+        for item in symbols:
+            symbol = item.get("symbol")
+            name = item.get("name")
+            market = item.get("market") or "UNKNOWN"
+
+            if not symbol:
+                continue
+
+            # 종목명 조회
+            if not name and market_data_service:
+                try:
+                    name = await market_data_service.get_stock_name(symbol)
+                except Exception:
+                    pass
+            name = name or symbol
+
+            try:
+                df = await data_loader.load_ohlcv_dataframe(
+                    symbol=symbol,
+                    days=500,
+                    interval="1d",
+                    min_candles=long_period + 20,
+                )
+
+                if len(df) < long_period:
+                    continue
+
+                # MA 계산
+                df["ma_short"] = df["close"].rolling(window=short_period).mean()
+                df["ma_long"] = df["close"].rolling(window=long_period).mean()
+                df["volume_ma20"] = df["volume"].rolling(window=20).mean()
+
+                latest = df.iloc[-1]
+                prev = df.iloc[-2] if len(df) > 1 else latest
+
+                ma5 = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
+                ma300 = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
+                close = float(latest["close"])
+                volume = float(latest["volume"]) if pd.notna(latest["volume"]) else 0
+                volume_ma20 = float(latest["volume_ma20"]) if pd.notna(latest["volume_ma20"]) else 1
+
+                prev_ma5 = float(prev["ma_short"]) if pd.notna(prev["ma_short"]) else 0
+
+                if ma300 <= 0:
+                    continue
+
+                upper_band = ma300 * (1 + envelope_pct / 100)
+
+                ma5_above_upper = ma5 > upper_band
+                prev_ma5_above_upper = prev_ma5 > (ma300 * (1 + envelope_pct / 100))
+                price_above_upper = close > upper_band
+
+                is_breakout = ma5_above_upper and not prev_ma5_above_upper and price_above_upper
+
+                volume_ratio = volume / volume_ma20 if volume_ma20 > 0 else 1.0
+
+                if use_volume_filter and is_breakout and volume_ratio < 1.0:
+                    is_breakout = False
+
+                if is_breakout:
+                    ma5_state = "BREAKOUT"
+                elif ma5_above_upper:
+                    ma5_state = "ABOVE"
+                else:
+                    ma5_state = "BELOW"
+
+                gap_ratio = ((ma5 - upper_band) / upper_band * 100) if upper_band > 0 else 0
+
+                results.append(
+                    MA5BreakoutScanItemDTO(
+                        symbol=symbol,
+                        name=name,
+                        market=market,
+                        current_price=close,
+                        ma5=round(ma5, 2),
+                        ma300=round(ma300, 2),
+                        upper_band=round(upper_band, 2),
+                        ma5_state=ma5_state,
+                        gap_ratio=round(gap_ratio, 2),
+                        volume_ratio=round(volume_ratio, 2),
+                    )
+                )
+
+                await asyncio.sleep(0.05)
+
+            except Exception as e:
+                error_msg = f"{symbol}: {str(e)}"
+                logger.warning(f"[MA5 Scan] Error processing {error_msg}")
+                errors.append(error_msg)
+
+        state_order = {"BREAKOUT": 0, "ABOVE": 1, "BELOW": 2}
+        results.sort(key=lambda x: (state_order.get(x.ma5_state, 99), -x.gap_ratio))
+
+        breakout_count = sum(1 for r in results if r.ma5_state == "BREAKOUT")
+        above_count = sum(1 for r in results if r.ma5_state == "ABOVE")
+        below_count = sum(1 for r in results if r.ma5_state == "BELOW")
+
+        logger.info(
+            f"[MA5 Scan] Complete: {len(results)} results, "
+            f"BREAKOUT: {breakout_count}, ABOVE: {above_count}, BELOW: {below_count}"
+        )
+
+        return MA5BreakoutScanListDTO(
+            stocks=results,
+            total_scanned=len(symbols),
+            breakout_count=breakout_count,
+            above_count=above_count,
+            below_count=below_count,
+            scan_time=scan_time,
+            errors=errors,
         )

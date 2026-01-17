@@ -106,6 +106,11 @@ class BacktestEngine:
         # 가격 히스토리 (지표 계산용)
         self.price_history: list[float] = []
 
+        # OHLCV 히스토리 (ATR 계산용)
+        self.high_history: list[float] = []
+        self.low_history: list[float] = []
+        self.close_history: list[float] = []
+
     async def run(
         self,
         data: pd.DataFrame,
@@ -134,6 +139,11 @@ class BacktestEngine:
             # 가격 히스토리 업데이트
             self.price_history.append(row["close"])
 
+            # OHLCV 히스토리 업데이트 (ATR 계산용)
+            self.high_history.append(float(row.get("high", row["close"])))
+            self.low_history.append(float(row.get("low", row["close"])))
+            self.close_history.append(float(row["close"]))
+
             # 일별 처리
             await self._process_day(current_date, current_price, row)
 
@@ -159,8 +169,9 @@ class BacktestEngine:
         # 1. 손절/익절 체크 (장 시작 시)
         await self._check_risk_management(date, current_price)
 
-        # 2. 시그널 생성
-        signal = self._generate_signal(current_price)
+        # 2. 시그널 생성 (거래량 데이터 추출)
+        volume = float(row.get("volume", 0)) if "volume" in row else None
+        signal = self._generate_signal(current_price, volume=volume)
 
         # 3. 주문 실행
         if signal == "buy" and not self.position_manager.has_position(self.symbol):
@@ -187,22 +198,45 @@ class BacktestEngine:
         self.daily_stats.clear()
         self.equity_curve.clear()
         self.price_history.clear()
+        self.high_history.clear()
+        self.low_history.clear()
+        self.close_history.clear()
         self.position_manager.clear_all_positions()
 
         # 시그널 생성기 상태 초기화
         if hasattr(self.signal_generator, "reset"):
             self.signal_generator.reset()
 
-    def _generate_signal(self, current_price: Decimal) -> str:
+    def _calculate_current_atr(self) -> float | None:
+        """현재 ATR 계산"""
+        from src.application.common.indicators import TechnicalIndicators
+
+        atr_period = self.strategy_config.risk_management.atr_period
+        return TechnicalIndicators.calculate_atr(
+            self.high_history,
+            self.low_history,
+            self.close_history,
+            period=atr_period
+        )
+
+    def _generate_signal(self, current_price: Decimal, volume: float | None = None) -> str:
         """
         매매 시그널 생성 (시그널 생성기에 위임)
 
         Args:
             current_price: 현재가
+            volume: 거래량 (MA5 Breakout 전략용)
 
         Returns:
             str: "buy" (매수), "sell" (매도), "hold" (보유)
         """
+        # MA5 Breakout 전략은 거래량 데이터 사용
+        if self.strategy_type == "ma5_breakout" and volume is not None:
+            return self.signal_generator.generate_signal(
+                price_history=self.price_history,
+                current_price=current_price,
+                volume=volume,
+            )
         return self.signal_generator.generate_signal(
             price_history=self.price_history,
             current_price=current_price,
@@ -241,13 +275,20 @@ class BacktestEngine:
         # 현금 차감
         self.cash -= total_cost
 
+        # ATR 계산 (ATR 기반 손절 사용 시)
+        entry_atr = None
+        risk_config = self.strategy_config.risk_management
+        if risk_config.use_atr_stop_loss or risk_config.use_atr_trailing_stop:
+            entry_atr = self._calculate_current_atr()
+
         # 포지션 오픈
         self.position_manager.open_position(
             symbol=self.symbol,
             quantity=quantity,
             entry_price=trade.entry_price,
             entry_date=date,
-            trade_id=trade.trade_id
+            trade_id=trade.trade_id,
+            entry_atr=entry_atr,
         )
 
         # 거래 기록
@@ -338,6 +379,26 @@ class BacktestEngine:
         if risk_config.use_trailing_stop and risk_config.trailing_stop_ratio is not None:
             if self.position_manager.check_trailing_stop(
                 self.symbol, current_price, risk_config.trailing_stop_ratio
+            ):
+                await self._execute_sell(date, current_price, exit_reason="trailing_stop")
+                return
+
+        # ATR 기반 손절 체크
+        if risk_config.use_atr_stop_loss:
+            if self.position_manager.check_atr_stop_loss(
+                self.symbol, current_price, risk_config.atr_stop_loss_multiplier
+            ):
+                await self._execute_sell(date, current_price, exit_reason="stop_loss")
+                return
+
+        # ATR 기반 트레일링 스톱 체크
+        if risk_config.use_atr_trailing_stop:
+            # 현재 ATR 업데이트
+            current_atr = self._calculate_current_atr()
+            if current_atr:
+                self.position_manager.update_position_atr(self.symbol, current_atr)
+            if self.position_manager.check_atr_trailing_stop(
+                self.symbol, current_price, risk_config.atr_trailing_multiplier
             ):
                 await self._execute_sell(date, current_price, exit_reason="trailing_stop")
                 return

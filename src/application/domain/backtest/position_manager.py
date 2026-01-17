@@ -21,7 +21,8 @@ class Position:
         quantity: int,
         entry_price: Decimal,
         entry_date: datetime,
-        trade_id: int
+        trade_id: int,
+        entry_atr: float | None = None,
     ):
         """
         Args:
@@ -30,6 +31,7 @@ class Position:
             entry_price: 진입 가격
             entry_date: 진입일
             trade_id: 거래 ID
+            entry_atr: 진입 시 ATR 값 (ATR 기반 손절용)
         """
         self.symbol = symbol
         self.quantity = quantity
@@ -37,6 +39,8 @@ class Position:
         self.entry_date = entry_date
         self.trade_id = trade_id
         self.highest_price = entry_price  # Trailing Stop용
+        self.entry_atr = entry_atr  # ATR 기반 손절용
+        self.current_atr: float | None = entry_atr  # 현재 ATR (동적 업데이트용)
 
     def update_highest_price(self, price: Decimal) -> None:
         """최고가 업데이트 (Trailing Stop용)"""
@@ -79,7 +83,8 @@ class PositionManager:
         quantity: int,
         entry_price: Decimal,
         entry_date: datetime,
-        trade_id: int
+        trade_id: int,
+        entry_atr: float | None = None,
     ) -> None:
         """
         포지션 오픈
@@ -90,13 +95,15 @@ class PositionManager:
             entry_price: 진입 가격
             entry_date: 진입일
             trade_id: 거래 ID
+            entry_atr: 진입 시 ATR 값 (ATR 기반 손절용)
         """
         self.positions[symbol] = Position(
             symbol=symbol,
             quantity=quantity,
             entry_price=entry_price,
             entry_date=entry_date,
-            trade_id=trade_id
+            trade_id=trade_id,
+            entry_atr=entry_atr,
         )
 
     def close_position(self, symbol: str) -> Optional[Position]:
@@ -236,6 +243,77 @@ class PositionManager:
         )
 
         return decline_rate <= -trailing_stop_ratio
+
+    def check_atr_stop_loss(
+        self,
+        symbol: str,
+        current_price: Decimal,
+        atr_multiplier: float = 2.0,
+    ) -> bool:
+        """
+        ATR 기반 손절 체크
+
+        진입가 - (ATR * multiplier) 아래로 하락 시 손절
+
+        Args:
+            symbol: 종목코드
+            current_price: 현재가
+            atr_multiplier: ATR 배수 (기본: 2.0)
+
+        Returns:
+            bool: ATR 손절 발동 여부
+        """
+        position = self.get_position(symbol)
+        if not position or position.entry_atr is None:
+            return False
+
+        stop_price = float(position.entry_price) - (position.entry_atr * atr_multiplier)
+
+        return float(current_price) <= stop_price
+
+    def check_atr_trailing_stop(
+        self,
+        symbol: str,
+        current_price: Decimal,
+        atr_multiplier: float = 2.0,
+    ) -> bool:
+        """
+        ATR 기반 트레일링 스톱 체크
+
+        최고가 - (ATR * multiplier) 아래로 하락 시 청산
+
+        Args:
+            symbol: 종목코드
+            current_price: 현재가
+            atr_multiplier: ATR 배수 (기본: 2.0)
+
+        Returns:
+            bool: ATR 트레일링 스톱 발동 여부
+        """
+        position = self.get_position(symbol)
+        if not position:
+            return False
+
+        # ATR이 없으면 현재 ATR 사용, 그것도 없으면 False
+        atr = position.current_atr or position.entry_atr
+        if atr is None:
+            return False
+
+        stop_price = float(position.highest_price) - (atr * atr_multiplier)
+
+        return float(current_price) <= stop_price
+
+    def update_position_atr(self, symbol: str, atr: float) -> None:
+        """
+        포지션의 현재 ATR 업데이트
+
+        Args:
+            symbol: 종목코드
+            atr: 현재 ATR 값
+        """
+        position = self.get_position(symbol)
+        if position:
+            position.current_atr = atr
 
     def get_all_positions(self) -> dict[str, Position]:
         """모든 포지션 조회"""

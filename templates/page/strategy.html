@@ -66,12 +66,41 @@
 .active-toggle.active { color: #16a34a; }
 .active-toggle.inactive { color: #9ca3af; }
 .loading { opacity: 0.6; pointer-events: none; }
+
+/* 전략 선택 탭 */
+.strategy-tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+.strategy-tab { padding: 12px 24px; background: #e2e8f0; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s; }
+.strategy-tab:hover { background: #cbd5e1; }
+.strategy-tab.active { background: #3b82f6; color: white; }
+.strategy-tab.ma5 { border-left: 4px solid #ec4899; }
+.strategy-tab.ma5.active { background: #ec4899; }
+.strategy-content { display: none; }
+.strategy-content.active { display: block; }
+
+/* MA5 전략 스타일 */
+.strategy-info-ma5 { background: linear-gradient(135deg, #831843 0%, #be185d 100%); color: white; border: none; }
+.strategy-info-ma5 h2 { color: #fbcfe8; margin-bottom: 16px; }
+.strategy-info-ma5 p { color: #fce7f3; line-height: 1.6; }
+.strategy-info-ma5 .strategy-flow .arrow { color: #f9a8d4; }
+.strategy-info-ma5 .config-item .label { color: #f9a8d4; }
+
+.state-ma5-breakout { background: #fce7f3; color: #9d174d; border: 2px solid #ec4899; font-weight: 700; }
+.state-ma5-above { background: #fbcfe8; color: #be185d; }
+.state-ma5-below { background: #fdf2f8; color: #9d174d; }
 {% endblock %}
 
 {% block content %}
-<h1>매수 전략 (골든크로스)</h1>
-<p>MA55/MA165 골든크로스 + Stochastic 눌림목 매수 전략</p>
+<h1>매수 전략</h1>
+<p>골든크로스 / MA5 돌파 전략</p>
 
+<!-- 전략 선택 탭 -->
+<div class="strategy-tabs">
+  <button class="strategy-tab active" onclick="showStrategy('golden_cross')">골든크로스 (MA55/165)</button>
+  <button class="strategy-tab ma5" onclick="showStrategy('ma5_breakout')">MA5 돌파 (MA5/300)</button>
+</div>
+
+<!-- 골든크로스 전략 -->
+<div id="strategy_golden_cross" class="strategy-content active">
 <section class="strategy-info">
   <h2>전략 개요</h2>
   <p><strong>MA55/MA165 골든크로스</strong> 발생 후 Stochastic 과매도 구간에서 매수하는 중기 추세추종 전략</p>
@@ -314,6 +343,133 @@
     </tbody>
   </table>
 </section>
+</div><!-- end strategy_golden_cross -->
+
+<!-- MA5 돌파 전략 -->
+<div id="strategy_ma5_breakout" class="strategy-content">
+<section class="strategy-info strategy-info-ma5">
+  <h2>전략 개요</h2>
+  <p><strong>MA5가 MA300의 0.7% 상단을 돌파</strong>할 때 매수하는 단기 모멘텀 전략</p>
+
+  <div class="strategy-flow">
+    <span class="step">MA300<br><small>장기 추세</small></span>
+    <span class="arrow">→</span>
+    <span class="step">+0.7% 상단<br><small>엔벨로프</small></span>
+    <span class="arrow">→</span>
+    <span class="step" style="background: rgba(236,72,153,0.3); border: 1px solid #ec4899;">MA5 돌파<br><small>매수 신호</small></span>
+    <span class="arrow">→</span>
+    <span class="step" style="background: rgba(236,72,153,0.4); border: 2px solid #ec4899;">거래량↑<br><small>확인</small></span>
+  </div>
+
+  <p style="margin-top: 16px; font-size: 13px; color: #fce7f3;">
+    <strong>매수 조건:</strong>
+    ① MA5 > MA300×1.007 (상단 돌파)&nbsp;&nbsp;
+    ② 현재가 > MA300×1.007&nbsp;&nbsp;
+    ③ 거래량 ≥ 20일 평균 (선택)
+  </p>
+
+  <div class="config-grid">
+    <div class="config-item">
+      <div class="label">단기 이평선</div>
+      <div class="value">MA5</div>
+    </div>
+    <div class="config-item">
+      <div class="label">장기 이평선</div>
+      <div class="value">MA300 (분홍)</div>
+    </div>
+    <div class="config-item">
+      <div class="label">엔벨로프</div>
+      <div class="value">0.7%</div>
+    </div>
+    <div class="config-item">
+      <div class="label">보조 이평선</div>
+      <div class="value">MA400 (검정)</div>
+    </div>
+    <div class="config-item">
+      <div class="label">거래량 필터</div>
+      <div class="value">20일 평균↑</div>
+    </div>
+    <div class="config-item">
+      <div class="label">매도 조건</div>
+      <div class="value">MA5 < 상단</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>MA5 돌파 스크리닝</h2>
+  <div class="row">
+    <button onclick="scanMA5Breakout()" style="background: #ec4899; color: white;">MA5 돌파 스캔</button>
+    <button onclick="scanMA5Symbols()" class="secondary">직접 입력 스캔</button>
+  </div>
+  <div class="row" style="margin-top: 8px;">
+    <label style="font-size: 12px;">MA 기간:</label>
+    <input id="ma5_short_period" type="number" value="5" min="3" max="20" style="width: 50px;" />
+    <input id="ma5_long_period" type="number" value="300" min="100" max="500" style="width: 60px;" />
+    <label style="font-size: 12px; margin-left: 12px;">엔벨로프 %:</label>
+    <input id="ma5_envelope_pct" type="number" value="0.7" min="0.1" max="3" step="0.1" style="width: 50px;" />
+    <label style="font-size: 12px; margin-left: 12px;">
+      <input type="checkbox" id="ma5_use_volume" checked /> 거래량 필터
+    </label>
+  </div>
+
+  <!-- 직접 입력 스캔 -->
+  <div style="margin-top: 16px; padding: 16px; background: #fdf2f8; border: 1px solid #fbcfe8; border-radius: 8px;">
+    <h4 style="margin: 0 0 8px 0; color: #9d174d;">종목 직접 입력</h4>
+    <p style="font-size: 12px; color: #64748b; margin-bottom: 8px;">한 줄에 하나의 종목코드를 입력하세요.</p>
+    <textarea id="ma5_symbols" rows="3" placeholder="005930&#10;000660&#10;035720" style="width: 100%; margin-bottom: 8px; font-family: monospace;"></textarea>
+  </div>
+
+  <!-- 통계 -->
+  <div class="stats-row" id="ma5_stats_row" style="display:none; margin-top: 16px;">
+    <div class="stat-card">
+      <div class="number" id="ma5_stat_total">-</div>
+      <div class="label">전체 종목</div>
+    </div>
+    <div class="stat-card" style="border: 2px solid #ec4899;">
+      <div class="number" id="ma5_stat_breakout" style="color: #9d174d;">-</div>
+      <div class="label">돌파 종목</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" id="ma5_stat_above">-</div>
+      <div class="label">상단 위</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" id="ma5_stat_below">-</div>
+      <div class="label">상단 아래</div>
+    </div>
+  </div>
+
+  <!-- MA5 스캔 결과 -->
+  <div id="ma5_scan_container" style="display:none; margin-top: 16px;">
+    <div class="tabs">
+      <button class="tab active" onclick="showMA5Tab('BREAKOUT')" style="background: #fce7f3; color: #9d174d;">돌파 종목</button>
+      <button class="tab" onclick="showMA5Tab('ABOVE')">상단 위</button>
+      <button class="tab" onclick="showMA5Tab('all')">전체</button>
+    </div>
+
+    <table class="stock-table">
+      <thead>
+        <tr>
+          <th>종목코드</th>
+          <th>종목명</th>
+          <th>상태</th>
+          <th>현재가</th>
+          <th>MA5</th>
+          <th>MA300</th>
+          <th>상단가</th>
+          <th>괴리율</th>
+          <th>거래량비</th>
+        </tr>
+      </thead>
+      <tbody id="ma5_scan_table_body">
+      </tbody>
+    </table>
+  </div>
+
+  <pre id="ma5_scan_output" style="margin-top: 12px;">MA5 돌파 스캔 버튼을 클릭하세요</pre>
+</section>
+</div><!-- end strategy_ma5_breakout -->
 
 {% endblock %}
 
@@ -327,6 +483,181 @@ let addedSymbols = new Set();
 let currentFilter = 'all';
 let universeFilter = 'all';
 let gcFilter = 'all';
+
+// MA5 전략 관련 변수
+let ma5ScanStocks = [];
+let ma5Filter = 'BREAKOUT';
+
+// 전략 탭 전환
+const showStrategy = (strategy) => {
+  document.querySelectorAll('.strategy-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.strategy-content').forEach(c => c.classList.remove('active'));
+
+  if (strategy === 'golden_cross') {
+    document.querySelector('.strategy-tab:not(.ma5)').classList.add('active');
+    document.getElementById('strategy_golden_cross').classList.add('active');
+  } else {
+    document.querySelector('.strategy-tab.ma5').classList.add('active');
+    document.getElementById('strategy_ma5_breakout').classList.add('active');
+  }
+};
+
+// MA5 돌파 스캔 (유니버스 전체)
+const scanMA5Breakout = async () => {
+  document.getElementById("ma5_scan_output").textContent = "MA5 돌파 스캔 중...";
+
+  const shortPeriod = parseInt(document.getElementById("ma5_short_period").value) || 5;
+  const longPeriod = parseInt(document.getElementById("ma5_long_period").value) || 300;
+  const envelopePct = parseFloat(document.getElementById("ma5_envelope_pct").value) || 0.7;
+  const useVolume = document.getElementById("ma5_use_volume").checked;
+
+  const url = `/api/v1/strategies/universe/ma5-breakout-scan?short_period=${shortPeriod}&long_period=${longPeriod}&envelope_pct=${envelopePct}&use_volume_filter=${useVolume}`;
+
+  try {
+    const response = await fetch(url);
+    const result = await response.json();
+
+    if (result.success && result.data) {
+      displayMA5ScanResults(result.data);
+      document.getElementById("ma5_scan_output").textContent =
+        `스캔 완료: ${result.data.stocks?.length || 0}개 종목 발견 (총 ${result.data.total_scanned}개 스캔)`;
+    } else {
+      document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${result.message || 'Unknown error'}`;
+    }
+  } catch (e) {
+    console.error('MA5 scan failed:', e);
+    document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${e.message}`;
+  }
+};
+
+// MA5 돌파 직접 입력 스캔
+const scanMA5Symbols = async () => {
+  const symbolsText = document.getElementById("ma5_symbols").value.trim();
+  if (!symbolsText) {
+    alert("종목코드를 입력하세요.");
+    return;
+  }
+
+  const symbolList = symbolsText.split(/[\n,]/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+    .map(symbol => ({ symbol, name: null, market: "UNKNOWN" }));
+
+  if (symbolList.length === 0) {
+    alert("유효한 종목코드가 없습니다.");
+    return;
+  }
+
+  document.getElementById("ma5_scan_output").textContent = `${symbolList.length}개 종목 MA5 스캔 중...`;
+
+  const shortPeriod = parseInt(document.getElementById("ma5_short_period").value) || 5;
+  const longPeriod = parseInt(document.getElementById("ma5_long_period").value) || 300;
+  const envelopePct = parseFloat(document.getElementById("ma5_envelope_pct").value) || 0.7;
+  const useVolume = document.getElementById("ma5_use_volume").checked;
+
+  try {
+    const response = await fetch(
+      `/api/v1/strategies/universe/ma5-breakout-scan-symbols?short_period=${shortPeriod}&long_period=${longPeriod}&envelope_pct=${envelopePct}&use_volume_filter=${useVolume}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(symbolList)
+      }
+    );
+
+    const result = await response.json();
+    if (result.success && result.data) {
+      displayMA5ScanResults(result.data);
+      document.getElementById("ma5_scan_output").textContent =
+        `스캔 완료: ${result.data.stocks?.length || 0}개 종목 발견`;
+    } else {
+      document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${result.message || 'Unknown error'}`;
+    }
+  } catch (e) {
+    console.error('MA5 symbol scan failed:', e);
+    document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${e.message}`;
+  }
+};
+
+// MA5 스캔 결과 표시
+const displayMA5ScanResults = (data) => {
+  ma5ScanStocks = data.stocks || [];
+
+  document.getElementById("ma5_scan_container").style.display = "block";
+  document.getElementById("ma5_stats_row").style.display = "flex";
+
+  // 통계 계산
+  const breakoutCount = ma5ScanStocks.filter(s => s.ma5_state === 'BREAKOUT').length;
+  const aboveCount = ma5ScanStocks.filter(s => s.ma5_state === 'ABOVE').length;
+  const belowCount = ma5ScanStocks.filter(s => s.ma5_state === 'BELOW').length;
+
+  document.getElementById("ma5_stat_total").textContent = data.total_scanned || ma5ScanStocks.length;
+  document.getElementById("ma5_stat_breakout").textContent = breakoutCount;
+  document.getElementById("ma5_stat_above").textContent = aboveCount;
+  document.getElementById("ma5_stat_below").textContent = belowCount;
+
+  ma5Filter = 'BREAKOUT';
+  renderMA5ScanTable(ma5ScanStocks);
+};
+
+// MA5 테이블 렌더링
+const renderMA5ScanTable = (stocks) => {
+  let filtered;
+  if (ma5Filter === 'all') {
+    filtered = stocks;
+  } else if (ma5Filter === 'BREAKOUT') {
+    filtered = stocks.filter(s => s.ma5_state === 'BREAKOUT');
+  } else if (ma5Filter === 'ABOVE') {
+    filtered = stocks.filter(s => s.ma5_state === 'ABOVE' || s.ma5_state === 'BREAKOUT');
+  } else {
+    filtered = stocks.filter(s => s.ma5_state === ma5Filter);
+  }
+
+  const tbody = document.getElementById("ma5_scan_table_body");
+  tbody.innerHTML = filtered.map(stock => {
+    const stateClass = getMA5StateClass(stock.ma5_state);
+    const stateLabel = getMA5StateLabel(stock.ma5_state);
+    const gapClass = stock.gap_ratio > 0 ? 'bullish' : 'bearish';
+    const volRatioClass = stock.volume_ratio >= 1 ? 'bullish' : '';
+
+    return `<tr>
+      <td><strong>${stock.symbol}</strong></td>
+      <td>${stock.name || '-'}</td>
+      <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
+      <td class="indicator">${formatNumber(stock.current_price)}</td>
+      <td class="indicator">${formatNumber(stock.ma5)}</td>
+      <td class="indicator">${formatNumber(stock.ma300)}</td>
+      <td class="indicator">${formatNumber(stock.upper_band)}</td>
+      <td class="indicator ${gapClass}">${stock.gap_ratio?.toFixed(2) || '-'}%</td>
+      <td class="indicator ${volRatioClass}">${stock.volume_ratio?.toFixed(2) || '-'}x</td>
+    </tr>`;
+  }).join('');
+};
+
+const showMA5Tab = (filter) => {
+  ma5Filter = filter;
+  document.querySelectorAll('#ma5_scan_container .tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  renderMA5ScanTable(ma5ScanStocks);
+};
+
+const getMA5StateClass = (state) => {
+  const map = {
+    'BREAKOUT': 'state-ma5-breakout',
+    'ABOVE': 'state-ma5-above',
+    'BELOW': 'state-ma5-below'
+  };
+  return map[state] || '';
+};
+
+const getMA5StateLabel = (state) => {
+  const map = {
+    'BREAKOUT': '돌파',
+    'ABOVE': '상단 위',
+    'BELOW': '상단 아래'
+  };
+  return map[state] || state;
+};
 
 // 페이지 로드 시 히스토리 조회
 const loadBuyHistory = async () => {

@@ -71,6 +71,16 @@ class RiskManagementConfig(BaseDTO):
     use_reverse_signal_exit: bool = Field(
         default=True, description="반대 시그널 발생 시 청산"
     )
+    # ATR 기반 동적 손절/트레일링
+    use_atr_stop_loss: bool = Field(default=False, description="ATR 기반 손절 사용 여부")
+    atr_stop_loss_multiplier: float = Field(
+        default=2.0, description="ATR 손절 배수 (예: 2.0 = 진입가 - 2*ATR에서 손절)", ge=0.5, le=5.0
+    )
+    use_atr_trailing_stop: bool = Field(default=False, description="ATR 기반 트레일링 스톱 사용 여부")
+    atr_trailing_multiplier: float = Field(
+        default=2.0, description="ATR 트레일링 배수 (예: 2.0 = 최고가 - 2*ATR에서 청산)", ge=0.5, le=5.0
+    )
+    atr_period: int = Field(default=14, description="ATR 계산 기간", ge=5, le=50)
 
 
 class BaseStrategyConfig(BaseDTO):
@@ -532,6 +542,44 @@ class GoldenCrossScanListDTO(BaseDTO):
     financial_error_count: int = Field(default=0, description="재무 필터 오류 종목 수 (조회 실패/데이터 없음)")
     turnaround_count: int = Field(default=0, description="턴어라운드(적자→흑자) 종목 수")
     financial_pending_count: int = Field(default=0, description="재무 필터 미조회 종목 수")
+
+
+# ==================== MA5 Breakout Strategy DTOs ====================
+
+
+class MA5BreakoutScanItemDTO(BaseDTO):
+    """MA5 돌파 스캔 결과 항목 DTO"""
+
+    symbol: str = Field(description="종목코드")
+    name: str | None = Field(default=None, description="종목명")
+    market: str | None = Field(default=None, description="시장 구분")
+    current_price: float = Field(description="현재가")
+
+    # 이동평균
+    ma5: float = Field(description="5일 이동평균")
+    ma300: float = Field(description="300일 이동평균")
+    upper_band: float = Field(description="300일선 0.7% 상단")
+
+    # 상태
+    ma5_state: str = Field(
+        description="MA5 상태 (BREAKOUT: 돌파, ABOVE: 상단 위, BELOW: 상단 아래)"
+    )
+    gap_ratio: float = Field(description="MA5와 상단 괴리율 ((MA5-상단)/상단*100)")
+
+    # 거래량
+    volume_ratio: float | None = Field(default=None, description="거래량 비율 (현재/20일평균)")
+
+
+class MA5BreakoutScanListDTO(BaseDTO):
+    """MA5 돌파 스캔 결과 목록 DTO"""
+
+    stocks: list[MA5BreakoutScanItemDTO] = Field(description="스캔 결과 목록")
+    total_scanned: int = Field(description="스캔한 전체 종목 수")
+    breakout_count: int = Field(default=0, description="돌파 종목 수")
+    above_count: int = Field(default=0, description="상단 위 종목 수")
+    below_count: int = Field(default=0, description="상단 아래 종목 수")
+    scan_time: datetime = Field(description="스캔 시각")
+    errors: list[str] = Field(default_factory=list, description="오류 메시지")
 
 
 # ==================== Execute Request/Response DTOs ====================
