@@ -860,7 +860,8 @@ class StrategyService:
                         await history_repo.update_by_id(latest.id, session=session, **update_kwargs)
                         updated = await history_repo.get_by_id(latest.id, session=session)
                         if updated:
-                            updated_items.append(self._history_to_dto(updated))
+                            # sell_result를 전달하여 실시간 지표(ADX, Volume 등) 포함
+                            updated_items.append(self._history_to_dto(updated, sell_result))
 
                 elif analysis_type == "buy":
                     from src.application.domain.strategy.buy_strategy_service import (
@@ -906,8 +907,15 @@ class StrategyService:
             errors=errors,
         )
 
-    def _history_to_dto(self, model) -> AnalysisHistoryDTO:
-        """AnalysisHistoryModel을 DTO로 변환"""
+    def _history_to_dto(
+        self, model, sell_result: "SellSignalAnalysisDTO | None" = None
+    ) -> AnalysisHistoryDTO:
+        """AnalysisHistoryModel을 DTO로 변환
+
+        Args:
+            model: AnalysisHistoryModel 인스턴스
+            sell_result: 매도 분석 결과 (선택적, 실시간 지표 포함용)
+        """
         sell_reasons = None
         if model.sell_reasons:
             try:
@@ -919,34 +927,59 @@ class StrategyService:
         sell_phase = model.sell_phase or "NONE"
         phase_info = SELL_PHASE_INFO.get(sell_phase, SELL_PHASE_INFO["NONE"])
 
-        return AnalysisHistoryDTO(
-            id=model.id,
-            analysis_type=model.analysis_type,
-            symbol=model.symbol,
-            name=model.name,
-            current_price=model.current_price,
-            ma_short=model.ma_short,
-            ma_long=model.ma_long,
-            ma_gap_ratio=model.ma_gap_ratio,
-            stoch_k=model.stoch_k,
-            stoch_d=model.stoch_d,
-            gc_state=model.gc_state,
-            is_gc_active=model.is_gc_active,
-            rsi=model.rsi,
-            is_death_cross=model.is_death_cross,
-            is_stoch_overbought=model.is_stoch_overbought,
-            is_rsi_overbought=model.is_rsi_overbought,
-            sell_phase=sell_phase,
-            sell_phase_name=phase_info["name"],
-            sell_phase_action=phase_info["action"],
-            sell_reasons=sell_reasons,
-            analyzed_at=model.analyzed_at,
-            entry_price=model.entry_price,
-            note=model.note,
-            is_active=model.is_active,
-            created_at=model.created_at,
-            updated_at=model.updated_at,
-        )
+        # 기본 DTO 필드
+        dto_kwargs = {
+            "id": model.id,
+            "analysis_type": model.analysis_type,
+            "symbol": model.symbol,
+            "name": model.name,
+            "current_price": model.current_price,
+            "ma_short": model.ma_short,
+            "ma_long": model.ma_long,
+            "ma_gap_ratio": model.ma_gap_ratio,
+            "stoch_k": model.stoch_k,
+            "stoch_d": model.stoch_d,
+            "gc_state": model.gc_state,
+            "is_gc_active": model.is_gc_active,
+            "rsi": model.rsi,
+            "is_death_cross": model.is_death_cross,
+            "is_stoch_overbought": model.is_stoch_overbought,
+            "is_rsi_overbought": model.is_rsi_overbought,
+            "sell_phase": sell_phase,
+            "sell_phase_name": phase_info["name"],
+            "sell_phase_action": phase_info["action"],
+            "sell_reasons": sell_reasons,
+            "analyzed_at": model.analyzed_at,
+            "entry_price": model.entry_price,
+            "note": model.note,
+            "is_active": model.is_active,
+            "created_at": model.created_at,
+            "updated_at": model.updated_at,
+        }
+
+        # sell_result가 있으면 실시간 지표 추가 (DB에 없는 필드들)
+        if sell_result is not None:
+            dto_kwargs.update({
+                # 비중축소 분석
+                "sell_stage": sell_result.sell_stage,
+                "sell_stage_name": sell_result.sell_stage_name,
+                "sell_ratio_min": sell_result.sell_ratio_min,
+                "sell_ratio_max": sell_result.sell_ratio_max,
+                # 거래량 분석
+                "volume_ratio": sell_result.volume_ratio,
+                "is_volume_spike": sell_result.is_volume_spike,
+                "is_volume_sell_signal": sell_result.is_volume_sell_signal,
+                # ADX 분석
+                "adx": sell_result.adx,
+                "plus_di": sell_result.plus_di,
+                "minus_di": sell_result.minus_di,
+                "is_strong_uptrend": sell_result.is_strong_uptrend,
+                "overbought_sell_blocked": sell_result.overbought_sell_blocked,
+                # candle_count
+                "candle_count": sell_result.candle_count,
+            })
+
+        return AnalysisHistoryDTO(**dto_kwargs)
 
     # ==================== Sell Signal Helper Methods ====================
 

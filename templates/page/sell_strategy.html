@@ -29,6 +29,22 @@
 .phase-PHASE_4 { background: #fecaca; color: #991b1b; }
 .phase-PHASE_5 { background: #dc2626; color: #fff; }
 
+/* 비중축소 단계 뱃지 */
+.stage-badge { padding: 8px 14px; border-radius: 8px; font-weight: 600; font-size: 13px; }
+.stage-HOLD { background: #dcfce7; color: #166534; }
+.stage-REDUCE_1 { background: #fef3c7; color: #92400e; }
+.stage-REDUCE_2 { background: #fed7aa; color: #c2410c; }
+.stage-EXIT_ALL { background: #dc2626; color: #fff; }
+
+/* 볼륨/ADX 섹션 */
+.volume-section, .adx-section { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-top: 16px; }
+.volume-section h4, .adx-section h4 { color: #334155; margin-bottom: 12px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.volume-section .indicator-grid, .adx-section .indicator-grid { margin-bottom: 0; }
+.volume-spike-badge { background: #fecaca; color: #991b1b; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.adx-uptrend-badge { background: #dcfce7; color: #166534; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.adx-downtrend-badge { background: #fecaca; color: #991b1b; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.overbought-blocked { background: #dbeafe; color: #1e40af; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+
 .indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
 .indicator-card { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
 .indicator-card .label { font-size: 12px; color: #64748b; text-transform: uppercase; margin-bottom: 4px; }
@@ -124,15 +140,17 @@
 <section class="strategy-info">
   <h2>매도 시그널 분석 전략</h2>
   <p>
-    MA55/MA165 데드크로스, Stochastic 과매수, RSI 과매수 신호를 종합하여
-    최적의 매도 시점을 추천합니다. Phase 기반 선제적 매도 시그널과 수익률 기반 동적 임계값을 지원합니다.
+    MA55/MA165 데드크로스, Stochastic/RSI 과매수, 거래량 급증, ADX 추세 필터를 종합하여
+    최적의 매도 시점과 비중축소 비율을 추천합니다.
   </p>
   <div class="strategy-flow">
-    <span class="step">Phase 1: 수익 보호</span>
+    <span class="step">HOLD: 보유 유지</span>
     <span class="arrow">→</span>
-    <span class="step">Phase 2: 매도 준비</span>
+    <span class="step">REDUCE_1: 20~30% 축소</span>
     <span class="arrow">→</span>
-    <span class="step">Phase 3-5: 매도 실행</span>
+    <span class="step">REDUCE_2: 30~40% 축소</span>
+    <span class="arrow">→</span>
+    <span class="step">EXIT_ALL: 전량 청산</span>
   </div>
 </section>
 
@@ -176,7 +194,8 @@
         <th>종목코드</th>
         <th>종목명</th>
         <th>현재가</th>
-        <th>Phase</th>
+        <th>비중축소</th>
+        <th>ADX</th>
         <th>Stoch K</th>
         <th>RSI</th>
         <th>분석시간</th>
@@ -184,7 +203,7 @@
       </tr>
     </thead>
     <tbody id="history_body">
-      <tr><td colspan="9" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
+      <tr><td colspan="10" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
     </tbody>
   </table>
 </section>
@@ -273,7 +292,7 @@ const loadHistory = async () => {
   } catch (e) {
     console.error('Failed to load history:', e);
     document.getElementById("history_body").innerHTML =
-      '<tr><td colspan="11" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
+      '<tr><td colspan="10" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
   }
 };
 
@@ -331,6 +350,20 @@ const saveToHistory = async (data) => {
       is_rsi_overbought: data.is_rsi_overbought,
       sell_phase: data.sell_phase,
       sell_reasons: data.sell_reasons,
+      // 비중축소 관련 신규 필드
+      sell_stage: data.sell_stage,
+      sell_ratio_min: data.sell_ratio_min,
+      sell_ratio_max: data.sell_ratio_max,
+      // 거래량 관련 신규 필드
+      volume_ratio: data.volume_ratio,
+      is_volume_spike: data.is_volume_spike,
+      is_volume_sell_signal: data.is_volume_sell_signal,
+      // ADX 관련 신규 필드
+      adx: data.adx,
+      plus_di: data.plus_di,
+      minus_di: data.minus_di,
+      is_strong_uptrend: data.is_strong_uptrend,
+      overbought_sell_blocked: data.overbought_sell_blocked,
       is_active: true
     };
 
@@ -460,25 +493,27 @@ const displayResult = (data) => {
   document.getElementById("result_section").style.display = "block";
 
   const phaseClass = `phase-${data.sell_phase || 'NONE'}`;
+  const stageClass = `stage-${data.sell_stage || 'HOLD'}`;
 
   const stochStatus = data.is_stoch_overbought ? 'status-danger' : 'status-safe';
   const rsiStatus = data.is_rsi_overbought ? 'status-danger' : 'status-safe';
   const maStatus = data.is_death_cross ? 'status-danger' : 'status-safe';
 
   const sellReasons = data.sell_reasons || [];
+  const stageReasons = data.sell_stage_reasons || [];
 
-  // Phase 인디케이터 생성
-  const phases = ['NONE', 'PHASE_1', 'PHASE_2', 'PHASE_3', 'PHASE_4', 'PHASE_5'];
-  const phaseNames = ['보유', '수익 보호', '매도 준비', '매도 고려', '매도 권장', '강력 매도'];
-  const currentPhase = data.sell_phase || 'NONE';
-  const phaseIdx = phases.indexOf(currentPhase);
+  // Stage 인디케이터 생성
+  const stages = ['HOLD', 'REDUCE_1', 'REDUCE_2', 'EXIT_ALL'];
+  const stageNames = ['보유 유지', '1차 축소 (20~30%)', '2차 축소 (30~40%)', '전량 청산 (100%)'];
+  const currentStage = data.sell_stage || 'HOLD';
+  const stageIdx = stages.indexOf(currentStage);
 
-  const phaseIndicatorHtml = phases.map((p, i) => {
+  const stageIndicatorHtml = stages.map((s, i) => {
     let activeClass = '';
-    if (i === phaseIdx && p !== 'NONE') {
-      activeClass = i >= 4 ? 'active critical' : (i >= 3 ? 'active danger' : 'active');
+    if (i === stageIdx) {
+      activeClass = i >= 3 ? 'active critical' : (i >= 2 ? 'active danger' : (i >= 1 ? 'active' : ''));
     }
-    return `<div class="phase-step ${activeClass}">${phaseNames[i]}</div>`;
+    return `<div class="phase-step ${activeClass}">${stageNames[i]}</div>`;
   }).join('');
 
   // 수익률 섹션 생성
@@ -529,24 +564,108 @@ const displayResult = (data) => {
     `;
   }
 
+  // 거래량 섹션 생성
+  let volumeSectionHtml = '';
+  if (data.volume_ratio !== null && data.volume_ratio !== undefined) {
+    const volumeSpikeBadge = data.is_volume_spike ? '<span class="volume-spike-badge">급증</span>' : '';
+    const volumeSellSignal = data.is_volume_sell_signal ? '<span class="volume-spike-badge">매도 신호</span>' : '';
+    volumeSectionHtml = `
+      <div class="volume-section">
+        <h4>📊 거래량 분석 ${volumeSpikeBadge} ${volumeSellSignal}</h4>
+        <div class="indicator-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+          <div class="indicator-card">
+            <div class="label">현재 거래량</div>
+            <div class="value" style="font-size: 18px;">${formatNumber(data.current_volume)}</div>
+          </div>
+          <div class="indicator-card">
+            <div class="label">20일 평균</div>
+            <div class="value" style="font-size: 18px;">${formatNumber(data.volume_ma_20)}</div>
+          </div>
+          <div class="indicator-card">
+            <div class="label">거래량 비율</div>
+            <div class="value" style="font-size: 18px; ${data.is_volume_spike ? 'color: #dc2626;' : ''}">${(data.volume_ratio * 100).toFixed(0)}%</div>
+            ${data.is_volume_spike ? '<span class="status status-danger">1.3x 초과</span>' : ''}
+          </div>
+          ${data.price_drop_ratio !== null ? `
+          <div class="indicator-card">
+            <div class="label">가격 변동</div>
+            <div class="value" style="font-size: 18px; color: ${data.price_drop_ratio > 0 ? '#dc2626' : '#16a34a'};">${data.price_drop_ratio > 0 ? '-' : '+'}${(Math.abs(data.price_drop_ratio) * 100).toFixed(2)}%</div>
+          </div>
+          ` : ''}
+        </div>
+        ${data.volume_sell_reasons && data.volume_sell_reasons.length > 0 ? `
+          <div style="margin-top: 8px; font-size: 12px; color: #9a3412; background: #fff7ed; padding: 8px; border-radius: 4px;">
+            ${data.volume_sell_reasons.join(', ')}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  // ADX 섹션 생성
+  let adxSectionHtml = '';
+  if (data.adx !== null && data.adx !== undefined) {
+    const uptrendBadge = data.is_strong_uptrend ? '<span class="adx-uptrend-badge">강한 상승 추세</span>' : '';
+    const downtrendBadge = data.is_strong_downtrend ? '<span class="adx-downtrend-badge">강한 하락 추세</span>' : '';
+    const blockedBadge = data.overbought_sell_blocked ? '<span class="overbought-blocked">과매수 매도 차단</span>' : '';
+    adxSectionHtml = `
+      <div class="adx-section">
+        <h4>📈 추세 분석 (ADX) ${uptrendBadge} ${downtrendBadge} ${blockedBadge}</h4>
+        <div class="indicator-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+          <div class="indicator-card">
+            <div class="label">ADX</div>
+            <div class="value" style="font-size: 18px; ${data.adx > 25 ? 'color: #2563eb; font-weight: 700;' : ''}">${Number(data.adx).toFixed(1)}</div>
+            <span class="status ${data.adx > 25 ? 'status-info' : 'status-safe'}">${data.adx > 25 ? '강한 추세' : '횡보/약한 추세'}</span>
+          </div>
+          <div class="indicator-card">
+            <div class="label">+DI (상승 강도)</div>
+            <div class="value" style="font-size: 18px; ${data.plus_di > data.minus_di ? 'color: #16a34a;' : ''}">${Number(data.plus_di).toFixed(1)}</div>
+          </div>
+          <div class="indicator-card">
+            <div class="label">-DI (하락 강도)</div>
+            <div class="value" style="font-size: 18px; ${data.minus_di > data.plus_di ? 'color: #dc2626;' : ''}">${Number(data.minus_di).toFixed(1)}</div>
+          </div>
+          <div class="indicator-card">
+            <div class="label">추세 방향</div>
+            <div class="value" style="font-size: 16px;">${data.plus_di > data.minus_di ? '⬆️ 상승' : '⬇️ 하락'}</div>
+          </div>
+        </div>
+        ${data.overbought_sell_blocked ? `
+          <div style="margin-top: 8px; font-size: 12px; color: #1e40af; background: #eff6ff; padding: 8px; border-radius: 4px;">
+            ℹ️ 강한 상승 추세(ADX>${25})로 과매수 매도 신호가 차단되었습니다.
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  // 매도 비율 정보
+  let sellRatioHtml = '';
+  if (data.sell_stage && data.sell_stage !== 'HOLD') {
+    const ratioMin = data.sell_ratio_min !== undefined ? (data.sell_ratio_min * 100).toFixed(0) : '0';
+    const ratioMax = data.sell_ratio_max !== undefined ? (data.sell_ratio_max * 100).toFixed(0) : '0';
+    sellRatioHtml = `
+      <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px;">
+        <strong style="color: #991b1b;">💡 권장 매도 비율: ${ratioMin}% ~ ${ratioMax}%</strong>
+        ${data.holding_quantity ? `<span style="color: #7c2d12; margin-left: 12px;">→ 보유 ${data.holding_quantity}주 중 ${Math.floor(data.holding_quantity * data.sell_ratio_min)}~${Math.floor(data.holding_quantity * data.sell_ratio_max)}주 매도 권장</span>` : ''}
+      </div>
+    `;
+  }
+
   const html = `
     <div class="result-card">
       <div class="result-header">
         <h3>${data.symbol} ${data.name || ''}</h3>
-        <div>
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span class="stage-badge ${stageClass}">${data.sell_stage_name || currentStage}</span>
           <span class="phase-badge ${phaseClass}">${getPhaseDisplayName(data.sell_phase, data.sell_phase_name)}</span>
         </div>
       </div>
 
-      ${data.sell_phase_action && data.sell_phase !== 'NONE' ? `
-      <div style="background: #fef3c7; padding: 12px; border-radius: 8px; margin-bottom: 16px;">
-        <strong style="color: #92400e;">권장 행동:</strong>
-        <span style="color: #78350f;">${data.sell_phase_action}</span>
-      </div>
-      ` : ''}
+      ${sellRatioHtml}
 
       <div class="phase-indicator">
-        ${phaseIndicatorHtml}
+        ${stageIndicatorHtml}
       </div>
 
       ${profitSectionHtml}
@@ -582,6 +701,18 @@ const displayResult = (data) => {
         ${trailingStopHtml}
       </div>
 
+      ${volumeSectionHtml}
+
+      ${adxSectionHtml}
+
+      ${stageReasons.length > 0 ? `
+      <div class="reasons-list" style="background: #fef2f2; border-color: #fecaca;">
+        <h4 style="color: #991b1b;">비중축소 판단 근거</h4>
+        <ul>
+          ${stageReasons.map(r => `<li style="color: #7c2d12;">${r}</li>`).join('')}
+        </ul>
+      </div>
+      ` : ''}
 
       ${sellReasons.length > 0 ? `
       <div class="reasons-list">
@@ -606,17 +737,25 @@ const renderHistoryTable = () => {
   const tbody = document.getElementById("history_body");
 
   if (analysisHistory.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
     return;
   }
 
   tbody.innerHTML = analysisHistory.map(item => {
-    const phaseClass = `phase-${item.sell_phase || 'NONE'}`;
+    const stageClass = `stage-${item.sell_stage || 'HOLD'}`;
     const activeIcon = item.is_active ? '●' : '○';
     const activeClass = item.is_active ? 'active' : 'inactive';
     const selectedClass = item.id === selectedHistoryId ? 'selected' : '';
 
     const entryPriceBadge = item.entry_price ? `<span class="entry-price-badge">진입가: ${formatNumber(item.entry_price)}</span>` : '';
+
+    // Stage 표시명
+    const stageNames = { 'HOLD': '보유', 'REDUCE_1': '1차축소', 'REDUCE_2': '2차축소', 'EXIT_ALL': '전량청산' };
+    const stageName = stageNames[item.sell_stage] || item.sell_stage_name || '-';
+
+    // ADX 표시
+    const adxDisplay = item.adx !== null && item.adx !== undefined ? Number(item.adx).toFixed(1) : '-';
+    const adxBadge = item.is_strong_uptrend ? '↑' : (item.adx > 25 ? '↓' : '');
 
     return `<tr class="${selectedClass}" onclick="showHistoryDetail(${item.id})">
       <td>
@@ -625,7 +764,8 @@ const renderHistoryTable = () => {
       <td><strong>${item.symbol}</strong>${entryPriceBadge}</td>
       <td>${item.name || '-'}</td>
       <td>${formatNumber(item.current_price)}</td>
-      <td><span class="phase-badge ${phaseClass}" style="font-size: 11px; padding: 4px 8px;">${getPhaseDisplayName(item.sell_phase, item.sell_phase_name)}</span></td>
+      <td><span class="stage-badge ${stageClass}" style="font-size: 11px; padding: 4px 8px;">${stageName}</span></td>
+      <td>${adxDisplay} ${adxBadge}</td>
       <td>${Number(item.stoch_k).toFixed(1)}</td>
       <td>${Number(item.rsi).toFixed(1)}</td>
       <td>${formatTime(item.analyzed_at)}</td>

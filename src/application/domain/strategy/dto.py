@@ -622,6 +622,39 @@ class SellPhaseEnum(str, Enum):
     PHASE_5 = "PHASE_5"     # 강력 매도 (데드크로스 + 극단적 과열)
 
 
+class SellStageEnum(str, Enum):
+    """비중축소 단계 (기존 Phase와 별도 관리)
+
+    기존 SellPhaseEnum은 알림/이모지/DB에서 사용 중이므로 유지.
+    SellStageEnum은 비중축소 비율 결정에만 사용.
+    """
+
+    HOLD = "HOLD"             # 보유 유지 (0%)
+    REDUCE_1 = "REDUCE_1"     # 1차 축소 (20~30%)
+    REDUCE_2 = "REDUCE_2"     # 2차 축소 (30~40%)
+    EXIT_ALL = "EXIT_ALL"     # 전량 청산 (100%)
+
+
+# 비중축소 단계별 매도 비율 (min, max)
+SELL_STAGE_RATIOS: dict[SellStageEnum, tuple[float, float]] = {
+    SellStageEnum.HOLD: (0.0, 0.0),
+    SellStageEnum.REDUCE_1: (0.20, 0.30),  # 20~30%
+    SellStageEnum.REDUCE_2: (0.30, 0.40),  # 30~40%
+    SellStageEnum.EXIT_ALL: (1.0, 1.0),    # 100%
+}
+
+
+# Phase → Stage 매핑 (하위호환)
+PHASE_TO_STAGE_MAP: dict[SellPhaseEnum, SellStageEnum] = {
+    SellPhaseEnum.NONE: SellStageEnum.HOLD,
+    SellPhaseEnum.PHASE_1: SellStageEnum.HOLD,       # 수익 보호 → 아직 매도 안 함
+    SellPhaseEnum.PHASE_2: SellStageEnum.REDUCE_1,   # 매도 준비 → 1차 축소
+    SellPhaseEnum.PHASE_3: SellStageEnum.REDUCE_1,   # 매도 고려 → 1차 축소
+    SellPhaseEnum.PHASE_4: SellStageEnum.REDUCE_2,   # 매도 권장 → 2차 축소
+    SellPhaseEnum.PHASE_5: SellStageEnum.EXIT_ALL,   # 강력 매도 → 전량 청산
+}
+
+
 SELL_PHASE_INFO: dict[str, dict[str, str]] = {
     "NONE": {"name": "보유 유지", "action": "현 상태 유지"},
     "PHASE_1": {"name": "수익 보호", "action": "부분 익절 고려 (50%)"},
@@ -629,6 +662,14 @@ SELL_PHASE_INFO: dict[str, dict[str, str]] = {
     "PHASE_3": {"name": "매도 고려", "action": "매도 타이밍 모색"},
     "PHASE_4": {"name": "매도 권장", "action": "즉시 매도 권장"},
     "PHASE_5": {"name": "강력 매도", "action": "최우선 매도"},
+}
+
+
+SELL_STAGE_INFO: dict[str, dict[str, str]] = {
+    "HOLD": {"name": "보유 유지", "action": "현 상태 유지", "ratio": "0%"},
+    "REDUCE_1": {"name": "1차 비중 축소", "action": "20~30% 매도 고려", "ratio": "20~30%"},
+    "REDUCE_2": {"name": "2차 비중 축소", "action": "30~40% 매도 권장", "ratio": "30~40%"},
+    "EXIT_ALL": {"name": "전량 청산", "action": "즉시 전량 매도", "ratio": "100%"},
 }
 
 
@@ -677,6 +718,38 @@ class SellSignalAnalysisDTO(BaseDTO):
     drawdown_from_high: float | None = Field(default=None, description="고점 대비 하락률")
     trailing_stop_activated: bool = Field(default=False, description="트레일링 스탑 활성화 여부")
 
+    # === 비중축소 관련 신규 필드 ===
+    sell_stage: str = Field(
+        default="HOLD",
+        description="비중축소 단계 (HOLD, REDUCE_1, REDUCE_2, EXIT_ALL)",
+        pattern="^(HOLD|REDUCE_1|REDUCE_2|EXIT_ALL)$",
+    )
+    sell_stage_name: str = Field(default="보유 유지", description="비중축소 단계 이름")
+    sell_ratio_min: float = Field(default=0.0, description="최소 매도 비율 (0.0~1.0)")
+    sell_ratio_max: float = Field(default=0.0, description="최대 매도 비율 (0.0~1.0)")
+    sell_quantity_suggested: int | None = Field(default=None, description="권장 매도 수량")
+    holding_quantity: int | None = Field(default=None, description="현재 보유 수량")
+    sold_ratio: float = Field(default=0.0, description="기 매도 비율 (상태 추적용)")
+    sell_stage_reasons: list[str] = Field(default_factory=list, description="비중축소 판단 근거")
+
+    # === 거래량 관련 신규 필드 ===
+    current_volume: int | None = Field(default=None, description="현재 거래량")
+    prev_volume: int | None = Field(default=None, description="전일 거래량")
+    volume_ma_20: float | None = Field(default=None, description="거래량 20일 평균")
+    volume_ratio: float | None = Field(default=None, description="거래량 비율 (현재/평균)")
+    is_volume_spike: bool = Field(default=False, description="거래량 급증 여부 (>= 1.3x)")
+    price_drop_ratio: float | None = Field(default=None, description="가격 하락률")
+    is_volume_sell_signal: bool = Field(default=False, description="거래량+하락 매도 신호")
+    volume_sell_reasons: list[str] = Field(default_factory=list, description="거래량 매도 신호 근거")
+
+    # === ADX 관련 신규 필드 ===
+    adx: float | None = Field(default=None, description="ADX 값 (0~100, 추세 강도)")
+    plus_di: float | None = Field(default=None, description="+DI 값 (상승 방향 강도)")
+    minus_di: float | None = Field(default=None, description="-DI 값 (하락 방향 강도)")
+    is_strong_uptrend: bool = Field(default=False, description="강한 상승 추세 여부 (ADX>25 & +DI>-DI)")
+    is_strong_downtrend: bool = Field(default=False, description="강한 하락 추세 여부 (ADX>25 & -DI>+DI)")
+    overbought_sell_blocked: bool = Field(default=False, description="과매수 매도 차단 여부 (강한 상승 추세)")
+
     # 추가 정보
     candle_count: int = Field(default=0, description="분석에 사용된 캔들 수")
 
@@ -722,6 +795,24 @@ class AnalysisHistoryDTO(BaseDTO):
     sell_phase_action: str | None = Field(default=None, description="Phase 권장 행동")
     sell_reasons: list[str] | None = Field(default=None, description="매도 근거")
 
+    # 비중축소 분석용 (신규)
+    sell_stage: str | None = Field(default=None, description="비중축소 단계 (HOLD, REDUCE_1, REDUCE_2, EXIT_ALL)")
+    sell_stage_name: str | None = Field(default=None, description="비중축소 단계 이름")
+    sell_ratio_min: float | None = Field(default=None, description="최소 매도 비율")
+    sell_ratio_max: float | None = Field(default=None, description="최대 매도 비율")
+
+    # 거래량 분석용 (신규)
+    volume_ratio: float | None = Field(default=None, description="거래량 비율 (현재/평균)")
+    is_volume_spike: bool | None = Field(default=None, description="거래량 급증 여부")
+    is_volume_sell_signal: bool | None = Field(default=None, description="거래량+하락 매도 신호")
+
+    # ADX 분석용 (신규)
+    adx: float | None = Field(default=None, description="ADX 값")
+    plus_di: float | None = Field(default=None, description="+DI 값")
+    minus_di: float | None = Field(default=None, description="-DI 값")
+    is_strong_uptrend: bool | None = Field(default=None, description="강한 상승 추세 여부")
+    overbought_sell_blocked: bool | None = Field(default=None, description="과매수 매도 차단 여부")
+
     # 메타데이터
     analyzed_at: datetime = Field(description="분석 시각")
     entry_price: Decimal | None = Field(default=None, description="진입가 (수익률 계산용)")
@@ -765,6 +856,23 @@ class AnalysisHistoryCreateDTO(BaseDTO):
     is_rsi_overbought: bool | None = Field(default=None, description="RSI 과매수 여부")
     sell_phase: str | None = Field(default=None, description="매도 Phase (NONE~PHASE_5)")
     sell_reasons: list[str] = Field(default_factory=list, description="매도 근거")
+
+    # 비중축소 분석용 (신규)
+    sell_stage: str | None = Field(default=None, description="비중축소 단계")
+    sell_ratio_min: float | None = Field(default=None, description="최소 매도 비율")
+    sell_ratio_max: float | None = Field(default=None, description="최대 매도 비율")
+
+    # 거래량 분석용 (신규)
+    volume_ratio: float | None = Field(default=None, description="거래량 비율")
+    is_volume_spike: bool | None = Field(default=None, description="거래량 급증 여부")
+    is_volume_sell_signal: bool | None = Field(default=None, description="거래량+하락 매도 신호")
+
+    # ADX 분석용 (신규)
+    adx: float | None = Field(default=None, description="ADX 값")
+    plus_di: float | None = Field(default=None, description="+DI 값")
+    minus_di: float | None = Field(default=None, description="-DI 값")
+    is_strong_uptrend: bool | None = Field(default=None, description="강한 상승 추세 여부")
+    overbought_sell_blocked: bool | None = Field(default=None, description="과매수 매도 차단 여부")
 
     # 메타데이터 (analyzed_at은 서버에서 자동 설정)
     entry_price: Decimal | None = Field(default=None, description="진입가 (수익률 계산용)")

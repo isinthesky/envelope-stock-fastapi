@@ -657,3 +657,335 @@ class TechnicalIndicators:
             float: 트레일링 스톱가
         """
         return highest_price - (atr * multiplier)
+
+    # ==================== Volume Indicators ====================
+
+    @staticmethod
+    def calculate_volume_ma(
+        volumes: list[int],
+        period: int = 20,
+    ) -> float | None:
+        """
+        거래량 이동평균 계산
+
+        Args:
+            volumes: 거래량 리스트
+            period: 이동평균 기간 (기본: 20)
+
+        Returns:
+            float | None: 거래량 이동평균
+        """
+        if len(volumes) < period:
+            return None
+        return sum(volumes[-period:]) / period
+
+    @staticmethod
+    def calculate_volume_ratio(
+        current_volume: int,
+        volume_ma: float,
+    ) -> float:
+        """
+        거래량 비율 계산 (현재/평균)
+
+        Args:
+            current_volume: 현재 거래량
+            volume_ma: 거래량 이동평균
+
+        Returns:
+            float: 거래량 비율
+        """
+        if volume_ma <= 0:
+            return 0.0
+        return current_volume / volume_ma
+
+    @staticmethod
+    def is_volume_spike(
+        current_volume: int,
+        volume_ma: float,
+        threshold: float = 1.3,
+    ) -> bool:
+        """
+        거래량 급증 여부 확인
+
+        Args:
+            current_volume: 현재 거래량
+            volume_ma: 거래량 이동평균
+            threshold: 급증 임계값 (기본: 1.3 = 130%)
+
+        Returns:
+            bool: 거래량 급증 여부
+        """
+        if volume_ma <= 0:
+            return False
+        return current_volume >= volume_ma * threshold
+
+    @classmethod
+    def check_volume_sell_signal(
+        cls,
+        current_price: float,
+        prev_price: float,
+        current_volume: int,
+        volume_ma_20: float,
+        atr: float | None = None,
+        volume_ratio_threshold: float = 1.3,
+        min_drop_ratio: float = 0.005,
+    ) -> tuple[bool, list[str]]:
+        """
+        거래량 기반 매도 신호 확인
+
+        조건:
+        1. 거래량 비율 >= threshold (기본 1.3, 20일 평균 대비 30% 이상)
+        2. 종가 < 전일 종가 (하락)
+        3. 하락폭 >= min_drop_ratio (기본 0.5%) 또는 ATR의 0.5배 이상
+
+        Args:
+            current_price: 현재가
+            prev_price: 전일 종가
+            current_volume: 현재 거래량
+            volume_ma_20: 20일 거래량 평균
+            atr: ATR 값 (선택)
+            volume_ratio_threshold: 거래량 급증 임계값 (기본: 1.3)
+            min_drop_ratio: 최소 하락폭 (기본: 0.005 = 0.5%)
+
+        Returns:
+            tuple[bool, list[str]]: (신호 여부, 근거 리스트)
+        """
+        reasons: list[str] = []
+
+        # 거래량 비율 계산
+        volume_ratio = cls.calculate_volume_ratio(current_volume, volume_ma_20)
+        is_spike = volume_ratio >= volume_ratio_threshold
+
+        # 하락 여부 및 하락폭 확인
+        price_down = current_price < prev_price
+        drop_ratio = (prev_price - current_price) / prev_price if prev_price > 0 else 0
+
+        # ATR 기반 하락폭 또는 최소 하락폭 조건
+        significant_drop = drop_ratio >= min_drop_ratio
+        if atr and prev_price > 0:
+            atr_ratio = atr / prev_price
+            significant_drop = significant_drop or (drop_ratio >= atr_ratio * 0.5)
+
+        # 최종 신호 판정
+        is_signal = is_spike and price_down and significant_drop
+
+        if is_signal:
+            reasons.append(f"거래량 급증 ({volume_ratio:.1f}x) + 하락 ({drop_ratio*100:.2f}%)")
+
+        return is_signal, reasons
+
+    # ==================== ADX (Average Directional Index) ====================
+
+    @staticmethod
+    def _wilder_smoothing(data: list[float], period: int) -> list[float]:
+        """
+        Wilder's Smoothing Method (지수이동평균의 변형)
+
+        첫 번째 값: 단순평균
+        이후: prev_smooth * (period-1)/period + current / period
+
+        Args:
+            data: 데이터 리스트
+            period: 스무딩 기간
+
+        Returns:
+            list[float]: 스무딩된 값 리스트
+        """
+        if len(data) < period:
+            return []
+
+        result = []
+        # 첫 번째 smoothed 값 = 첫 period개의 단순평균
+        first_smooth = sum(data[:period]) / period
+        result.append(first_smooth)
+
+        # 이후 Wilder smoothing 적용
+        for i in range(period, len(data)):
+            smooth = result[-1] * (period - 1) / period + data[i] / period
+            result.append(smooth)
+
+        return result
+
+    @classmethod
+    def calculate_adx(
+        cls,
+        high_prices: list[float],
+        low_prices: list[float],
+        close_prices: list[float],
+        period: int = 14,
+    ) -> dict[str, float] | None:
+        """
+        ADX (Average Directional Index) 계산 - Wilder Smoothing 적용
+
+        추세 강도를 측정하는 지표 (0~100)
+        - ADX > 25: 강한 추세
+        - ADX < 20: 추세 없음 (횡보)
+
+        Args:
+            high_prices: 고가 리스트
+            low_prices: 저가 리스트
+            close_prices: 종가 리스트
+            period: ADX 기간 (기본: 14)
+
+        Returns:
+            dict[str, float] | None: {"adx": ADX, "plus_di": +DI, "minus_di": -DI}
+            또는 데이터 부족 시 None
+        """
+        # 최소 데이터 요구: 2*period+1
+        min_required = 2 * period + 1
+        if len(close_prices) < min_required:
+            return None
+
+        # Step 1: TR, +DM, -DM 계산
+        tr_list: list[float] = []
+        plus_dm_list: list[float] = []
+        minus_dm_list: list[float] = []
+
+        for i in range(1, len(close_prices)):
+            # True Range
+            tr = max(
+                high_prices[i] - low_prices[i],
+                abs(high_prices[i] - close_prices[i - 1]),
+                abs(low_prices[i] - close_prices[i - 1]),
+            )
+            tr_list.append(tr)
+
+            # Directional Movement
+            high_diff = high_prices[i] - high_prices[i - 1]
+            low_diff = low_prices[i - 1] - low_prices[i]
+
+            plus_dm = high_diff if high_diff > low_diff and high_diff > 0 else 0
+            minus_dm = low_diff if low_diff > high_diff and low_diff > 0 else 0
+
+            plus_dm_list.append(plus_dm)
+            minus_dm_list.append(minus_dm)
+
+        # Step 2: Wilder Smoothing 적용
+        smoothed_tr = cls._wilder_smoothing(tr_list, period)
+        smoothed_plus_dm = cls._wilder_smoothing(plus_dm_list, period)
+        smoothed_minus_dm = cls._wilder_smoothing(minus_dm_list, period)
+
+        if not smoothed_tr or smoothed_tr[-1] == 0:
+            return None
+
+        # Step 3: +DI, -DI, DX 계산 (인덱스 일관성 유지)
+        plus_di_list: list[float] = []
+        minus_di_list: list[float] = []
+        dx_list: list[float] = []
+
+        for i in range(len(smoothed_tr)):
+            atr_val = smoothed_tr[i]
+
+            # ATR이 0이면 DI를 0으로 처리 (skip 대신)
+            if atr_val == 0:
+                plus_di = 0.0
+                minus_di = 0.0
+            else:
+                plus_di = (smoothed_plus_dm[i] / atr_val) * 100
+                minus_di = (smoothed_minus_dm[i] / atr_val) * 100
+
+            plus_di_list.append(plus_di)
+            minus_di_list.append(minus_di)
+
+            # DX 계산 (di_sum이 0이면 DX도 0)
+            di_sum = plus_di + minus_di
+            if di_sum > 0:
+                dx = abs(plus_di - minus_di) / di_sum * 100
+            else:
+                dx = 0.0
+            dx_list.append(dx)
+
+        if len(dx_list) < period:
+            return None
+
+        # Step 4: ADX = DX의 Wilder Smoothing
+        smoothed_dx = cls._wilder_smoothing(dx_list, period)
+
+        if not smoothed_dx:
+            return None
+
+        # 마지막 유효한 +DI, -DI 값 (ADX와 동일 시점)
+        # smoothed_dx의 길이는 len(dx_list) - period + 1
+        # 마지막 ADX에 해당하는 DI 인덱스 = len(dx_list) - 1
+        last_idx = len(plus_di_list) - 1
+
+        return {
+            "adx": round(smoothed_dx[-1], 2),
+            "plus_di": round(plus_di_list[last_idx], 2),
+            "minus_di": round(minus_di_list[last_idx], 2),
+        }
+
+    @classmethod
+    def calculate_adx_from_ohlcv(
+        cls,
+        ohlcv_data: list[dict],
+        period: int = 14,
+    ) -> dict[str, float] | None:
+        """
+        OHLCV 데이터에서 ADX 계산
+
+        Args:
+            ohlcv_data: OHLCV 딕셔너리 리스트
+            period: ADX 기간 (기본: 14)
+
+        Returns:
+            dict[str, float] | None: {"adx": ADX, "plus_di": +DI, "minus_di": -DI}
+        """
+        if len(ohlcv_data) < 2 * period + 1:
+            return None
+
+        high_prices = [d.get("high", d.get("high_price", 0)) for d in ohlcv_data]
+        low_prices = [d.get("low", d.get("low_price", 0)) for d in ohlcv_data]
+        close_prices = [d.get("close", d.get("close_price", 0)) for d in ohlcv_data]
+
+        return cls.calculate_adx(high_prices, low_prices, close_prices, period)
+
+    @staticmethod
+    def is_strong_uptrend(
+        adx: float | None,
+        plus_di: float | None,
+        minus_di: float | None,
+        adx_threshold: float = 25.0,
+    ) -> bool:
+        """
+        강한 상승 추세 여부 확인
+
+        조건: ADX > threshold AND +DI > -DI
+
+        Args:
+            adx: ADX 값
+            plus_di: +DI 값
+            minus_di: -DI 값
+            adx_threshold: ADX 임계값 (기본: 25)
+
+        Returns:
+            bool: 강한 상승 추세 여부
+        """
+        if adx is None or plus_di is None or minus_di is None:
+            return False
+        return adx > adx_threshold and plus_di > minus_di
+
+    @staticmethod
+    def is_strong_downtrend(
+        adx: float | None,
+        plus_di: float | None,
+        minus_di: float | None,
+        adx_threshold: float = 25.0,
+    ) -> bool:
+        """
+        강한 하락 추세 여부 확인
+
+        조건: ADX > threshold AND -DI > +DI
+
+        Args:
+            adx: ADX 값
+            plus_di: +DI 값
+            minus_di: -DI 값
+            adx_threshold: ADX 임계값 (기본: 25)
+
+        Returns:
+            bool: 강한 하락 추세 여부
+        """
+        if adx is None or plus_di is None or minus_di is None:
+            return False
+        return adx > adx_threshold and minus_di > plus_di
