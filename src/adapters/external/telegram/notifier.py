@@ -269,6 +269,27 @@ class TelegramNotifier:
 
         return await self.send_message(message)
 
+    async def send_no_sell_signals_alert(self, total_tracked: int = 0) -> bool:
+        """
+        매도 권장 종목 없음 알림 전송
+
+        Args:
+            total_tracked: 추적 중인 총 종목 수
+        """
+        now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+
+        message = f"""⚪ <b>매도 권장 종목 알림</b>
+
+📅 {now}
+
+오늘은 매도 권장 종목이 없습니다.
+(총 {total_tracked}개 종목 추적 중)
+
+PHASE_4(매도 권장) 또는 PHASE_5(강력 매도) 단계에
+해당하는 종목이 없습니다."""
+
+        return await self.send_message(message)
+
     async def send_sell_signals_summary(
         self,
         stocks: list[dict],

@@ -351,14 +351,18 @@ class NotificationScheduler:
                             )
 
                     # 3. 알림 전송
+                    notifier = get_telegram_notifier()
                     if sell_alerts:
-                        notifier = get_telegram_notifier()
                         await notifier.send_sell_signals_summary(sell_alerts)
                         logger.info(
                             f"[NotificationScheduler] Sent sell notification for {len(sell_alerts)} stocks"
                         )
                     else:
-                        logger.info("[NotificationScheduler] No PHASE_4/PHASE_5 stocks found")
+                        # 결과가 없어도 알림 전송 (시스템 정상 동작 확인용)
+                        await notifier.send_no_sell_signals_alert(
+                            total_tracked=len(active_items)
+                        )
+                        logger.info("[NotificationScheduler] No PHASE_4/PHASE_5 stocks found, sent empty alert")
 
             except Exception as e:
                 logger.error(f"[NotificationScheduler] Sell notification error: {e}")
