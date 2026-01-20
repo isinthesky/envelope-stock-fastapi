@@ -3,7 +3,9 @@
 Backtest Router - 백테스팅 API 엔드포인트
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import date, datetime, time
+
+from fastapi import APIRouter, Depends, Query
 
 from src.application.common.dependencies import DatabaseSession, get_kis_client, get_redis_client
 from src.application.domain.backtest.dto import (
@@ -48,15 +50,8 @@ async def run_backtest(
     **Returns:**
     - BacktestResultDTO: 백테스팅 결과
     """
-    try:
-        result = await service.run_backtest(request)
-        return result
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Backtest execution failed: {str(e)}"
-        )
+    result = await service.run_backtest(request)
+    return result
 
 
 @router.post("/run-multi", response_model=MultiSymbolBacktestResultDTO)
@@ -79,22 +74,15 @@ async def run_multi_symbol_backtest(
     **Returns:**
     - MultiSymbolBacktestResultDTO: 종목별 백테스팅 결과
     """
-    try:
-        result = await service.run_multi_symbol_backtest(request)
-        return result
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Multi-symbol backtest failed: {str(e)}"
-        )
+    result = await service.run_multi_symbol_backtest(request)
+    return result
 
 
 @router.post("/validate-data")
 async def validate_data_quality(
     symbol: str,
-    start_date: str,
-    end_date: str,
+    start_date: date = Query(..., description="시작일 (YYYY-MM-DD)"),
+    end_date: date = Query(..., description="종료일 (YYYY-MM-DD)"),
     service: BacktestService = Depends(get_backtest_service)
 ):
     """
@@ -110,20 +98,10 @@ async def validate_data_quality(
     **Returns:**
     - dict: 데이터 품질 검증 결과
     """
-    try:
-        from datetime import datetime
-
-        start = datetime.fromisoformat(start_date)
-        end = datetime.fromisoformat(end_date)
-
-        result = await service.validate_data_quality(symbol, start, end)
-        return result
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Data validation failed: {str(e)}"
-        )
+    start_dt = datetime.combine(start_date, time.min)
+    end_dt = datetime.combine(end_date, time.min)
+    result = await service.validate_data_quality(symbol, start_dt, end_dt)
+    return result
 
 
 @router.get("/health")

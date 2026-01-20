@@ -10,7 +10,9 @@ from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Request
+
+from src.application.common.exceptions import AuthorizationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.cache.redis_client import RedisClient, get_redis_client
@@ -342,7 +344,7 @@ async def verify_admin_access(request: Request) -> str:
         str: 클라이언트 IP
 
     Raises:
-        HTTPException: 접근이 거부된 경우
+        AuthorizationError: 접근이 거부된 경우
     """
     from src.settings.config import get_settings
 
@@ -350,9 +352,8 @@ async def verify_admin_access(request: Request) -> str:
     client_ip = _get_client_ip(request)
 
     if not _is_ip_allowed(client_ip, settings.admin_allowed_ips):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied from IP: {client_ip}",
+        raise AuthorizationError(
+            message=f"Access denied from IP: {client_ip}",
         )
 
     return client_ip

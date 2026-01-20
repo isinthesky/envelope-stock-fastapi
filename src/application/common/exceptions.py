@@ -247,6 +247,16 @@ class CacheError(ExternalServiceError):
         super().__init__(service="Cache", message=message)
 
 
+# ==================== Service Availability Exceptions ====================
+
+
+class ServiceUnavailableError(ApplicationError):
+    """서비스 사용 불가 예외"""
+
+    def __init__(self, message: str = "Service unavailable"):
+        super().__init__(message=message, code="SERVICE_UNAVAILABLE", status_code=503)
+
+
 # ==================== Rate Limit Exceptions ====================
 
 

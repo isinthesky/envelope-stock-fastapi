@@ -10,7 +10,6 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from src.settings.config import settings
 
@@ -257,17 +256,9 @@ async def health_check() -> dict[str, str]:
 
 # ==================== Error Handlers ====================
 
+from src.settings.exception_handlers import register_exception_handlers
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc: Exception) -> JSONResponse:
-    """전역 예외 핸들러"""
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal Server Error",
-            "detail": str(exc) if settings.debug else "An unexpected error occurred",
-        },
-    )
+register_exception_handlers(app)
 
 
 # ==================== Router 등록 ====================

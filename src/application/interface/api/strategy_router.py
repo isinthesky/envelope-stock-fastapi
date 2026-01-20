@@ -11,11 +11,12 @@ NOTE: 라우터 순서 중요!
 - 서비스 메서드는 @transaction 데코레이터가 session을 자동 주입
 """
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Query, status
+
+from src.application.common.exceptions import ServiceUnavailableError
 
 from src.application.common.dependencies import (
     BuyStrategyServiceDep,
-    DatabaseSession,
     MarketDataServiceDep,
     StrategyServiceDep,
     StrategySymbolStateRepositoryDep,
@@ -116,10 +117,7 @@ async def refresh_universe(
 ) -> ResponseDTO[dict]:
     """유니버스 갱신 - @transaction이 세션을 관리"""
     if not market_data_service.has_valid_credentials():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="KIS API credentials not configured",
-        )
+        raise ServiceUnavailableError("KIS API credentials not configured")
 
     result = await service.refresh_universe()
     return ResponseDTO.success_response(result, "Universe refresh completed")
