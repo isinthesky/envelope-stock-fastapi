@@ -62,9 +62,9 @@ class OHLCVCacheScheduler:
         self._scheduler.add_job(
             self._warmup_until_yesterday_job,
             trigger=CronTrigger(
-                day_of_week="mon-fri",
                 hour=8,
                 minute=0,
+                timezone="Asia/Seoul",
             ),
             id="ohlcv_warmup_until_yesterday",
             name="OHLCV Morning Warmup (until yesterday)",
@@ -89,7 +89,7 @@ class OHLCVCacheScheduler:
         self._scheduler.start()
         self._is_running = True
 
-        logger.info("[OHLCVScheduler] Started (cleanup: 02:00, update: 16:00 weekdays)")
+        logger.info("[OHLCVScheduler] Started (cleanup: 02:00 daily, warmup: 08:00 daily, update: 16:00 weekdays)")
 
     async def stop(self) -> None:
         """스케줄러 중지"""
