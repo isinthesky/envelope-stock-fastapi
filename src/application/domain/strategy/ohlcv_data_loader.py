@@ -89,6 +89,24 @@ def normalize_df_timestamps(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def iter_date_chunks(
+    start: datetime,
+    end: datetime,
+    max_days: int,
+) -> list[tuple[datetime, datetime]]:
+    """inclusive date chunk iterator with max_days cap per chunk."""
+    if start > end:
+        return []
+    chunk_start = start
+    chunk_span = timedelta(days=max_days - 1)
+    chunks: list[tuple[datetime, datetime]] = []
+    while chunk_start <= end:
+        chunk_end = min(chunk_start + chunk_span, end)
+        chunks.append((chunk_start, chunk_end))
+        chunk_start = chunk_end + timedelta(days=1)
+    return chunks
+
+
 class LoadType(str, Enum):
     """데이터 로딩 유형"""
     CACHE_HIT = "cache_hit"           # 캐시 완전 히트
@@ -444,26 +462,21 @@ class OHLCVDataLoader:
             # 누락 기간을 MAX_API_DAYS_PER_CALL 단위로 분할
             fetch_start = last_cached_date + timedelta(days=1)
 
-            while fetch_start < end_date:
-                # chunk 종료일 계산
-                chunk_end = min(
-                    fetch_start + timedelta(days=MAX_API_DAYS_PER_CALL),
-                    end_date,
-                )
-
+            for chunk_start, chunk_end in iter_date_chunks(
+                fetch_start,
+                end_date,
+                MAX_API_DAYS_PER_CALL,
+            ):
                 chart_data = await market_data_service.get_chart_data(
                     symbol=symbol,
                     interval=interval,
-                    start_date=fetch_start,
+                    start_date=chunk_start,
                     end_date=chunk_end,
                 )
                 api_calls += 1
 
                 if chart_data.candles:
                     all_new_candles.extend(chart_data.candles)
-
-                # 다음 chunk로 이동
-                fetch_start = chunk_end + timedelta(days=1)
 
             if not all_new_candles:
                 # 신규 데이터 없음 (주말/휴일 등)
@@ -531,14 +544,13 @@ class OHLCVDataLoader:
         try:
             # 전체 기간을 MAX_API_DAYS_PER_CALL 단위로 분할하여 역순으로 조회
             # (최신 데이터부터 과거로)
-            chunk_end = end_date
+            chunks = iter_date_chunks(
+                start_date,
+                end_date,
+                MAX_API_DAYS_PER_CALL,
+            )
 
-            while chunk_end > start_date:
-                chunk_start = max(
-                    chunk_end - timedelta(days=MAX_API_DAYS_PER_CALL),
-                    start_date,
-                )
-
+            for chunk_start, chunk_end in reversed(chunks):
                 chart_data = await market_data_service.get_chart_data(
                     symbol=symbol,
                     interval=interval,
@@ -549,9 +561,6 @@ class OHLCVDataLoader:
 
                 if chart_data.candles:
                     all_candles.extend(chart_data.candles)
-
-                # 다음 chunk로 이동 (과거 방향)
-                chunk_end = chunk_start - timedelta(days=1)
 
         except Exception as e:
             logger.warning(f"[OHLCVLoader] API call failed for {symbol}: {e}")
