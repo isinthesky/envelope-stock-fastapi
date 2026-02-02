@@ -7,8 +7,8 @@ OHLCV Warmup Service - OHLCV 캐시 워밍업 및 프리페칭
 
 import asyncio
 import logging
-import time
-from datetime import date, datetime, time, timedelta
+import time as pytime
+from datetime import date, datetime, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
 
 from src.application.domain.ohlcv.cache_manager import KOREA_HOLIDAYS
@@ -93,7 +93,7 @@ class OHLCVWarmupService:
         Returns:
             WarmupResultDTO: 워밍업 결과
         """
-        start_time = time.time()
+        start_time = pypytime.time()
 
         result = WarmupResultDTO(
             total_symbols=len(request.symbols),
@@ -154,7 +154,7 @@ class OHLCVWarmupService:
                     if error:
                         result.errors.append(f"{symbol}: {error}")
 
-        result.duration_seconds = round(time.time() - start_time, 2)
+        result.duration_seconds = round(pypytime.time() - start_time, 2)
 
         logger.info(
             f"[WarmupService] Warmup completed: "
@@ -321,7 +321,7 @@ class OHLCVWarmupService:
         Returns:
             WarmupResultDTO: 업데이트 결과
         """
-        start_time = time.time()
+        start_time = pypytime.time()
 
         # 오래된 데이터 보유 종목 조회
         stale_data = await self.ohlcv_repo.get_symbols_with_stale_data(
@@ -332,7 +332,7 @@ class OHLCVWarmupService:
             return WarmupResultDTO(
                 total_symbols=0,
                 success_count=0,
-                duration_seconds=round(time.time() - start_time, 2),
+                duration_seconds=round(pypytime.time() - start_time, 2),
             )
 
         result = WarmupResultDTO(
@@ -380,7 +380,7 @@ class OHLCVWarmupService:
                     if error:
                         result.errors.append(f"{symbol}: {error}")
 
-        result.duration_seconds = round(time.time() - start_time, 2)
+        result.duration_seconds = round(pypytime.time() - start_time, 2)
 
         logger.info(
             f"[WarmupService] Incremental update completed: "
@@ -471,11 +471,11 @@ class OHLCVWarmupService:
             latest_date = latest_model.timestamp.date()
             if latest_date >= end_date:
                 return 0, 0
-            start_dt = datetime.combine(latest_date + timedelta(days=1), time.min)
+            start_dt = datetime.combine(latest_date + timedelta(days=1), dt_time.min)
         else:
-            start_dt = datetime.combine(end_date - timedelta(days=days_if_empty), time.min)
+            start_dt = datetime.combine(end_date - timedelta(days=days_if_empty), dt_time.min)
 
-        end_dt = datetime.combine(end_date, time.min)
+        end_dt = datetime.combine(end_date, dt_time.min)
         if start_dt > end_dt:
             return 0, 0
 
