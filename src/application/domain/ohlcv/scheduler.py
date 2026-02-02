@@ -53,7 +53,7 @@ class OHLCVCacheScheduler:
         # 매일 새벽 2시: 오래된 데이터 정리
         self._scheduler.add_job(
             self._cleanup_job,
-            trigger=CronTrigger(hour=2, minute=0),
+            trigger=CronTrigger(hour=2, minute=0, timezone="Asia/Seoul"),
             id="ohlcv_cleanup",
             name="OHLCV Cache Cleanup",
             replace_existing=True,
@@ -83,6 +83,7 @@ class OHLCVCacheScheduler:
                 day_of_week="mon-fri",
                 hour=16,
                 minute=0,
+                timezone="Asia/Seoul",
             ),
             id="ohlcv_update",
             name="OHLCV Incremental Update",
