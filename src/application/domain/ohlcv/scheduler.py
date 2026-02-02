@@ -8,6 +8,7 @@ OHLCV Cache Scheduler - OHLCV 캐시 정기 작업 스케줄러
 import asyncio
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -19,6 +20,8 @@ from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService, prev
 from src.adapters.database.repositories.stock_universe_repository import StockUniverseRepository
 
 logger = logging.getLogger(__name__)
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 class OHLCVCacheScheduler:
@@ -111,7 +114,8 @@ class OHLCVCacheScheduler:
         logger.info("[OHLCVScheduler] Starting morning warmup job (until yesterday)...")
 
         try:
-            today_kst = datetime.now().date()  # 서버 TZ가 KST라고 가정
+            # NOTE: 서버/컨테이너 TZ가 KST가 아닐 수도 있으므로 명시적으로 KST 기준 날짜를 사용한다.
+            today_kst = datetime.now(KST).date()
             end_date = previous_trading_day_kst(today_kst)
 
             # 스캔 대상 유니버스(최대 500) 심볼 목록 확보

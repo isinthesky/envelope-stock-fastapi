@@ -53,7 +53,12 @@ class RedisClient:
     # ==================== 기본 CRUD ====================
 
     async def set(
-        self, key: str, value: Any, ttl: int | None = None, serialize: bool = True
+        self,
+        key: str,
+        value: Any,
+        ttl: int | None = None,
+        serialize: bool = True,
+        nx: bool = False,
     ) -> bool:
         """
         캐시 저장
@@ -74,10 +79,21 @@ class RedisClient:
             if serialize:
                 value = json.dumps(value, ensure_ascii=False)
 
+            # NOTE:
+            # - nx=True일 때는 기존 값이 있으면 set이 실패(None/False)한다.
+            # - ttl과 nx를 함께 쓰려면 setex가 아니라 SET EX NX를 사용해야 한다.
             if ttl:
+                if nx:
+                    res = await self.redis.set(key, value, ex=ttl, nx=True)
+                    return bool(res)
                 await self.redis.setex(key, ttl, value)
-            else:
-                await self.redis.set(key, value)
+                return True
+
+            if nx:
+                res = await self.redis.set(key, value, nx=True)
+                return bool(res)
+
+            await self.redis.set(key, value)
             return True
         except Exception:
             return False

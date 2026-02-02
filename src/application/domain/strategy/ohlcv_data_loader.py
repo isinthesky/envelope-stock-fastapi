@@ -612,11 +612,18 @@ class OHLCVDataLoader:
 
             redis = await get_redis_client()
             throttle_key = f"ohlcv:today-daily:{symbol}:{today.strftime('%Y%m%d')}"
-            if await redis.get(throttle_key, deserialize=False) is not None:
-                return df, 0, 0
 
-            # 먼저 throttle 설정 (동시 실행 중복 호출 방지)
-            await redis.set(throttle_key, "1", ttl=today_refresh_ttl_seconds, serialize=False)
+            # throttle (atomic): key가 없을 때만 set
+            # - 동시 실행 시에도 1회만 API 호출하도록 보장
+            acquired = await redis.set(
+                throttle_key,
+                "1",
+                ttl=today_refresh_ttl_seconds,
+                serialize=False,
+                nx=True,
+            )
+            if not acquired:
+                return df, 0, 0
 
             market_data_service = await self._get_market_data_service()
             today_dt = datetime.combine(today, time.min)
