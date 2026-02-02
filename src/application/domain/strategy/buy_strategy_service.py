@@ -17,6 +17,8 @@ from decimal import Decimal
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.adapters.database.connection import AsyncSessionLocal
+
 from src.adapters.database.models.stock_universe import MarketType
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
@@ -31,10 +33,13 @@ from src.application.domain.strategy.dto import (
     MA5BreakoutScanItemDTO,
     MA5BreakoutScanListDTO,
 )
-from src.application.domain.strategy.ohlcv_data_loader import LoadType, OHLCVDataLoader
+from src.application.domain.strategy.ohlcv_data_loader import LoadResult, LoadType, OHLCVDataLoader
+from src.settings.config import settings
 
 
 logger = logging.getLogger(__name__)
+
+MA5_VOLUME_RATIO_THRESHOLD = 1.5
 
 
 class BuyStrategyService:
@@ -75,6 +80,19 @@ class BuyStrategyService:
             self._data_loader = OHLCVDataLoader(session or self._session)
         return self._data_loader
 
+    @staticmethod
+    def _resolve_scan_concurrency(requested: int | None, total: int) -> int:
+        """스캔 동시성 제한값 계산"""
+        base_limit = settings.scan_concurrency_limit
+        desired = requested or base_limit
+        safe_limit = max(1, min(desired, settings.kis_api_rate_limit, total))
+        if safe_limit != desired:
+            logger.info(
+                f"[Scan] Capping concurrency from {desired} to {safe_limit} "
+                f"(rate_limit={settings.kis_api_rate_limit}, total={total})"
+            )
+        return safe_limit
+
     @transaction
     async def scan_golden_cross_candidates(
         self,
@@ -83,8 +101,10 @@ class BuyStrategyService:
         stoch_threshold: float = 30.0,
         gc_only: bool = True,
         include_etf: bool = True,
+        limit: int = 1000,
         cache_freshness_days: int = 1,
         force_refresh: bool = False,
+        max_concurrent: int | None = None,
     ) -> GoldenCrossScanListDTO:
         """
         골든크로스 종목 스캔
@@ -106,21 +126,25 @@ class BuyStrategyService:
                 기본 1일 - 당일 데이터가 없으면 API 호출.
                 장 마감 후 스캔 시 1일, 주말에는 3일 권장.
             force_refresh: True면 캐시와 관계없이 최신 데이터 요청
+            max_concurrent: 스캔 동시 처리 수 (None이면 설정값 사용)
 
         Returns:
             GoldenCrossScanListDTO: 스캔 결과
         """
         scan_time = datetime.now()
+        loop = asyncio.get_running_loop()
+        scan_started_at = loop.time()
         errors: list[str] = []
         results: list[GoldenCrossScanItemDTO] = []
 
-        # 1. 유니버스에서 스크리닝 통과 종목 조회 (ETF 포함 옵션)
+        # 1. 유니버스에서 스캔 대상 종목 조회 (스크리닝 조건 없이)
+        # - B-2 요구사항: 최대 500개(기본)
         market_type = MarketType(market) if market else None
-        stocks = await self.universe_repo.get_eligible_stocks(
+        stocks = await self.universe_repo.get_scan_stocks(
             market=market_type,
             include_etf=include_etf,
             session=session,
-            limit=300,  # 전체 유니버스 스캔
+            limit=limit,
         )
 
         if not stocks:
@@ -131,13 +155,17 @@ class BuyStrategyService:
                 pullback_waiting_count=0,
                 ready_to_buy_count=0,
                 scan_time=scan_time,
-                errors=["No eligible stocks found in universe"],
+                errors=["No scan stocks found in universe"],
             )
 
-        logger.info(f"[GC Scan] Scanning {len(stocks)} eligible stocks with MA55/MA165")
+        concurrency = self._resolve_scan_concurrency(max_concurrent, len(stocks))
+        logger.info(
+            f"[GC Scan] Scanning {len(stocks)} stocks with MA55/MA165 "
+            f"(concurrency={concurrency}, cache_freshness_days={cache_freshness_days}, "
+            f"force_refresh={force_refresh})"
+        )
 
         # 2. 종목별 기술적 지표 계산
-        data_loader = self._get_data_loader(session)
 
         # 캐시 통계 추적
         cache_stats = {
@@ -148,96 +176,151 @@ class BuyStrategyService:
             "new_candles": 0,
         }
 
-        for stock in stocks:
-            try:
-                # OHLCV 데이터 로딩 (증분 업데이트 지원)
-                load_result = await data_loader.load_ohlcv_with_stats(
-                    symbol=stock.symbol,
-                    days=400,
-                    interval="1d",
-                    min_candles=160,
-                    cache_freshness_days=cache_freshness_days,
-                    force_refresh=force_refresh,
-                )
-                df = load_result.df
+        work_queue: asyncio.Queue[tuple[int, object]] = asyncio.Queue()
+        for idx, stock in enumerate(stocks):
+            work_queue.put_nowait((idx, stock))
 
-                # 캐시 통계 업데이트
-                if load_result.load_type == LoadType.CACHE_HIT:
-                    cache_stats["cache_hits"] += 1
-                elif load_result.load_type == LoadType.INCREMENTAL:
-                    cache_stats["incremental_updates"] += 1
-                else:
-                    cache_stats["full_loads"] += 1
-                cache_stats["total_api_calls"] += load_result.api_calls
-                cache_stats["new_candles"] += load_result.new_candles
+        def update_cache_stats(target: dict[str, int], load_result: LoadResult) -> None:
+            if load_result.load_type == LoadType.CACHE_HIT:
+                target["cache_hits"] += 1
+            elif load_result.load_type == LoadType.INCREMENTAL:
+                target["incremental_updates"] += 1
+            else:
+                target["full_loads"] += 1
+            target["total_api_calls"] += load_result.api_calls
+            target["new_candles"] += load_result.new_candles
 
-                # 지표 계산 (MA55/MA165)
-                df = TechnicalIndicators.prepare_golden_cross_indicators(
-                    df,
-                    short_ma_period=55,
-                    long_ma_period=165,
-                    stoch_k_period=14,
-                    stoch_d_period=3,
-                )
+        async def worker() -> tuple[list[tuple[int, GoldenCrossScanItemDTO]], list[tuple[int, str]], dict[str, int]]:
+            worker_results: list[tuple[int, GoldenCrossScanItemDTO]] = []
+            worker_errors: list[tuple[int, str]] = []
+            worker_cache_stats = {
+                "cache_hits": 0,
+                "incremental_updates": 0,
+                "full_loads": 0,
+                "total_api_calls": 0,
+                "new_candles": 0,
+            }
 
-                # 최신 행 추출
-                latest = df.iloc[-1]
-                ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
-                ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
-                stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
-                stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
-                close = float(latest["close"])
+            # 워커(코루틴) 단위로 세션/로더를 1회 생성하여 재사용
+            async with AsyncSessionLocal() as worker_session:
+                worker_loader = OHLCVDataLoader(worker_session)
 
-                # 골든크로스 상태 판정
-                is_gc_active = ma_short > ma_long
+                while True:
+                    try:
+                        if worker_session.in_transaction():
+                            await worker_session.rollback()
+                        idx, stock = work_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
 
-                # gc_only 필터
-                if gc_only and not is_gc_active:
-                    continue
+                    try:
+                        load_result = await worker_loader.load_ohlcv_with_stats(
+                            symbol=stock.symbol,
+                            days=400,
+                            interval="1d",
+                            min_candles=160,
+                            cache_freshness_days=cache_freshness_days,
+                            force_refresh=force_refresh,
+                            include_today_candle=True,
+                            today_refresh_ttl_seconds=600,
+                        )
+                        if load_result.load_type == LoadType.CACHE_HIT:
+                            if worker_session.in_transaction():
+                                await worker_session.rollback()
+                        else:
+                            await worker_session.commit()
+                        df = load_result.df
 
-                # MA 갭 비율 계산
-                ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
+                        update_cache_stats(worker_cache_stats, load_result)
 
-                # 상태 결정 (stoch_d, ma_gap_ratio 전달)
-                gc_state = self._determine_gc_state(
-                    is_gc_active=is_gc_active,
-                    stoch_k=stoch_k,
-                    stoch_threshold=stoch_threshold,
-                    stoch_d=stoch_d,
-                    ma_gap_ratio=ma_gap_ratio,
-                )
+                        df = TechnicalIndicators.prepare_golden_cross_indicators(
+                            df,
+                            short_ma_period=55,
+                            long_ma_period=165,
+                            stoch_k_period=14,
+                            stoch_d_period=3,
+                        )
 
-                # 결과 추가
-                results.append(
-                    GoldenCrossScanItemDTO(
-                        symbol=stock.symbol,
-                        name=stock.name,
-                        market=stock.market,
-                        current_price=Decimal(str(close)),
-                        ma_short=Decimal(str(round(ma_short, 2))),
-                        ma_long=Decimal(str(round(ma_long, 2))),
-                        ma_gap_ratio=round(ma_gap_ratio, 2),  # 백분율
-                        stoch_k=round(stoch_k, 2),
-                        stoch_d=round(stoch_d, 2),
-                        is_gc_active=is_gc_active,
-                        gc_state=gc_state,
-                        market_cap=stock.market_cap,
-                        screening_score=stock.screening_score,
-                    )
-                )
+                        latest = df.iloc[-1]
+                        ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
+                        ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
+                        stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
+                        stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
+                        close = float(latest["close"])
 
-                # Rate limit 대응
-                await asyncio.sleep(0.05)
+                        is_gc_active = ma_short > ma_long
 
-            except ValueError as e:
-                # 데이터 부족 등의 예상된 오류 - 에러 리스트에 추가하여 디버깅
-                error_msg = f"{stock.symbol}: {str(e)}"
-                errors.append(error_msg)
-                logger.warning(f"[GC Scan] {error_msg}")
-            except Exception as e:
-                error_msg = f"{stock.symbol}: {str(e)}"
-                logger.warning(f"[GC Scan] Error processing {error_msg}")
-                errors.append(error_msg)
+                        if gc_only and not is_gc_active:
+                            continue
+
+                        ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
+
+                        gc_state = self._determine_gc_state(
+                            is_gc_active=is_gc_active,
+                            stoch_k=stoch_k,
+                            stoch_threshold=stoch_threshold,
+                            stoch_d=stoch_d,
+                            ma_gap_ratio=ma_gap_ratio,
+                        )
+
+                        worker_results.append(
+                            (
+                                idx,
+                                GoldenCrossScanItemDTO(
+                                    symbol=stock.symbol,
+                                    name=stock.name,
+                                    market=stock.market,
+                                    current_price=Decimal(str(close)),
+                                    ma_short=Decimal(str(round(ma_short, 2))),
+                                    ma_long=Decimal(str(round(ma_long, 2))),
+                                    ma_gap_ratio=round(ma_gap_ratio, 2),
+                                    stoch_k=round(stoch_k, 2),
+                                    stoch_d=round(stoch_d, 2),
+                                    is_gc_active=is_gc_active,
+                                    gc_state=gc_state,
+                                    market_cap=stock.market_cap,
+                                    screening_score=stock.screening_score,
+                                ),
+                            )
+                        )
+
+                        await asyncio.sleep(0.05)
+
+                    except ValueError as e:
+                        error_msg = f"{stock.symbol}: {str(e)}"
+                        logger.warning(f"[GC Scan] {error_msg}")
+                        worker_errors.append((idx, error_msg))
+                        if worker_session.in_transaction():
+                            await worker_session.rollback()
+                    except Exception as e:
+                        error_msg = f"{stock.symbol}: {str(e)}"
+                        logger.warning(f"[GC Scan] Error processing {error_msg}")
+                        worker_errors.append((idx, error_msg))
+                        if worker_session.in_transaction():
+                            await worker_session.rollback()
+                    finally:
+                        work_queue.task_done()
+
+            return worker_results, worker_errors, worker_cache_stats
+
+        workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
+        completed = await asyncio.gather(*workers, return_exceptions=True)
+
+        error_map: dict[int, str] = {}
+        for item in completed:
+            if isinstance(item, Exception):
+                errors.append(str(item))
+                continue
+            worker_results, worker_errors, worker_cache_stats = item
+            results.extend([result for _, result in worker_results])
+            for idx, error_msg in worker_errors:
+                error_map[idx] = error_msg
+            for key in cache_stats:
+                cache_stats[key] += worker_cache_stats.get(key, 0)
+
+        if error_map:
+            for idx in sorted(error_map):
+                errors.append(error_map[idx])
 
         # 3. 결과 정렬 (OPTIMAL_BUY > BUY_INTEREST > READY_TO_BUY > WAITING_FOR_PULLBACK > 기타)
         state_order = {
@@ -248,7 +331,13 @@ class BuyStrategyService:
             "GC_ACTIVE": 4,
             "NOT_GC": 5,
         }
-        results.sort(key=lambda x: (state_order.get(x.gc_state, 99), -float(x.screening_score or 0)))
+        results.sort(
+            key=lambda x: (
+                state_order.get(x.gc_state, 99),
+                -float(x.screening_score or 0),
+                x.symbol,
+            )
+        )
 
         # 4. 통계 계산
         gc_active_count = sum(1 for r in results if r.is_gc_active)
@@ -268,6 +357,12 @@ class BuyStrategyService:
             f"full={cache_stats['full_loads']}, "
             f"api_calls={cache_stats['total_api_calls']}, "
             f"new_candles={cache_stats['new_candles']}"
+        )
+        scan_duration = loop.time() - scan_started_at
+        logger.info(
+            f"[GC Scan] Timing: {scan_duration:.2f}s total, "
+            f"{scan_duration / max(len(stocks), 1):.2f}s/stock, "
+            f"concurrency={concurrency}"
         )
 
         return GoldenCrossScanListDTO(
@@ -694,6 +789,8 @@ class BuyStrategyService:
         envelope_pct: float = 0.7,
         use_volume_filter: bool = True,
         include_etf: bool = True,
+        limit: int = 1000,
+        max_concurrent: int | None = None,
     ) -> MA5BreakoutScanListDTO:
         """
         MA5 엔벨로프 상단 돌파 종목 스캔
@@ -706,11 +803,14 @@ class BuyStrategyService:
             envelope_pct: 엔벨로프 % (기본 0.7)
             use_volume_filter: 거래량 필터 사용 여부
             include_etf: ETF 종목 포함 여부
+            max_concurrent: 스캔 동시 처리 수 (None이면 설정값 사용)
 
         Returns:
             MA5BreakoutScanListDTO: 스캔 결과
         """
         scan_time = datetime.now()
+        loop = asyncio.get_running_loop()
+        scan_started_at = loop.time()
         errors: list[str] = []
         results: list[MA5BreakoutScanItemDTO] = []
 
@@ -720,7 +820,7 @@ class BuyStrategyService:
             market=market_type,
             include_etf=include_etf,
             session=session,
-            limit=300,
+            limit=limit,
         )
 
         if not stocks:
@@ -728,105 +828,187 @@ class BuyStrategyService:
                 stocks=[],
                 total_scanned=0,
                 scan_time=scan_time,
-                errors=["No eligible stocks found in universe"],
+                errors=["No scan stocks found in universe"],
             )
 
-        logger.info(f"[MA5 Scan] Scanning {len(stocks)} eligible stocks with MA{short_period}/MA{long_period}")
+        concurrency = self._resolve_scan_concurrency(max_concurrent, len(stocks))
+        logger.info(
+            f"[MA5 Scan] Scanning {len(stocks)} eligible stocks with MA{short_period}/MA{long_period} "
+            f"(concurrency={concurrency}, envelope_pct={envelope_pct}, volume_filter={use_volume_filter})"
+        )
 
         # 2. 종목별 기술적 지표 계산
-        data_loader = self._get_data_loader(session)
 
-        for stock in stocks:
-            try:
-                # OHLCV 데이터 로딩 (MA300 계산을 위해 충분한 데이터 필요)
-                load_result = await data_loader.load_ohlcv_with_stats(
-                    symbol=stock.symbol,
-                    days=500,
-                    interval="1d",
-                    min_candles=long_period + 20,
-                    cache_freshness_days=1,
-                )
-                df = load_result.df
+        cache_stats = {
+            "cache_hits": 0,
+            "incremental_updates": 0,
+            "full_loads": 0,
+            "total_api_calls": 0,
+            "new_candles": 0,
+        }
 
-                if len(df) < long_period:
-                    continue
+        work_queue: asyncio.Queue[tuple[int, object]] = asyncio.Queue()
+        for idx, stock in enumerate(stocks):
+            work_queue.put_nowait((idx, stock))
 
-                # MA 계산
-                df["ma_short"] = df["close"].rolling(window=short_period).mean()
-                df["ma_long"] = df["close"].rolling(window=long_period).mean()
+        def update_cache_stats(target: dict[str, int], load_result: LoadResult) -> None:
+            if load_result.load_type == LoadType.CACHE_HIT:
+                target["cache_hits"] += 1
+            elif load_result.load_type == LoadType.INCREMENTAL:
+                target["incremental_updates"] += 1
+            else:
+                target["full_loads"] += 1
+            target["total_api_calls"] += load_result.api_calls
+            target["new_candles"] += load_result.new_candles
 
-                # 거래량 평균 계산
-                df["volume_ma20"] = df["volume"].rolling(window=20).mean()
+        async def worker() -> tuple[list[tuple[int, MA5BreakoutScanItemDTO]], list[tuple[int, str]], dict[str, int]]:
+            worker_results: list[tuple[int, MA5BreakoutScanItemDTO]] = []
+            worker_errors: list[tuple[int, str]] = []
+            worker_cache_stats = {
+                "cache_hits": 0,
+                "incremental_updates": 0,
+                "full_loads": 0,
+                "total_api_calls": 0,
+                "new_candles": 0,
+            }
 
-                # 최신 행 추출
-                latest = df.iloc[-1]
-                prev = df.iloc[-2] if len(df) > 1 else latest
+            # 워커(코루틴) 단위로 세션/로더를 1회 생성하여 재사용
+            async with AsyncSessionLocal() as worker_session:
+                worker_loader = OHLCVDataLoader(worker_session)
 
-                ma5 = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
-                ma300 = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
-                close = float(latest["close"])
-                volume = float(latest["volume"]) if pd.notna(latest["volume"]) else 0
-                volume_ma20 = float(latest["volume_ma20"]) if pd.notna(latest["volume_ma20"]) else 1
+                while True:
+                    try:
+                        if worker_session.in_transaction():
+                            await worker_session.rollback()
+                        idx, stock = work_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
 
-                prev_ma5 = float(prev["ma_short"]) if pd.notna(prev["ma_short"]) else 0
+                    try:
+                        load_result = await worker_loader.load_ohlcv_with_stats(
+                            symbol=stock.symbol,
+                            days=500,
+                            interval="1d",
+                            min_candles=long_period + 20,
+                            cache_freshness_days=1,
+                            include_today_candle=True,
+                            today_refresh_ttl_seconds=600,
+                        )
+                        if load_result.load_type == LoadType.CACHE_HIT:
+                            if worker_session.in_transaction():
+                                await worker_session.rollback()
+                        else:
+                            await worker_session.commit()
+                        df = load_result.df
 
-                if ma300 <= 0:
-                    continue
+                        update_cache_stats(worker_cache_stats, load_result)
 
-                # 엔벨로프 상단 계산
-                upper_band = ma300 * (1 + envelope_pct / 100)
+                        if len(df) < long_period:
+                            continue
 
-                # 상태 결정
-                ma5_above_upper = ma5 > upper_band
-                prev_ma5_above_upper = prev_ma5 > (ma300 * (1 + envelope_pct / 100))  # 근사값
-                price_above_upper = close > upper_band
+                        df["ma_short"] = df["close"].rolling(window=short_period).mean()
+                        df["ma_long"] = df["close"].rolling(window=long_period).mean()
+                        df["volume_ma20"] = df["volume"].rolling(window=20).mean()
 
-                # 돌파 판정: 이전에 상단 아래 → 현재 상단 위
-                is_breakout = ma5_above_upper and not prev_ma5_above_upper and price_above_upper
+                        latest = df.iloc[-1]
+                        prev = df.iloc[-2] if len(df) > 1 else latest
 
-                # 거래량 비율
-                volume_ratio = volume / volume_ma20 if volume_ma20 > 0 else 1.0
+                        ma5 = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
+                        ma300 = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
+                        close = float(latest["close"])
+                        volume = float(latest["volume"]) if pd.notna(latest["volume"]) else 0
+                        volume_ma20 = float(latest["volume_ma20"]) if pd.notna(latest["volume_ma20"]) else 1
 
-                # 거래량 필터
-                if use_volume_filter and is_breakout and volume_ratio < 1.0:
-                    is_breakout = False  # 거래량 부족하면 돌파로 인정하지 않음
+                        prev_ma5 = float(prev["ma_short"]) if pd.notna(prev["ma_short"]) else 0
 
-                # 상태 결정
-                if is_breakout:
-                    ma5_state = "BREAKOUT"
-                elif ma5_above_upper:
-                    ma5_state = "ABOVE"
-                else:
-                    ma5_state = "BELOW"
+                        if ma300 <= 0:
+                            continue
 
-                # MA5와 상단 괴리율
-                gap_ratio = ((ma5 - upper_band) / upper_band * 100) if upper_band > 0 else 0
+                        upper_band = ma300 * (1 + envelope_pct / 100)
 
-                results.append(
-                    MA5BreakoutScanItemDTO(
-                        symbol=stock.symbol,
-                        name=stock.name,
-                        market=stock.market,
-                        current_price=close,
-                        ma5=round(ma5, 2),
-                        ma300=round(ma300, 2),
-                        upper_band=round(upper_band, 2),
-                        ma5_state=ma5_state,
-                        gap_ratio=round(gap_ratio, 2),
-                        volume_ratio=round(volume_ratio, 2),
-                    )
-                )
+                        ma5_above_upper = ma5 > upper_band
+                        prev_ma5_above_upper = prev_ma5 > (ma300 * (1 + envelope_pct / 100))
+                        price_above_upper = close > upper_band
 
-                await asyncio.sleep(0.05)
+                        is_breakout = ma5_above_upper and not prev_ma5_above_upper and price_above_upper
 
-            except Exception as e:
-                error_msg = f"{stock.symbol}: {str(e)}"
-                logger.warning(f"[MA5 Scan] Error processing {error_msg}")
-                errors.append(error_msg)
+                        if not is_breakout:
+                            continue
+
+                        ma5_state = "BREAKOUT"
+                        gap_ratio = ((ma5 - upper_band) / upper_band * 100) if upper_band > 0 else 0
+
+                        if use_volume_filter and volume_ma20 > 0:
+                            volume_ratio = volume / volume_ma20
+                            if volume_ratio < MA5_VOLUME_RATIO_THRESHOLD:
+                                continue
+                        else:
+                            volume_ratio = volume / volume_ma20 if volume_ma20 > 0 else 0
+
+                        worker_results.append(
+                            (
+                                idx,
+                                MA5BreakoutScanItemDTO(
+                                    symbol=stock.symbol,
+                                    name=stock.name,
+                                    market=stock.market,
+                                    current_price=Decimal(str(close)),
+                                    ma5=Decimal(str(round(ma5, 2))),
+                                    ma300=Decimal(str(round(ma300, 2))),
+                                    upper_band=Decimal(str(round(upper_band, 2))),
+                                    ma5_state=ma5_state,
+                                    gap_ratio=round(gap_ratio, 2),
+                                    envelope_pct=envelope_pct,
+                                    volume_ratio=round(volume_ratio, 2),
+                                    market_cap=stock.market_cap,
+                                    screening_score=stock.screening_score,
+                                ),
+                            )
+                        )
+
+                        await asyncio.sleep(0.05)
+
+                    except ValueError as e:
+                        error_msg = f"{stock.symbol}: {str(e)}"
+                        logger.warning(f"[MA5 Scan] {error_msg}")
+                        worker_errors.append((idx, error_msg))
+                        if worker_session.in_transaction():
+                            await worker_session.rollback()
+                    except Exception as e:
+                        error_msg = f"{stock.symbol}: {str(e)}"
+                        logger.warning(f"[MA5 Scan] Error processing {error_msg}")
+                        worker_errors.append((idx, error_msg))
+                        if worker_session.in_transaction():
+                            await worker_session.rollback()
+                    finally:
+                        work_queue.task_done()
+
+            return worker_results, worker_errors, worker_cache_stats
+
+        workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
+        completed = await asyncio.gather(*workers, return_exceptions=True)
+
+        error_map: dict[int, str] = {}
+        for item in completed:
+            if isinstance(item, Exception):
+                errors.append(str(item))
+                continue
+            worker_results, worker_errors, worker_cache_stats = item
+            results.extend([result for _, result in worker_results])
+            for idx, error_msg in worker_errors:
+                error_map[idx] = error_msg
+            for key in cache_stats:
+                cache_stats[key] += worker_cache_stats.get(key, 0)
+
+        if error_map:
+            for idx in sorted(error_map):
+                errors.append(error_map[idx])
 
         # 3. 결과 정렬 (BREAKOUT > ABOVE > BELOW)
         state_order = {"BREAKOUT": 0, "ABOVE": 1, "BELOW": 2}
-        results.sort(key=lambda x: (state_order.get(x.ma5_state, 99), -x.gap_ratio))
+        results.sort(
+            key=lambda x: (state_order.get(x.ma5_state, 99), -x.gap_ratio, x.symbol)
+        )
 
         # 4. 통계 계산
         breakout_count = sum(1 for r in results if r.ma5_state == "BREAKOUT")
@@ -836,6 +1018,19 @@ class BuyStrategyService:
         logger.info(
             f"[MA5 Scan] Complete: {len(results)} results, "
             f"BREAKOUT: {breakout_count}, ABOVE: {above_count}, BELOW: {below_count}, Errors: {len(errors)}"
+        )
+        logger.info(
+            f"[MA5 Scan] Cache stats: hits={cache_stats['cache_hits']}, "
+            f"incremental={cache_stats['incremental_updates']}, "
+            f"full={cache_stats['full_loads']}, "
+            f"api_calls={cache_stats['total_api_calls']}, "
+            f"new_candles={cache_stats['new_candles']}"
+        )
+        scan_duration = loop.time() - scan_started_at
+        logger.info(
+            f"[MA5 Scan] Timing: {scan_duration:.2f}s total, "
+            f"{scan_duration / max(len(stocks), 1):.2f}s/stock, "
+            f"concurrency={concurrency}"
         )
 
         return MA5BreakoutScanListDTO(
@@ -956,7 +1151,7 @@ class BuyStrategyService:
 
                 volume_ratio = volume / volume_ma20 if volume_ma20 > 0 else 1.0
 
-                if use_volume_filter and is_breakout and volume_ratio < 1.0:
+                if use_volume_filter and is_breakout and volume_ratio < MA5_VOLUME_RATIO_THRESHOLD:
                     is_breakout = False
 
                 if is_breakout:

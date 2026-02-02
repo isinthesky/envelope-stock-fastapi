@@ -38,7 +38,7 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
     async def get_eligible_stocks(
         self,
         market: MarketType | None = None,
-        limit: int = 250,
+        limit: int = 500,
         include_etf: bool = False,
         session: AsyncSession | None = None,
     ) -> Sequence[StockUniverseModel]:
@@ -94,6 +94,90 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
 
         result = await db.execute(stmt)
         return result.scalars().all()
+
+    async def get_scan_stocks(
+        self,
+        market: MarketType | None = None,
+        limit: int = 500,
+        include_etf: bool = False,
+        session: AsyncSession | None = None,
+    ) -> Sequence[StockUniverseModel]:
+        """스캔 대상 종목 조회 (스크리닝 조건 없이)
+
+        - is_active=True
+        - is_tradable=True
+        - is_excluded=False
+
+        Args:
+            market: 시장 필터 (KOSPI/KOSDAQ/ETF)
+            limit: 최대 조회 개수
+            include_etf: ETF 포함 (market=None일 때만 적용)
+            session: DB 세션 (없으면 생성자 세션 사용)
+        """
+        from sqlalchemy import or_
+
+        db = self._get_session(session)
+
+        base_condition = (
+            (self.model.is_active == True)
+            & (self.model.is_tradable == True)
+            & (self.model.is_excluded == False)
+        )
+
+        # ETF 조건
+        etf_condition = base_condition & (self.model.market == MarketType.ETF.value)
+
+        if market:
+            stmt = select(self.model).where(
+                base_condition,
+                self.model.market == market.value,
+            )
+        elif include_etf:
+            stmt = select(self.model).where(or_(base_condition, etf_condition))
+        else:
+            stmt = select(self.model).where(
+                base_condition,
+                self.model.market != MarketType.ETF.value,
+            )
+
+        stmt = stmt.order_by(
+            self.model.market_cap.desc().nullslast(),
+            self.model.screening_score.desc().nullslast(),
+        ).limit(limit)
+
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
+    async def get_active_stocks(
+        self,
+        limit: int = 500,
+        session: AsyncSession | None = None,
+    ) -> Sequence[StockUniverseModel]:
+        """활성 종목 목록 조회 (유니버스 갱신용)
+
+        - is_active=True
+        - is_excluded=False
+
+        정렬 우선순위:
+        - market_cap desc
+        - screening_score desc
+        """
+        db = self._get_session(session)
+        stmt = (
+            select(self.model)
+            .where(
+                self.model.is_active == True,
+                self.model.is_excluded == False,
+            )
+            .order_by(
+                self.model.market_cap.desc().nullslast(),
+                self.model.screening_score.desc().nullslast(),
+            )
+            .limit(limit)
+        )
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
 
     async def get_by_market_cap_range(
         self,

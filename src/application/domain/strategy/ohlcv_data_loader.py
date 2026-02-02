@@ -10,8 +10,11 @@ DB 캐시 우선 조회 + 증분 업데이트 전략:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
+from zoneinfo import ZoneInfo
+
+from src.application.domain.ohlcv.cache_manager import KOREA_HOLIDAYS
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +29,19 @@ logger = logging.getLogger(__name__)
 
 # KIS API 단일 호출 최대 조회 기간 (일)
 MAX_API_DAYS_PER_CALL = 100
+
+# 한국 시간대 (일봉/거래일 기준)
+KST = ZoneInfo("Asia/Seoul")
+MARKET_OPEN_TIME_KST = time(9, 0)
+
+
+def is_trading_day_kst(target: date) -> bool:
+    """한국 거래일 여부 (주말 + 간단 공휴일 캘린더 기반)"""
+    if target.weekday() >= 5:
+        return False
+
+    # cache_manager의 휴일 세트는 datetime(YYYY, M, D) 형태
+    return datetime(target.year, target.month, target.day) not in KOREA_HOLIDAYS
 
 
 def normalize_timestamp(dt: datetime) -> datetime:
@@ -169,6 +185,8 @@ class OHLCVDataLoader:
         min_candles: int = 165,
         cache_freshness_days: int = 1,
         force_refresh: bool = False,
+        include_today_candle: bool = False,
+        today_refresh_ttl_seconds: int = 300,
     ) -> LoadResult:
         """
         OHLCV 데이터를 DataFrame으로 로딩 (통계 포함)
@@ -180,6 +198,10 @@ class OHLCVDataLoader:
             min_candles: 최소 필요 캔들 수
             cache_freshness_days: 캐시 유효 기간 (일), 기본 1일
             force_refresh: True면 캐시 신선도와 관계없이 증분 업데이트 시도
+            include_today_candle: True면 장중(한국 시간 기준) 당일 일봉을 추가로 반영 시도
+                - 전체 기간 재호출이 아닌, 당일(YYYYMMDD)만 1회 호출하여 DB 캐시에 upsert
+            today_refresh_ttl_seconds: include_today_candle=True일 때 재조회 최소 간격(초)
+                - Redis 키로 throttle (기본 300초)
 
         Returns:
             LoadResult: DataFrame과 로딩 통계
@@ -267,6 +289,21 @@ class OHLCVDataLoader:
         if df is None or df.empty:
             raise ValueError(f"No candle data available for {symbol}")
 
+        # (옵션) 장중 당일 일봉 추가 반영
+        # - 전체 기간 재호출이 아니라, 당일(YYYYMMDD)만 1회 호출해서 DB 캐시에 upsert
+        if include_today_candle and interval == "1d" and self.session is not None:
+            df, today_api_calls, today_new_candles = await self._maybe_update_today_daily_candle(
+                symbol=symbol,
+                df=df,
+                today_refresh_ttl_seconds=today_refresh_ttl_seconds,
+            )
+
+            if today_api_calls:
+                api_calls += today_api_calls
+                new_candles += today_new_candles
+                if load_type == LoadType.CACHE_HIT:
+                    load_type = LoadType.INCREMENTAL
+
         # 중복 제거 및 정렬
         df = (
             df.drop_duplicates(subset=["timestamp"])
@@ -336,10 +373,12 @@ class OHLCVDataLoader:
                 latest = latest.replace(tzinfo=timezone.utc)
 
             # 캐시된 데이터 가져오기
-            cached_df = await ohlcv_repo.get_candles_to_dataframe(
+            # I/O 절감: 전체 range를 로드하지 않고 최신 구간만 로드
+            fetch_limit = min(count, max(min_candles + 50, min_candles))
+            cached_df = await ohlcv_repo.get_recent_candles_to_dataframe(
                 symbol=symbol,
-                start_date=start_date,
                 end_date=end_date,
+                limit=fetch_limit,
                 interval=interval,
             )
 
@@ -547,6 +586,103 @@ class OHLCVDataLoader:
 
         return df, api_calls
 
+    async def _maybe_update_today_daily_candle(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        today_refresh_ttl_seconds: int,
+    ) -> tuple[pd.DataFrame, int, int]:
+        """장중(한국시간 기준) 당일 일봉을 1회 호출로 DB 캐시에 반영 + DF에 merge
+
+        - 전체 기간 재호출이 아니라 당일(YYYYMMDD)만 요청
+        - Redis TTL로 심볼 단위 throttle
+
+        Returns:
+            tuple[pd.DataFrame, int, int]: (updated_df, api_calls, new_candles)
+        """
+        try:
+            kst_now = datetime.now(KST)
+            today = kst_now.date()
+
+            # 거래일/장 시작 전이면 스킵
+            if not is_trading_day_kst(today):
+                return df, 0, 0
+            if kst_now.time() < MARKET_OPEN_TIME_KST:
+                return df, 0, 0
+
+            redis = await get_redis_client()
+            throttle_key = f"ohlcv:today-daily:{symbol}:{today.strftime('%Y%m%d')}"
+            if await redis.get(throttle_key, deserialize=False) is not None:
+                return df, 0, 0
+
+            # 먼저 throttle 설정 (동시 실행 중복 호출 방지)
+            await redis.set(throttle_key, "1", ttl=today_refresh_ttl_seconds, serialize=False)
+
+            market_data_service = await self._get_market_data_service()
+            today_dt = datetime.combine(today, time.min)
+
+            chart = await market_data_service.get_chart_data(
+                symbol=symbol,
+                interval="1d",
+                start_date=today_dt,
+                end_date=today_dt,
+                use_cache=False,
+            )
+
+            if not chart.candles:
+                return df, 1, 0
+
+            # 당일 캔들이 있으면 그걸 우선
+            candle = None
+            for c in chart.candles:
+                try:
+                    if c.timestamp.date() == today:
+                        candle = c
+                        break
+                except Exception:
+                    continue
+            if candle is None:
+                candle = max(chart.candles, key=lambda x: x.timestamp)
+
+            ts = normalize_timestamp(candle.timestamp)
+
+            # DF 정규화
+            df = normalize_df_timestamps(df)
+
+            existed = False
+            if not df.empty and "timestamp" in df.columns:
+                existed = bool((df["timestamp"] == ts).any())
+
+            today_df = pd.DataFrame(
+                [
+                    {
+                        "timestamp": ts,
+                        "open": float(candle.open),
+                        "high": float(candle.high),
+                        "low": float(candle.low),
+                        "close": float(candle.close),
+                        "volume": int(candle.volume),
+                    }
+                ]
+            )
+            today_df = normalize_df_timestamps(today_df)
+
+            merged = pd.concat([df, today_df], ignore_index=True)
+            merged = (
+                merged.drop_duplicates(subset=["timestamp"])
+                .sort_values("timestamp")
+                .reset_index(drop=True)
+            )
+
+            # DB 캐싱 (upsert)
+            await self._cache_to_db(symbol, [candle], "1d")
+
+            return merged, 1, (0 if existed else 1)
+
+        except Exception as e:
+            logger.debug(f"[OHLCVLoader] Today candle update skipped for {symbol}: {e}")
+            return df, 0, 0
+
     async def _cache_to_db(
         self,
         symbol: str,
@@ -559,15 +695,18 @@ class OHLCVDataLoader:
 
         ohlcv_repo = OHLCVRepository(self.session)
 
+        # NOTE:
+        # - 캐시 저장은 실패해도 스캔 자체는 계속되어야 한다.
+        # - commit/rollback은 여기서 직접 호출하지 않고 트랜잭션 컨텍스트에 맡긴다.
+        # - SAVEPOINT(begin_nested)로 격리해서, 특정 종목 캐시 실패가 세션 전체를 망치지 않게 한다.
         try:
-            await ohlcv_repo.save_candles_bulk(
-                symbol=symbol,
-                candles=candles,
-                interval=interval,
-                source="kis",
-            )
-            await self.session.commit()
+            async with self.session.begin_nested():
+                await ohlcv_repo.save_candles_bulk(
+                    symbol=symbol,
+                    candles=candles,
+                    interval=interval,
+                    source="kis",
+                )
             logger.debug(f"[OHLCVLoader] {symbol}: Cached {len(candles)} candles to DB")
         except Exception as e:
-            await self.session.rollback()
             logger.warning(f"[OHLCVLoader] Failed to cache {symbol} candles: {e}")

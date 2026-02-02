@@ -84,35 +84,44 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
         """
         다중 캔들 데이터 일괄 저장 (Bulk Upsert)
 
-        기존 데이터는 삭제 후 재삽입 방식으로 처리 (성능 최적화)
-
-        Args:
-            symbol: 종목코드
-            candles: 캔들 데이터 리스트
-            interval: 시간 간격
-            source: 데이터 출처
+        목표: I/O 최소화.
+        - Postgres: ON CONFLICT(symbol, timestamp, interval) DO UPDATE 로 업서트
+          (기존 delete+insert 제거 → 대량 DELETE/INSERT로 인한 write amplification 방지)
+        - 그 외 DB: 지원하지 않음
 
         Returns:
-            int: 저장된 캔들 수
+            int: 처리된 캔들 수
         """
         if not candles:
             return 0
 
-        # 날짜 범위 추출
-        timestamps = [candle.timestamp for candle in candles]
-        start_date = min(timestamps)
-        end_date = max(timestamps)
+        # Postgres UPSERT only
+        bind = getattr(self.session, "bind", None)
+        if bind is None:
+            try:
+                bind = self.session.get_bind()
+            except Exception:
+                bind = None
+        if bind is None:
+            sync_session = getattr(self.session, "sync_session", None)
+            bind = getattr(sync_session, "bind", None) if sync_session else None
 
-        # 기존 데이터 삭제 (충돌 방지)
-        await self.delete_by_date_range(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval,
-        )
+        dialect = getattr(bind, "dialect", None)
+        if dialect is None and hasattr(bind, "sync_engine"):
+            dialect = getattr(bind.sync_engine, "dialect", None)
 
-        # 새 데이터 삽입
-        candle_dicts = [
+        dialect_name = getattr(dialect, "name", None)
+        if dialect_name != "postgresql":
+            detected = dialect_name or "unknown"
+            raise NotImplementedError(
+                "save_candles_bulk supports PostgreSQL only. "
+                f"Detected dialect: {detected}. "
+                "Configure AsyncSessionLocal with a PostgreSQL engine."
+            )
+
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        rows = [
             {
                 "symbol": symbol,
                 "timestamp": candle.timestamp,
@@ -127,7 +136,23 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
             for candle in candles
         ]
 
-        await self.create_many(candle_dicts)
+        chunk_size = 1000
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i : i + chunk_size]
+            stmt = pg_insert(self.model).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_ohlcv_symbol_timestamp_interval",
+                set_={
+                    "open": stmt.excluded.open,
+                    "high": stmt.excluded.high,
+                    "low": stmt.excluded.low,
+                    "close": stmt.excluded.close,
+                    "volume": stmt.excluded.volume,
+                    "source": stmt.excluded.source,
+                },
+            )
+            await self.session.execute(stmt)
+
         return len(candles)
 
     # ==================== Candle 데이터 조회 ====================
@@ -216,29 +241,107 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
         Returns:
             pd.DataFrame: OHLCV 데이터프레임
         """
-        candles = await self.get_candles_by_date_range(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval,
+        # I/O 절감: ORM 모델 전체 로드 대신 필요한 컬럼만 SELECT
+        stmt = (
+            select(
+                self.model.timestamp,
+                self.model.open,
+                self.model.high,
+                self.model.low,
+                self.model.close,
+                self.model.volume,
+            )
+            .where(
+                and_(
+                    self.model.symbol == symbol,
+                    self.model.interval == interval,
+                    self.model.timestamp >= start_date,
+                    self.model.timestamp <= end_date,
+                )
+            )
+            .order_by(self.model.timestamp)
         )
 
-        if not candles:
+        result = await self.session.execute(stmt)
+        rows = result.all()
+        if not rows:
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
-        data = [
-            {
-                "timestamp": candle.timestamp,
-                "open": float(candle.open),
-                "high": float(candle.high),
-                "low": float(candle.low),
-                "close": float(candle.close),
-                "volume": candle.volume,
-            }
-            for candle in candles
-        ]
+        df = pd.DataFrame(
+            [
+                {
+                    "timestamp": r[0],
+                    "open": float(r[1]),
+                    "high": float(r[2]),
+                    "low": float(r[3]),
+                    "close": float(r[4]),
+                    "volume": int(r[5]),
+                }
+                for r in rows
+            ]
+        )
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
 
-        df = pd.DataFrame(data)
+    async def get_recent_candles_to_dataframe(
+        self,
+        symbol: str,
+        end_date: datetime,
+        limit: int,
+        interval: str = "1d",
+    ) -> pd.DataFrame:
+        """
+        최신 N개 캔들 데이터를 DataFrame으로 변환 (I/O 절감용)
+
+        스캔/지표 계산은 과거 전체 기간이 아니라 "최신 구간"만 필요하므로,
+        날짜 range 전체를 읽지 않고 LIMIT 기반으로 필요한 만큼만 가져옵니다.
+
+        Returns:
+            pd.DataFrame: OHLCV 데이터프레임 (timestamp ASC 정렬)
+        """
+        if limit <= 0:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+        stmt = (
+            select(
+                self.model.timestamp,
+                self.model.open,
+                self.model.high,
+                self.model.low,
+                self.model.close,
+                self.model.volume,
+            )
+            .where(
+                and_(
+                    self.model.symbol == symbol,
+                    self.model.interval == interval,
+                    self.model.timestamp <= end_date,
+                )
+            )
+            .order_by(self.model.timestamp.desc())
+            .limit(limit)
+        )
+
+        result = await self.session.execute(stmt)
+        rows = result.all()
+        if not rows:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+        # DESC로 가져왔으니 다시 ASC로
+        rows = list(reversed(rows))
+        df = pd.DataFrame(
+            [
+                {
+                    "timestamp": r[0],
+                    "open": float(r[1]),
+                    "high": float(r[2]),
+                    "low": float(r[3]),
+                    "close": float(r[4]),
+                    "volume": int(r[5]),
+                }
+                for r in rows
+            ]
+        )
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         return df
 
