@@ -3,7 +3,7 @@
 OHLCV Repository - 캔들 데이터 캐시 저장소
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Sequence
 
 import pandas as pd
@@ -641,7 +641,7 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
         """
         from datetime import timedelta
 
-        threshold_date = datetime.now() - timedelta(days=freshness_days)
+        threshold_date = datetime.now(timezone.utc) - timedelta(days=freshness_days)
 
         # 종목별 최신 날짜를 서브쿼리로 조회
         subquery = (

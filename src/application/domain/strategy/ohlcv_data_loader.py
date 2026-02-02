@@ -224,9 +224,14 @@ class OHLCVDataLoader:
         Returns:
             LoadResult: DataFrame과 로딩 통계
         """
-        # DB 타임스탬프가 timezone-aware이므로 UTC 사용
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date - timedelta(days=days)
+        # 일봉은 KST 날짜 기준으로 조회되므로 KST 기준으로 범위를 잡는다.
+        if interval == "1d":
+            end_date = datetime.now(KST)
+            start_date = end_date - timedelta(days=days)
+        else:
+            # DB 타임스탬프가 timezone-aware이므로 UTC 사용
+            end_date = datetime.now(timezone.utc)
+            start_date = end_date - timedelta(days=days)
 
         # 1. 캐시 상태 확인
         cache_result = await self._check_cache_status(
