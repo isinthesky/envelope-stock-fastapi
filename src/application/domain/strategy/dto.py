@@ -8,7 +8,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Annotated, Literal, Union
 
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from src.application.common.dto import BaseDTO
 
@@ -480,6 +480,45 @@ class StockUniverseListDTO(BaseDTO):
     stocks: list[StockUniverseItemDTO] = Field(description="종목 목록")
     total_count: int = Field(description="전체 종목 수")
     eligible_count: int = Field(description="스크리닝 통과 종목 수")
+
+
+class UniverseRefreshResultDTO(BaseDTO):
+    """유니버스 갱신 결과 DTO (운영 안정성/관측성 목적)
+
+    NOTE:
+    - refresh_universe는 대량 작업이라 부분 실패가 발생할 수 있음
+    - 응답 스키마를 DTO로 고정하되, 하위 호환을 위해 extra 키는 허용
+    """
+
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+        use_enum_values=True,
+        extra="allow",
+    )
+
+    success: bool = Field(default=True, description="갱신 작업 성공 여부")
+    message: str | None = Field(default=None, description="추가 메시지")
+    timed_out: bool = Field(default=False, description="전체 타임아웃 발생 여부")
+
+    target: int = Field(default=0, description="갱신 대상 종목 수")
+    updated: int = Field(default=0, description="기본 필드 갱신 성공 수")
+    screened: int = Field(default=0, description="스크리닝 통과 수")
+
+    seeded: int = Field(default=0, description="seed로 추가된 종목 수")
+    universe_size_before: int = Field(default=0, description="갱신 전 유니버스 크기")
+    universe_size_after: int = Field(default=0, description="갱신 후 유니버스 크기")
+
+    concurrency: int = Field(default=0, description="동시 처리 수")
+
+    # 에러/경고 집계
+    error_count: int = Field(default=0, description="오류 개수")
+    errors_truncated: bool = Field(default=False, description="errors 리스트 잘림 여부")
+    errors: list[str] = Field(default_factory=list, description="오류 메시지(일부) 목록")
+
+    warning_counts: dict[str, int] = Field(default_factory=dict, description="카테고리별 경고/실패 카운트")
+
+    refreshed_at: str = Field(default="", description="갱신 완료 시각(isoformat)")
 
 
 # ==================== Golden Cross Scan DTOs ====================

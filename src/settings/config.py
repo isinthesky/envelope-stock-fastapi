@@ -108,6 +108,18 @@ class Settings(BaseSettings):
     scan_concurrency_limit: int = Field(
         default=5, ge=1, description="스캔 동시 처리 수 (골든크로스/MA5)"
     )
+
+    # ==================== Universe Refresh (Ops Safety) ====================
+    universe_refresh_timeout_seconds: int = Field(
+        default=300, ge=30, description="유니버스 갱신 전체 타임아웃 (초)"
+    )
+    universe_refresh_warn_budget: int = Field(
+        default=50, ge=0, description="유니버스 갱신 경고 로그 최대 출력 수 (카테고리별)"
+    )
+    universe_refresh_error_list_limit: int = Field(
+        default=50, ge=0, description="유니버스 갱신 응답 errors 리스트 최대 길이"
+    )
+
     kis_api_backoff_sequence: list[int] = Field(
         default_factory=lambda: [5, 10, 20],
         description="429/5xx 연속 발생 시 대기 시간 시퀀스 (초)",

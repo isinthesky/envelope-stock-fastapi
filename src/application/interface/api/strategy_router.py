@@ -36,6 +36,7 @@ from src.application.domain.strategy.dto import (
     SignalListDTO,
     SignalStatisticsDTO,
     StockUniverseListDTO,
+    UniverseRefreshResultDTO,
     StrategyCreateRequestDTO,
     StrategyDetailResponseDTO,
     StrategyExecuteRequestDTO,
@@ -107,7 +108,7 @@ async def get_universe(
 
 @router.post(
     "/universe/refresh",
-    response_model=ResponseDTO[dict],
+    response_model=ResponseDTO[UniverseRefreshResultDTO],
     status_code=status.HTTP_200_OK,
     summary="유니버스 갱신",
     description="종목 유니버스 데이터 갱신",
@@ -115,13 +116,14 @@ async def get_universe(
 async def refresh_universe(
     service: StrategyServiceDep,
     market_data_service: MarketDataServiceDep,
-) -> ResponseDTO[dict]:
+) -> ResponseDTO[UniverseRefreshResultDTO]:
     """유니버스 갱신 - @transaction이 세션을 관리"""
     if not market_data_service.has_valid_credentials():
         raise ServiceUnavailableError("KIS API credentials not configured")
 
     result = await service.refresh_universe()
-    return ResponseDTO.success_response(result, "Universe refresh completed")
+    dto = UniverseRefreshResultDTO(**result)
+    return ResponseDTO.success_response(dto, "Universe refresh completed")
 
 
 @router.get(

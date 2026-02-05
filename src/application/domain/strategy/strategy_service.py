@@ -707,7 +707,24 @@ class StrategyService:
         kis_timeout = float(getattr(settings, "kis_api_timeout", 10))
         naver_timeout = 10.0
         ohlcv_timeout = max(20.0, kis_timeout * 3)
-        MAX_ERRORS = 50
+
+        MAX_ERRORS = int(getattr(settings, "universe_refresh_error_list_limit", 50))
+        warn_budget = int(getattr(settings, "universe_refresh_warn_budget", 50))
+        overall_timeout = float(getattr(settings, "universe_refresh_timeout_seconds", 300))
+
+        warning_counts = {"price": 0, "naver": 0, "ohlcv": 0}
+        warning_suppressed = {"price": False, "naver": False, "ohlcv": False}
+
+        def warn(category: str, msg: str) -> None:
+            warning_counts[category] = warning_counts.get(category, 0) + 1
+            if warn_budget <= 0:
+                return
+            if warning_counts[category] <= warn_budget:
+                logger.warning(msg)
+                return
+            if not warning_suppressed.get(category, False):
+                warning_suppressed[category] = True
+                logger.warning(f"[universe.refresh] {category} warnings suppressed (>{warn_budget})")
 
         concurrency = max(1, min(settings.scan_concurrency_limit, 20))
         logger.info(f"[universe.refresh] start: target={len(target_stocks)} seeded={seeded} concurrency={concurrency}")
@@ -746,7 +763,7 @@ class StrategyService:
                                 timeout=kis_timeout,
                             )
                         except Exception as e:
-                            logger.warning(f"[universe.refresh] price fetch failed: {symbol}: {e}")
+                            warn("price", f"[universe.refresh] price fetch failed: {symbol}: {e}")
 
                         # 2) 시총/종목명 (네이버) — 실패해도 진행
                         fin = None
@@ -756,7 +773,7 @@ class StrategyService:
                                 timeout=naver_timeout,
                             )
                         except Exception as e:
-                            logger.warning(f"[universe.refresh] naver fetch failed: {symbol}: {e}")
+                            warn("naver", f"[universe.refresh] naver fetch failed: {symbol}: {e}")
 
                         # 3) OHLCV 캐시 최신화 + 20일 평균 거래량 계산
                         load = None
@@ -773,7 +790,7 @@ class StrategyService:
                                 timeout=ohlcv_timeout,
                             )
                         except Exception as e:
-                            logger.warning(f"[universe.refresh] ohlcv load failed: {symbol}: {e}")
+                            warn("ohlcv", f"[universe.refresh] ohlcv load failed: {symbol}: {e}")
                         df = load.df if load is not None else None
 
                         avg_vol_20d = None
@@ -800,6 +817,10 @@ class StrategyService:
                         # commit (OHLCV 캐시 + stock_universe 업데이트 반영)
                         await worker_session.commit()
 
+                    except asyncio.CancelledError:
+                        await worker_session.rollback()
+                        raise
+
                     except Exception as e:
                         await worker_session.rollback()
                         error_count += 1
@@ -812,7 +833,20 @@ class StrategyService:
             return updated, screened, error_count, errors
 
         workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
-        results = await asyncio.gather(*workers, return_exceptions=True)
+
+        timed_out = False
+        message = None
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*workers, return_exceptions=True),
+                timeout=overall_timeout,
+            )
+        except asyncio.TimeoutError:
+            timed_out = True
+            message = f"Global timeout after {overall_timeout}s"
+            for t in workers:
+                t.cancel()
+            results = await asyncio.gather(*workers, return_exceptions=True)
 
         total_updated = 0
         total_screened = 0
@@ -834,11 +868,13 @@ class StrategyService:
 
         elapsed = time.monotonic() - started_at
         logger.info(
-            f"[universe.refresh] done: target={len(target_stocks)} updated={total_updated} screened={total_screened} errors={total_error_count} elapsed={elapsed:.1f}s"
+            f"[universe.refresh] done: target={len(target_stocks)} updated={total_updated} screened={total_screened} errors={total_error_count} warnings={warning_counts} timed_out={timed_out} elapsed={elapsed:.1f}s"
         )
 
         return {
-            "success": True,
+            "success": (not timed_out),
+            "message": message,
+            "timed_out": timed_out,
             "target": len(target_stocks),
             "updated": total_updated,
             "screened": total_screened,
@@ -849,6 +885,7 @@ class StrategyService:
             "error_count": total_error_count,
             "errors_truncated": total_error_count > len(errors),
             "errors": errors,
+            "warning_counts": warning_counts,
             "refreshed_at": datetime.now().isoformat(),
         }
 
