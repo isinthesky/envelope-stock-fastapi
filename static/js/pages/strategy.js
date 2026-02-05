@@ -1161,7 +1161,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // 전략 목록 로드(선택)
-  if (typeof loadStrategies === function) {
+  if (typeof loadStrategies === "function") {
     loadStrategies();
   }
 });
@@ -1375,9 +1375,16 @@ async function deleteStrategy(id) {
 }
 
 // wrappers for list action buttons
-const startStrategyById = (id) => { document.getElementById('control_strategy_id').value = id; startStrategy(); };
-const pauseStrategyById = (id) => { document.getElementById('control_strategy_id').value = id; pauseStrategy(); };
-const stopStrategyById = (id) => { document.getElementById('control_strategy_id').value = id; stopStrategy(); };
+const setControlStrategyId = (id) => {
+  const el = document.getElementById("control_strategy_id");
+  if (!el) return false;
+  el.value = String(id);
+  return true;
+};
+
+const startStrategyById = (id) => { if (setControlStrategyId(id)) startStrategy(); };
+const pauseStrategyById = (id) => { if (setControlStrategyId(id)) pauseStrategy(); };
+const stopStrategyById = (id) => { if (setControlStrategyId(id)) stopStrategy(); };
 
 window.loadStrategies = loadStrategies;
 window.selectStrategy = selectStrategy;
