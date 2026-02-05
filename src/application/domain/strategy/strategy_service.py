@@ -762,6 +762,8 @@ class StrategyService:
                                 market_data_service.get_current_price(symbol, use_cache=True),
                                 timeout=kis_timeout,
                             )
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as e:
                             warn("price", f"[universe.refresh] price fetch failed: {symbol}: {e}")
 
@@ -772,6 +774,8 @@ class StrategyService:
                                 naver_client.get_stock_financial_data(symbol),
                                 timeout=naver_timeout,
                             )
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as e:
                             warn("naver", f"[universe.refresh] naver fetch failed: {symbol}: {e}")
 
@@ -789,6 +793,8 @@ class StrategyService:
                                 ),
                                 timeout=ohlcv_timeout,
                             )
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as e:
                             warn("ohlcv", f"[universe.refresh] ohlcv load failed: {symbol}: {e}")
                         df = load.df if load is not None else None

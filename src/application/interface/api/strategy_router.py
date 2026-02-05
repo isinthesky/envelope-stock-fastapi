@@ -123,7 +123,10 @@ async def refresh_universe(
 
     result = await service.refresh_universe()
     dto = UniverseRefreshResultDTO(**result)
-    return ResponseDTO.success_response(dto, "Universe refresh completed")
+    # ResponseDTO.success는 작업 결과(dto.success)와 일치시키는 것이 운영/클라이언트 측에서 혼동이 적음
+    message = "Universe refresh completed" if dto.success else (dto.message or "Universe refresh failed")
+    error = None if dto.success else {"timed_out": dto.timed_out, "message": dto.message}
+    return ResponseDTO(success=dto.success, message=message, data=dto, error=error)
 
 
 @router.get(
