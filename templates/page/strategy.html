@@ -118,6 +118,93 @@
 
   <pre id="strategy_detail_output" style="margin-top: 12px;">(선택한 전략 상세 JSON이 여기에 표시됩니다)</pre>
 
+  <h2>전략 운영</h2>
+  <div class="row" style="align-items: center; gap: 8px;">
+    <div style="font-size: 12px; color: #64748b;">공통 선택 ID</div>
+    <div id="selected_strategy_label" style="font-size: 12px; color: #0f172a; background: #e2e8f0; padding: 4px 8px; border-radius: 999px;">-</div>
+    <button onclick="loadSelectedStrategyDetail()" class="secondary">상세 새로고침</button>
+  </div>
+
+  <h3 style="margin-top: 12px;">전략 PATCH</h3>
+  <div class="row" style="margin-top: 8px; flex-wrap: wrap;">
+    <label style="font-size: 12px;">이름</label>
+    <input id="patch_strategy_name" type="text" placeholder="strategy name" style="width: 160px;" />
+
+    <label style="font-size: 12px; margin-left: 8px;">상태</label>
+    <select id="patch_strategy_status" style="width: 140px;">
+      <option value="">(변경 안 함)</option>
+      <option value="active">active</option>
+      <option value="paused">paused</option>
+      <option value="stopped">stopped</option>
+      <option value="completed">completed</option>
+    </select>
+
+    <label style="font-size: 12px; margin-left: 8px;">설명</label>
+    <input id="patch_strategy_description" type="text" placeholder="(선택)" style="width: 260px;" />
+
+    <label style="font-size: 12px; margin-left: 8px;">심볼</label>
+    <input id="patch_strategy_symbols" type="text" placeholder="005930,000660" style="width: 240px;" />
+
+    <button onclick="patchStrategy()" style="background:#0ea5e9;color:white;">PATCH</button>
+    <button onclick="resetStrategyPatchForm()" class="secondary">Reset</button>
+  </div>
+  <pre id="strategy_patch_output" style="margin-top: 8px;">(PATCH 결과가 여기에 표시됩니다)</pre>
+
+  <h3 style="margin-top: 12px;">Config (GET/PATCH)</h3>
+  <div class="row" style="margin-top: 8px;">
+    <button onclick="getStrategyConfig()" class="secondary">GET Config</button>
+    <button onclick="patchStrategyConfig()" style="background:#0ea5e9;color:white;">PATCH Config</button>
+  </div>
+  <textarea id="strategy_config_textarea" rows="6" style="width: 100%; margin-top: 8px; font-family: monospace;" placeholder='{"example": "value"}'></textarea>
+  <pre id="strategy_config_output" style="margin-top: 8px;">(Config 조회 결과가 여기에 표시됩니다)</pre>
+
+  <h3 style="margin-top: 12px;">Symbol States</h3>
+  <div class="row" style="margin-top: 8px;">
+    <button onclick="loadSymbolStates()" class="secondary">Load Symbol States</button>
+  </div>
+  <table class="stock-table" style="margin-top: 8px;">
+    <thead>
+      <tr>
+        <th>심볼</th>
+        <th>상태</th>
+        <th>최근 종가</th>
+        <th>미실현 수익률</th>
+      </tr>
+    </thead>
+    <tbody id="symbol_states_table_body">
+      <tr><td colspan="4" class="placeholder-message" style="border: none;">전략을 선택하고 조회 버튼을 누르세요.</td></tr>
+    </tbody>
+  </table>
+  <pre id="symbol_states_output" style="margin-top: 8px;">(Symbol States JSON)</pre>
+
+  <h3 style="margin-top: 12px;">Signals + Statistics</h3>
+  <div class="row" style="margin-top: 8px; flex-wrap: wrap;">
+    <label style="font-size: 12px;">limit</label>
+    <input id="signals_limit" type="number" value="50" min="1" max="500" style="width: 80px;" />
+    <label style="font-size: 12px; margin-left: 8px;">offset</label>
+    <input id="signals_offset" type="number" value="0" min="0" style="width: 80px;" />
+    <button onclick="loadSignals()" style="background:#0ea5e9;color:white;">Load Signals</button>
+    <button onclick="loadSignalStatistics()" class="secondary">Load Statistics</button>
+  </div>
+  <table class="stock-table" style="margin-top: 8px;">
+    <thead>
+      <tr>
+        <th>시간</th>
+        <th>심볼</th>
+        <th>유형</th>
+        <th>상태</th>
+        <th>시그널가</th>
+        <th>목표/체결 수량</th>
+      </tr>
+    </thead>
+    <tbody id="signals_table_body">
+      <tr><td colspan="6" class="placeholder-message" style="border: none;">Signals 조회 결과가 여기에 표시됩니다.</td></tr>
+    </tbody>
+  </table>
+  <pre id="signals_output" style="margin-top: 8px;">(Signals JSON)</pre>
+
+  <pre id="signals_statistics_output" style="margin-top: 8px;">(Signals statistics JSON)</pre>
+
   <h2>전략 제어 (API)</h2>
   <div class="row">
     <label style="font-size: 12px;">Strategy ID</label>
@@ -450,4 +537,3 @@
 {% block extra_script_tags %}
 <script src=/static/js/pages/strategy.js></script>
 {% endblock %}
-

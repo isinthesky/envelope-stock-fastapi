@@ -642,8 +642,7 @@ const renderBuyHistoryTable = () => {
         <span class="active-toggle ${activeClass}" onclick="toggleBuyActive(${item.id}, event)" title="${item.is_active ? '활성 추적 중' : '추적 중지됨'}">${activeIcon}</span>
       </td>
       <td><strong>${item.symbol}</strong></td>
-      <td>${item.name || '-'}</td>
-      <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
+            <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
       <td class="indicator">${formatNumber(item.current_price)}</td>
       <td class="indicator ${maGapClass}">${Number(item.ma_gap_ratio).toFixed(2)}%</td>
       <td class="indicator">${Number(item.stoch_k).toFixed(1)}</td>
@@ -1164,6 +1163,14 @@ document.addEventListener('DOMContentLoaded', () => {
   if (typeof loadStrategies === "function") {
     loadStrategies();
   }
+
+  const controlInput = document.getElementById('control_strategy_id');
+  if (controlInput) {
+    controlInput.addEventListener('input', () => {
+      const id = parseInt(controlInput.value, 10);
+      updateSelectedStrategyLabel(!Number.isNaN(id) && id > 0 ? id : null);
+    });
+  }
 });
 
 
@@ -1174,6 +1181,22 @@ const getControlStrategyId = () => {
   const id = raw ? parseInt(raw, 10) : NaN;
   if (!id || Number.isNaN(id)) {
     alert('Strategy ID를 입력해줘');
+    return null;
+  }
+  return id;
+};
+
+const getSelectedStrategyId = (outputElId) => {
+  const raw = document.getElementById('control_strategy_id')?.value;
+  const id = raw ? parseInt(raw, 10) : NaN;
+  if (!id || Number.isNaN(id)) {
+    const msg = '먼저 Strategy ID를 선택하거나 입력해줘.';
+    if (outputElId) {
+      const el = document.getElementById(outputElId);
+      if (el) el.textContent = msg;
+    } else {
+      alert(msg);
+    }
     return null;
   }
   return id;
@@ -1191,8 +1214,8 @@ const callStrategyAction = async (action) => {
   setControlOutput(`${action} 실행 중...`);
   try {
     const res = await fetch(`/api/v1/strategies/${id}/${action}`, { method: 'POST' });
-    const data = await res.json();
-    setControlOutput(data);
+    const parsed = await readJsonSafely(res);
+    setControlOutput(parsed.data);
   } catch (e) {
     setControlOutput(`오류: ${e.message}`);
   }
@@ -1216,8 +1239,8 @@ const executeStrategy = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
-    setControlOutput(data);
+    const parsed = await readJsonSafely(res);
+    setControlOutput(parsed.data);
   } catch (e) {
     setControlOutput(`오류: ${e.message}`);
   }
@@ -1248,6 +1271,101 @@ function setStrategyDetailOutput(msg) {
   if (!el) return;
   el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
 }
+
+function setStrategyPatchOutput(msg) {
+  const el = document.getElementById('strategy_patch_output');
+  if (!el) return;
+  el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+}
+
+function setStrategyConfigOutput(msg) {
+  const el = document.getElementById('strategy_config_output');
+  if (!el) return;
+  el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+}
+
+function setSymbolStatesOutput(msg) {
+  const el = document.getElementById('symbol_states_output');
+  if (!el) return;
+  el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+}
+
+function setSignalsOutput(msg) {
+  const el = document.getElementById('signals_output');
+  if (!el) return;
+  el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+}
+
+function setSignalsStatisticsOutput(msg) {
+  const el = document.getElementById('signals_statistics_output');
+  if (!el) return;
+  el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+}
+
+const readJsonSafely = async (res) => {
+  try {
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, data: { ...data, status: res.status, success: data?.success ?? false } };
+    }
+    return { ok: true, data };
+  } catch (e) {
+    return {
+      ok: false,
+      data: { success: false, status: res.status, detail: 'JSON 파싱 실패' }
+    };
+  }
+};
+
+const getStrategyFromResponse = (payload) => {
+  if (!payload) return null;
+  if (payload.data?.strategy) return payload.data.strategy;
+  if (payload.data?.id) return payload.data;
+  if (payload.strategy) return payload.strategy;
+  if (payload.id) return payload;
+  return null;
+};
+
+const updateSelectedStrategyLabel = (id) => {
+  const el = document.getElementById('selected_strategy_label');
+  if (!el) return;
+  el.textContent = id ? `ID ${id}` : '-';
+};
+
+const fillStrategyPatchForm = (strategy) => {
+  if (!strategy) return;
+  const name = document.getElementById('patch_strategy_name');
+  const status = document.getElementById('patch_strategy_status');
+  const desc = document.getElementById('patch_strategy_description');
+  const symbols = document.getElementById('patch_strategy_symbols');
+
+  if (name) name.value = strategy.name || '';
+  if (status) status.value = strategy.status || '';
+  if (desc) desc.value = strategy.description || '';
+  if (symbols) {
+    const list = Array.isArray(strategy.symbols) ? strategy.symbols.join(',') : (strategy.symbols || '');
+    symbols.value = list;
+  }
+};
+
+const resetStrategyPatchForm = () => {
+  const ids = [
+    'patch_strategy_name',
+    'patch_strategy_status',
+    'patch_strategy_description',
+    'patch_strategy_symbols'
+  ];
+  ids.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.tagName === 'SELECT') {
+      el.value = '';
+    } else {
+      el.value = '';
+    }
+  });
+  setStrategyPatchOutput('(PATCH 결과가 여기에 표시됩니다)');
+};
 
 function renderStrategyList(strategies) {
   const body = document.getElementById('strategy_list_table_body');
@@ -1283,13 +1401,13 @@ async function loadStrategies() {
   setStrategyDetailOutput('전략 목록 로딩 중...');
   try {
     const res = await fetch('/api/v1/strategies');
-    const data = await res.json();
-    if (data.success && data.data) {
-      renderStrategyList(data.data.strategies || []);
-      setStrategyDetailOutput(data);
-    } else {
-      setStrategyDetailOutput(data);
+    const parsed = await readJsonSafely(res);
+    if (parsed.ok && parsed.data?.success && parsed.data?.data) {
+      renderStrategyList(parsed.data.data.strategies || []);
+      return;
     }
+    // 오류일 때만 상세 출력 영역에 표시(목록 새로고침이 상세 JSON을 덮어쓰지 않도록)
+    setStrategyDetailOutput(parsed.data);
   } catch (e) {
     setStrategyDetailOutput(`오류: ${e.message}`);
   }
@@ -1298,12 +1416,19 @@ async function loadStrategies() {
 async function selectStrategy(id) {
   const input = document.getElementById('control_strategy_id');
   if (input) input.value = String(id);
+  updateSelectedStrategyLabel(id);
 
   setStrategyDetailOutput(`전략 ${id} 상세 로딩 중...`);
   try {
     const res = await fetch(`/api/v1/strategies/${id}`);
-    const data = await res.json();
-    setStrategyDetailOutput(data);
+    const parsed = await readJsonSafely(res);
+    setStrategyDetailOutput(parsed.data);
+    if (parsed.ok) {
+      const strategy = getStrategyFromResponse(parsed.data);
+      if (strategy) {
+        fillStrategyPatchForm(strategy);
+      }
+    }
   } catch (e) {
     setStrategyDetailOutput(`오류: ${e.message}`);
   }
@@ -1344,12 +1469,12 @@ async function createStrategy() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
-    setStrategyDetailOutput(data);
-    if (data.success) {
+    const parsed = await readJsonSafely(res);
+    setStrategyDetailOutput(parsed.data);
+    if (parsed.ok && parsed.data?.success) {
       await loadStrategies();
-      if (data.data?.id) {
-        await selectStrategy(data.data.id);
+      if (parsed.data?.data?.id) {
+        await selectStrategy(parsed.data.data.id);
       }
     }
   } catch (e) {
@@ -1365,8 +1490,8 @@ async function deleteStrategy(id) {
     if (res.status === 204) {
       setStrategyDetailOutput({ success: true, detail: 'deleted (204)' });
     } else {
-      const data = await res.json();
-      setStrategyDetailOutput(data);
+      const parsed = await readJsonSafely(res);
+      setStrategyDetailOutput(parsed.data);
     }
     await loadStrategies();
   } catch (e) {
@@ -1374,11 +1499,230 @@ async function deleteStrategy(id) {
   }
 }
 
+// ==================== Strategy Patch / Config / Signals ====================
+
+const loadSelectedStrategyDetail = async () => {
+  const id = getSelectedStrategyId('strategy_detail_output');
+  if (!id) return;
+  await selectStrategy(id);
+};
+
+const patchStrategy = async () => {
+  const id = getSelectedStrategyId('strategy_patch_output');
+  if (!id) return;
+
+  const name = document.getElementById('patch_strategy_name')?.value?.trim();
+  const status = document.getElementById('patch_strategy_status')?.value;
+  const description = document.getElementById('patch_strategy_description')?.value?.trim();
+  const symbolsRaw = document.getElementById('patch_strategy_symbols')?.value;
+  const symbols = parseSymbols(symbolsRaw);
+
+  const payload = {};
+  if (name) payload.name = name;
+  if (status) payload.status = status;
+  if (description) payload.description = description;
+  if (symbols.length) payload.symbols = symbols;
+
+  if (Object.keys(payload).length === 0) {
+    setStrategyPatchOutput('PATCH할 항목을 입력해줘.');
+    return;
+  }
+
+  setStrategyPatchOutput('전략 PATCH 중...');
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const parsed = await readJsonSafely(res);
+    setStrategyPatchOutput(parsed.data);
+    if (parsed.ok) {
+      await loadStrategies();
+      await selectStrategy(id);
+    }
+  } catch (e) {
+    setStrategyPatchOutput(`오류: ${e.message}`);
+  }
+};
+
+const getStrategyConfig = async () => {
+  const id = getSelectedStrategyId('strategy_config_output');
+  if (!id) return;
+
+  setStrategyConfigOutput('Config 조회 중...');
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}/config`);
+    const parsed = await readJsonSafely(res);
+    setStrategyConfigOutput(parsed.data);
+    if (parsed.ok) {
+      const textarea = document.getElementById('strategy_config_textarea');
+      if (textarea) {
+        const cfg = parsed.data?.data?.config ?? parsed.data?.data ?? {};
+        textarea.value = JSON.stringify(cfg, null, 2);
+      }
+    }
+  } catch (e) {
+    setStrategyConfigOutput(`오류: ${e.message}`);
+  }
+};
+
+const patchStrategyConfig = async () => {
+  const id = getSelectedStrategyId('strategy_config_output');
+  if (!id) return;
+
+  const textarea = document.getElementById('strategy_config_textarea');
+  const raw = textarea?.value?.trim();
+  if (!raw) {
+    setStrategyConfigOutput('PATCH할 JSON을 입력해줘.');
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+    // 혹시 wrapper 형태로 복사해둔 경우 자동 언랩
+    payload = payload?.config ?? payload?.data ?? payload;
+  } catch (e) {
+    setStrategyConfigOutput(`JSON 파싱 오류: ${e.message}`);
+    return;
+  }
+
+  setStrategyConfigOutput('Config PATCH 중...');
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}/config`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const parsed = await readJsonSafely(res);
+    setStrategyConfigOutput(parsed.data);
+    if (parsed.ok && textarea) {
+      textarea.value = JSON.stringify(parsed.data?.data ?? {}, null, 2);
+    }
+  } catch (e) {
+    setStrategyConfigOutput(`오류: ${e.message}`);
+  }
+};
+
+const renderSymbolStatesTable = (items) => {
+  const body = document.getElementById('symbol_states_table_body');
+  if (!body) return;
+
+  if (!items || items.length === 0) {
+    body.innerHTML = `<tr><td colspan="4" class="placeholder-message" style="border:none;">결과가 없습니다.</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = items.map((item) => {
+    return `
+      <tr>
+        <td>${item.symbol || '-'}</td>
+        <td>${item.state || '-'}</td>
+        <td>${item.last_close ?? '-'}</td>
+        <td>${item.unrealized_pnl_ratio ?? '-'}</td>
+      </tr>
+    `;
+  }).join('');
+};
+
+const loadSymbolStates = async () => {
+  const id = getSelectedStrategyId('symbol_states_output');
+  if (!id) return;
+
+  setSymbolStatesOutput('Symbol States 조회 중...');
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}/symbol-states`);
+    const parsed = await readJsonSafely(res);
+    setSymbolStatesOutput(parsed.data);
+    if (parsed.ok) {
+      const list =
+        parsed.data?.data?.items ||
+        parsed.data?.data?.symbol_states ||
+        parsed.data?.data?.states ||
+        parsed.data?.data?.symbols ||
+        parsed.data?.items ||
+        parsed.data?.symbol_states ||
+        parsed.data?.states ||
+        parsed.data?.symbols ||
+        [];
+      renderSymbolStatesTable(Array.isArray(list) ? list : []);
+    }
+  } catch (e) {
+    setSymbolStatesOutput(`오류: ${e.message}`);
+  }
+};
+
+const renderSignalsTable = (items) => {
+  const body = document.getElementById('signals_table_body');
+  if (!body) return;
+
+  if (!items || items.length === 0) {
+    body.innerHTML = `<tr><td colspan="6" class="placeholder-message" style="border:none;">결과가 없습니다.</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = items.map((item) => {
+    const ts = item.signal_at || item.created_at || item.time || item.timestamp || '-';
+    return `
+      <tr>
+        <td>${ts}</td>
+        <td>${item.symbol || '-'}</td>
+        <td>${item.signal_type || '-'}</td>
+        <td>${item.signal_status || '-'}</td>
+        <td>${item.signal_price ?? '-'}</td>
+        <td>${item.target_quantity ?? item.executed_quantity ?? '-'}</td>
+      </tr>
+    `;
+  }).join('');
+};
+
+const loadSignals = async () => {
+  const id = getSelectedStrategyId('signals_output');
+  if (!id) return;
+
+  const limit = parseInt(document.getElementById('signals_limit')?.value || '50', 10);
+  const offset = parseInt(document.getElementById('signals_offset')?.value || '0', 10);
+
+  setSignalsOutput('Signals 조회 중...');
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}/signals?limit=${limit}&offset=${offset}`);
+    const parsed = await readJsonSafely(res);
+    setSignalsOutput(parsed.data);
+    if (parsed.ok) {
+      const list =
+        parsed.data?.data?.signals ||
+        parsed.data?.data?.items ||
+        parsed.data?.signals ||
+        parsed.data?.items ||
+        [];
+      renderSignalsTable(Array.isArray(list) ? list : []);
+    }
+  } catch (e) {
+    setSignalsOutput(`오류: ${e.message}`);
+  }
+};
+
+const loadSignalStatistics = async () => {
+  const id = getSelectedStrategyId('signals_statistics_output');
+  if (!id) return;
+
+  setSignalsStatisticsOutput('Signals statistics 조회 중...');
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}/signals/statistics`);
+    const parsed = await readJsonSafely(res);
+    setSignalsStatisticsOutput(parsed.data);
+  } catch (e) {
+    setSignalsStatisticsOutput(`오류: ${e.message}`);
+  }
+};
+
 // wrappers for list action buttons
 const setControlStrategyId = (id) => {
   const el = document.getElementById("control_strategy_id");
   if (!el) return false;
   el.value = String(id);
+  updateSelectedStrategyLabel(id);
   return true;
 };
 
@@ -1393,3 +1737,11 @@ window.deleteStrategy = deleteStrategy;
 window.startStrategyById = startStrategyById;
 window.pauseStrategyById = pauseStrategyById;
 window.stopStrategyById = stopStrategyById;
+window.resetStrategyPatchForm = resetStrategyPatchForm;
+window.loadSelectedStrategyDetail = loadSelectedStrategyDetail;
+window.patchStrategy = patchStrategy;
+window.getStrategyConfig = getStrategyConfig;
+window.patchStrategyConfig = patchStrategyConfig;
+window.loadSymbolStates = loadSymbolStates;
+window.loadSignals = loadSignals;
+window.loadSignalStatistics = loadSignalStatistics;
