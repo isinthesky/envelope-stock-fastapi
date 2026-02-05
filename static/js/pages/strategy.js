@@ -1159,6 +1159,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (cachedRefresh?.data) {
     updateLastRefreshLabel(cachedRefresh.data, cachedRefresh.isStale);
   }
+
+  // 전략 목록 로드(선택)
+  if (typeof loadStrategies === function) {
+    loadStrategies();
+  }
 });
 
 
@@ -1234,3 +1239,150 @@ window.pauseStrategy = pauseStrategy;
 window.stopStrategy = stopStrategy;
 window.executeStrategy = executeStrategy;
 window.getSchedulerStatus = getSchedulerStatus;
+
+
+// ==================== Strategy List / CRUD (minimal) ====================
+
+function setStrategyDetailOutput(msg) {
+  const el = document.getElementById('strategy_detail_output');
+  if (!el) return;
+  el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+}
+
+function renderStrategyList(strategies) {
+  const body = document.getElementById('strategy_list_table_body');
+  if (!body) return;
+
+  if (!strategies || !strategies.length) {
+    body.innerHTML = `<tr><td colspan="6" class="placeholder-message" style="border:none;">전략이 없습니다.</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = strategies.map((s) => {
+    const symbols = Array.isArray(s.symbols) ? s.symbols.join(', ') : (s.symbols || '');
+    return `
+      <tr onclick="selectStrategy(${s.id})">
+        <td>${s.id}</td>
+        <td>${s.name || '-'}</td>
+        <td>${s.strategy_type || '-'}</td>
+        <td>${s.status || '-'}</td>
+        <td style="max-width: 360px; overflow:hidden; text-overflow: ellipsis; white-space: nowrap;">${symbols}</td>
+        <td>
+          <button class="secondary" onclick="event.stopPropagation(); selectStrategy(${s.id})">Select</button>
+          <button class="secondary" onclick="event.stopPropagation(); startStrategyById(${s.id})">Start</button>
+          <button class="secondary" onclick="event.stopPropagation(); pauseStrategyById(${s.id})">Pause</button>
+          <button class="secondary" onclick="event.stopPropagation(); stopStrategyById(${s.id})">Stop</button>
+          <button onclick="event.stopPropagation(); deleteStrategy(${s.id})" style="background:#fecaca;color:#991b1b;">Delete</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function loadStrategies() {
+  setStrategyDetailOutput('전략 목록 로딩 중...');
+  try {
+    const res = await fetch('/api/v1/strategies');
+    const data = await res.json();
+    if (data.success && data.data) {
+      renderStrategyList(data.data.strategies || []);
+      setStrategyDetailOutput(data);
+    } else {
+      setStrategyDetailOutput(data);
+    }
+  } catch (e) {
+    setStrategyDetailOutput(`오류: ${e.message}`);
+  }
+}
+
+async function selectStrategy(id) {
+  const input = document.getElementById('control_strategy_id');
+  if (input) input.value = String(id);
+
+  setStrategyDetailOutput(`전략 ${id} 상세 로딩 중...`);
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}`);
+    const data = await res.json();
+    setStrategyDetailOutput(data);
+  } catch (e) {
+    setStrategyDetailOutput(`오류: ${e.message}`);
+  }
+}
+
+function parseSymbols(raw) {
+  if (!raw) return [];
+  return raw.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+async function createStrategy() {
+  const name = document.getElementById('create_strategy_name')?.value?.trim();
+  const strategyType = document.getElementById('create_strategy_type')?.value || 'golden_cross';
+  const accountNo = document.getElementById('create_strategy_account')?.value?.trim();
+  const symbolsRaw = document.getElementById('create_strategy_symbols')?.value;
+  const symbols = parseSymbols(symbolsRaw);
+
+  if (!name) {
+    alert('전략 이름을 입력해줘');
+    return;
+  }
+  if (!symbols.length) {
+    alert('심볼을 1개 이상 입력해줘 (예: 005930,000660)');
+    return;
+  }
+
+  const payload = {
+    name,
+    strategy_type: strategyType,
+    account_no: accountNo || null,
+    symbols,
+  };
+
+  setStrategyDetailOutput('전략 생성 중...');
+  try {
+    const res = await fetch('/api/v1/strategies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    setStrategyDetailOutput(data);
+    if (data.success) {
+      await loadStrategies();
+      if (data.data?.id) {
+        await selectStrategy(data.data.id);
+      }
+    }
+  } catch (e) {
+    setStrategyDetailOutput(`오류: ${e.message}`);
+  }
+}
+
+async function deleteStrategy(id) {
+  if (!confirm(`전략 ${id}를 삭제할까?`)) return;
+  setStrategyDetailOutput('전략 삭제 중...');
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}`, { method: 'DELETE' });
+    if (res.status === 204) {
+      setStrategyDetailOutput({ success: true, detail: 'deleted (204)' });
+    } else {
+      const data = await res.json();
+      setStrategyDetailOutput(data);
+    }
+    await loadStrategies();
+  } catch (e) {
+    setStrategyDetailOutput(`오류: ${e.message}`);
+  }
+}
+
+// wrappers for list action buttons
+const startStrategyById = (id) => { document.getElementById('control_strategy_id').value = id; startStrategy(); };
+const pauseStrategyById = (id) => { document.getElementById('control_strategy_id').value = id; pauseStrategy(); };
+const stopStrategyById = (id) => { document.getElementById('control_strategy_id').value = id; stopStrategy(); };
+
+window.loadStrategies = loadStrategies;
+window.selectStrategy = selectStrategy;
+window.createStrategy = createStrategy;
+window.deleteStrategy = deleteStrategy;
+window.startStrategyById = startStrategyById;
+window.pauseStrategyById = pauseStrategyById;
+window.stopStrategyById = stopStrategyById;

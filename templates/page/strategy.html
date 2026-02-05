@@ -75,6 +75,49 @@
 
 <section>
   
+
+  <h2>전략 목록/관리</h2>
+  <div class="row">
+    <button onclick="loadStrategies()" class="secondary">전략 목록 새로고침</button>
+  </div>
+
+  <div class="row" style="margin-top: 8px; flex-wrap: wrap;">
+    <label style="font-size: 12px;">이름</label>
+    <input id="create_strategy_name" type="text" placeholder="예: golden-cross-1" style="width: 160px;" />
+
+    <label style="font-size: 12px; margin-left: 8px;">유형</label>
+    <select id="create_strategy_type" style="width: 140px;">
+      <option value="golden_cross" selected>golden_cross</option>
+      <option value="mean_reversion">mean_reversion</option>
+    </select>
+
+    <label style="font-size: 12px; margin-left: 8px;">계좌</label>
+    <input id="create_strategy_account" type="text" placeholder="(선택)" style="width: 120px;" />
+
+    <label style="font-size: 12px; margin-left: 8px;">심볼</label>
+    <input id="create_strategy_symbols" type="text" placeholder="005930,000660" style="width: 220px;" />
+
+    <button onclick="createStrategy()" style="background:#16a34a;color:white;">Create</button>
+  </div>
+
+  <table class="stock-table" style="margin-top: 12px;">
+    <thead>
+      <tr>
+        <th style="width: 60px;">ID</th>
+        <th style="width: 180px;">Name</th>
+        <th style="width: 140px;">Type</th>
+        <th style="width: 120px;">Status</th>
+        <th>Symbols</th>
+        <th style="width: 220px;">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="strategy_list_table_body">
+      <tr><td colspan="6" class="placeholder-message" style="border: none;">전략 목록을 불러오려면 전략 목록 새로고침을 클릭하세요.</td></tr>
+    </tbody>
+  </table>
+
+  <pre id="strategy_detail_output" style="margin-top: 12px;">(선택한 전략 상세 JSON이 여기에 표시됩니다)</pre>
+
   <h2>전략 제어 (API)</h2>
   <div class="row">
     <label style="font-size: 12px;">Strategy ID</label>
