@@ -525,7 +525,11 @@ class StrategyService:
 
     @transaction
     async def get_stock_universe(
-        self, session: AsyncSession, market: str | None = None, eligible_only: bool = True
+        self,
+        session: AsyncSession,
+        market: str | None = None,
+        eligible_only: bool = True,
+        limit: int = 1000,
     ) -> StockUniverseListDTO:
         """종목 유니버스 조회"""
         universe_repo = StockUniverseRepository(session)
@@ -533,7 +537,7 @@ class StrategyService:
         market_type = MarketType(market) if market else None
 
         if eligible_only:
-            stocks = await universe_repo.get_eligible_stocks(market=market_type)
+            stocks = await universe_repo.get_eligible_stocks(market=market_type, limit=limit)
         else:
             if market_type:
                 stocks = await universe_repo.get_many(market=market_type.value)
@@ -565,17 +569,232 @@ class StrategyService:
 
     @transaction
     async def refresh_universe(self, session: AsyncSession) -> dict:
-        """유니버스 갱신"""
+        """유니버스 갱신 (B-1)
+
+        - B-1: 기존 stock_universe에 존재하는 종목들을 대상으로
+          (1) 현재가/거래량/시총 등 기본 데이터를 갱신하고
+          (2) 스크리닝 재적용(passed_* / screening_score)까지 수행합니다.
+
+        B-2는 "대상 종목 수 확대"로 대체: 상위 500개까지 갱신/스캔 대상으로 사용.
+        """
+        import asyncio
+        from datetime import datetime
+        from decimal import Decimal
+
+        from src.adapters.cache.redis_client import get_redis_client
+        from src.adapters.database.connection import AsyncSessionLocal
+        from src.adapters.database.repositories.stock_universe_repository import StockUniverseRepository
+        from src.adapters.external.kis_api.client import get_kis_client
+        from src.adapters.external.naver.stock_client import get_naver_stock_client
+        from src.application.domain.market_data.service import MarketDataService
+        from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
         from src.application.domain.strategy.stock_screener import StockScreener
+        from src.settings.config import settings
+
+        universe_repo = StockUniverseRepository(session)
+
+        # (B-2) 유니버스가 500 미만이면, KRX KIND 상장 목록에서 종목을 채워 넣어 500개까지 확장
+        # - 최소 필드(symbol/name/market)만 채우고, 이후 아래 갱신 로직에서 시총/거래량/스크리닝을 업데이트
+        from sqlalchemy import func, select
+        from src.adapters.database.models.stock_universe import StockUniverseModel
+
+        target_universe_size = 500
+        seeded = 0
+
+        count_res = await session.execute(
+            select(func.count())
+            .select_from(StockUniverseModel)
+            .where(
+                StockUniverseModel.is_active == True,
+                StockUniverseModel.is_excluded == False,
+            )
+        )
+        universe_size_before = int(count_res.scalar() or 0)
+
+        if universe_size_before < target_universe_size:
+            import re
+
+            import httpx
+
+            async def fetch_kind_corp_list(market_type: str) -> list[tuple[str, str]]:
+                url = (
+                    "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download"
+                    f"&marketType={market_type}"
+                )
+                async with httpx.AsyncClient(
+                    timeout=20.0,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                ) as client:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    html = resp.content.decode("euc-kr", errors="ignore")
+
+                # <tr><td>회사명</td><td>종목코드</td> ... 형태
+                pairs = re.findall(
+                    r"<tr>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>([^<]+)</td>",
+                    html,
+                    flags=re.IGNORECASE,
+                )
+
+                items: list[tuple[str, str]] = []
+                for name, code in pairs:
+                    code = re.sub(r"\D", "", code or "")
+                    if not code:
+                        continue
+                    items.append((code.zfill(6), (name or "").strip()))
+                return items
+
+            # 기존 심볼 set
+            sym_res = await session.execute(select(StockUniverseModel.symbol))
+            existing_symbols = set(sym_res.scalars().all())
+
+            need = target_universe_size - universe_size_before
+            rows: list[dict] = []
+
+            # KOSPI 먼저 채우고, 부족하면 KOSDAQ로 채움
+            for symbol, name in await fetch_kind_corp_list("stockMkt"):
+                if symbol in existing_symbols:
+                    continue
+                rows.append({"symbol": symbol, "name": name, "market": MarketType.KOSPI.value})
+                existing_symbols.add(symbol)
+                if len(rows) >= need:
+                    break
+
+            if len(rows) < need:
+                for symbol, name in await fetch_kind_corp_list("kosdaqMkt"):
+                    if symbol in existing_symbols:
+                        continue
+                
+                    rows.append({"symbol": symbol, "name": name, "market": MarketType.KOSDAQ.value})
+                    existing_symbols.add(symbol)
+                    if len(rows) >= need:
+                        break
+
+            if rows:
+                await universe_repo.create_many(rows, session=session)
+                seeded = len(rows)
+
+        # 현재는 "활성 + 제외 아님" 종목 중 상위 500개를 갱신 대상으로 사용
+        target_stocks = await universe_repo.get_active_stocks(limit=500, session=session)
+        if not target_stocks:
+            return {
+                "success": False,
+                "target": 0,
+                "updated": 0,
+                "screened": 0,
+                "errors": ["No active stocks found in universe"],
+                "refreshed_at": datetime.now().isoformat(),
+            }
 
         kis_client = get_kis_client()
-        screener = StockScreener(session, kis_client)
+        redis_client = await get_redis_client()
+        market_data_service = MarketDataService(kis_client, redis_client)
+        naver_client = get_naver_stock_client()
 
-        # TODO: KIS API에서 종목 정보 수집
-        # 현재는 빈 데이터로 반환
-        result = await screener.refresh_universe([])
+        concurrency = max(1, min(settings.scan_concurrency_limit, 20))
 
-        return result
+        work_queue: asyncio.Queue[tuple[int, object]] = asyncio.Queue()
+        for idx, stock in enumerate(target_stocks):
+            work_queue.put_nowait((idx, stock))
+
+        async def worker() -> tuple[int, int, list[str]]:
+            updated = 0
+            screened = 0
+            errors: list[str] = []
+
+            async with AsyncSessionLocal() as worker_session:
+                screener = StockScreener(worker_session, kis_client)
+                data_loader = OHLCVDataLoader(worker_session)
+
+                while True:
+                    try:
+                        _idx, stock = work_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
+                    symbol = getattr(stock, "symbol", None)
+                    if not symbol:
+                        work_queue.task_done()
+                        continue
+
+                    try:
+                        # 1) 현재가/누적거래량
+                        price = await market_data_service.get_current_price(symbol, use_cache=True)
+
+                        # 2) 시총/종목명 (네이버) — 실패해도 진행
+                        fin = await naver_client.get_stock_financial_data(symbol)
+
+                        # 3) OHLCV 캐시 최신화 + 20일 평균 거래량 계산
+                        load = await data_loader.load_ohlcv_with_stats(
+                            symbol=symbol,
+                            days=60,
+                            interval="1d",
+                            min_candles=30,
+                            cache_freshness_days=3,
+                            force_refresh=False,
+                        )
+                        df = load.df
+
+                        avg_vol_20d = None
+                        if df is not None and not df.empty and len(df) >= 20:
+                            avg_vol_20d = int(df["volume"].tail(20).mean())
+
+                        # 4) stock_universe 기본 필드 업데이트
+                        await screener.update_stock_data(
+                            symbol=symbol,
+                            name=(fin.name if fin and fin.name else getattr(stock, "name", None)),
+                            market=getattr(stock, "market", None),
+                            sector=getattr(stock, "sector", None),
+                            market_cap=(Decimal(fin.market_cap) if fin and fin.market_cap else getattr(stock, "market_cap", None)),
+                            avg_volume_20d=(Decimal(avg_vol_20d) if avg_vol_20d is not None else getattr(stock, "avg_volume_20d", None)),
+                            current_price=(price.current_price if price else getattr(stock, "current_price", None)),
+                        )
+                        updated += 1
+
+                        # 5) 스크리닝 재적용
+                        passed = await screener.apply_screening(symbol)
+                        if passed:
+                            screened += 1
+
+                        # commit (OHLCV 캐시 + stock_universe 업데이트 반영)
+                        await worker_session.commit()
+
+                    except Exception as e:
+                        await worker_session.rollback()
+                        errors.append(f"{symbol}: {e}")
+                    finally:
+                        work_queue.task_done()
+
+            return updated, screened, errors
+
+        workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
+        results = await asyncio.gather(*workers, return_exceptions=True)
+
+        total_updated = 0
+        total_screened = 0
+        errors: list[str] = []
+        for item in results:
+            if isinstance(item, Exception):
+                errors.append(str(item))
+                continue
+            u, s, e = item
+            total_updated += u
+            total_screened += s
+            errors.extend(e)
+
+        return {
+            "success": True,
+            "target": len(target_stocks),
+            "updated": total_updated,
+            "screened": total_screened,
+            "seeded": seeded,
+            "universe_size_before": universe_size_before,
+            "universe_size_after": universe_size_before + seeded,
+            "concurrency": concurrency,
+            "errors": errors,
+            "refreshed_at": datetime.now().isoformat(),
+        }
+
 
     # ==================== Buy/Sell Strategy Delegation ====================
 
@@ -587,6 +806,8 @@ class StrategyService:
         stoch_threshold: float = 30.0,
         gc_only: bool = True,
         include_etf: bool = True,
+        limit: int = 1000,
+        max_concurrent: int | None = None,
     ) -> GoldenCrossScanListDTO:
         """
         골든크로스 종목 스캔 (BuyStrategyService로 위임)
@@ -597,6 +818,7 @@ class StrategyService:
             stoch_threshold: Stochastic 과매도 임계값
             gc_only: 골든크로스 활성 종목만 반환
             include_etf: ETF 종목 포함 여부 (기본 True)
+            max_concurrent: 스캔 동시 처리 수 (None이면 설정값 사용)
         """
         from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
 
@@ -606,6 +828,8 @@ class StrategyService:
             stoch_threshold=stoch_threshold,
             gc_only=gc_only,
             include_etf=include_etf,
+            limit=limit,
+            max_concurrent=max_concurrent,
         )
 
     @transaction

@@ -8,6 +8,7 @@ Sell Strategy Service - 매도 전략 서비스
 """
 
 import logging
+import math
 from datetime import datetime
 from decimal import Decimal
 
@@ -24,9 +25,11 @@ from src.application.domain.strategy.dto import (
     SELL_STAGE_RATIOS,
     SellPhaseEnum,
     SellSignalAnalysisDTO,
+    SellScoreResultDTO,
     SellStageEnum,
 )
 from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
+from src.settings.sell_score_settings import SellScoreSettings
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +48,7 @@ class SellStrategyService:
         self,
         session: AsyncSession | None = None,
         dynamic_config: DynamicSellThresholdConfig | None = None,
+        sell_score_settings: SellScoreSettings | None = None,
     ) -> None:
         """
         Args:
@@ -54,12 +58,210 @@ class SellStrategyService:
         self.session = session
         self._data_loader: OHLCVDataLoader | None = None
         self.dynamic_config = dynamic_config or DynamicSellThresholdConfig()
+        self.sell_score_settings = sell_score_settings or SellScoreSettings()
 
     def _get_data_loader(self) -> OHLCVDataLoader:
         """OHLCVDataLoader 인스턴스 반환"""
         if self._data_loader is None:
             self._data_loader = OHLCVDataLoader(self.session)
         return self._data_loader
+
+    @staticmethod
+    def _is_nan(value: float | None) -> bool:
+        """float NaN 여부 확인"""
+        return value is not None and math.isnan(value)
+
+    def _check_stoch_dead_cross(
+        self,
+        stoch_k: float,
+        stoch_d: float,
+        prev_stoch_k: float | None = None,
+        prev_stoch_d: float | None = None,
+    ) -> tuple[bool, float, str]:
+        """Stochastic 데드크로스 확인"""
+        is_dead_cross = stoch_k < stoch_d
+
+        prev_k_valid = (
+            prev_stoch_k is not None
+            and not self._is_nan(prev_stoch_k)
+            and prev_stoch_d is not None
+            and not self._is_nan(prev_stoch_d)
+        )
+
+        is_fresh_cross = False
+        if prev_k_valid:
+            is_fresh_cross = prev_stoch_k >= prev_stoch_d and stoch_k < stoch_d
+
+        if is_fresh_cross:
+            return True, 10.0, f"Stoch 데드크로스 발생 (K={stoch_k:.1f} < D={stoch_d:.1f})"
+        if is_dead_cross:
+            return True, 5.0, f"Stoch 데드크로스 상태 (K={stoch_k:.1f} < D={stoch_d:.1f})"
+        return False, 0.0, f"Stoch 골든크로스 (K={stoch_k:.1f} ≥ D={stoch_d:.1f})"
+
+    def _calculate_stochastic_indicators(
+        self,
+        df: pd.DataFrame,
+        min_candles: int = 17,
+    ) -> dict[str, float | bool | str | None]:
+        """Stochastic 지표 계산 (이전 값 포함)"""
+        result: dict[str, float | bool | str | None] = {
+            "stoch_k": None,
+            "stoch_d": None,
+            "prev_stoch_k": None,
+            "prev_stoch_d": None,
+            "is_stoch_dead_cross": False,
+            "stoch_cross_score": 0.0,
+            "stoch_cross_reason": None,
+            "stoch_cross_type": "insufficient_data",
+        }
+
+        if len(df) < min_candles:
+            return result
+
+        stoch_k_series = df.get("stoch_k")
+        stoch_d_series = df.get("stoch_d")
+        if stoch_k_series is None or stoch_d_series is None:
+            stoch_k_series, stoch_d_series = TechnicalIndicators.calculate_stochastic(df)
+            df["stoch_k"] = stoch_k_series
+            df["stoch_d"] = stoch_d_series
+
+        if (
+            stoch_k_series is None
+            or stoch_d_series is None
+            or len(stoch_k_series) == 0
+            or len(stoch_d_series) == 0
+        ):
+            return result
+
+        if len(stoch_k_series) < 2 or len(stoch_d_series) < 2:
+            return result
+
+        current_k = df["stoch_k"].iloc[-1]
+        current_d = df["stoch_d"].iloc[-1]
+        if pd.isna(current_k) or pd.isna(current_d):
+            return result
+
+        prev_k = df["stoch_k"].iloc[-2]
+        prev_d = df["stoch_d"].iloc[-2]
+
+        stoch_k = float(current_k)
+        stoch_d = float(current_d)
+        prev_stoch_k = float(prev_k) if prev_k is not None and pd.notna(prev_k) else None
+        prev_stoch_d = float(prev_d) if prev_d is not None and pd.notna(prev_d) else None
+
+        is_dead_cross, cross_score, cross_reason = self._check_stoch_dead_cross(
+            stoch_k, stoch_d, prev_stoch_k, prev_stoch_d
+        )
+
+        if is_dead_cross:
+            if (
+                prev_stoch_k is not None
+                and prev_stoch_d is not None
+                and prev_stoch_k >= prev_stoch_d
+            ):
+                cross_type = "fresh_cross"
+            else:
+                cross_type = "dead_cross_state"
+        else:
+            cross_type = "golden_cross"
+
+        result.update(
+            {
+                "stoch_k": stoch_k,
+                "stoch_d": stoch_d,
+                "prev_stoch_k": prev_stoch_k,
+                "prev_stoch_d": prev_stoch_d,
+                "is_stoch_dead_cross": is_dead_cross,
+                "stoch_cross_score": cross_score,
+                "stoch_cross_reason": cross_reason,
+                "stoch_cross_type": cross_type,
+            }
+        )
+        return result
+
+    def _calculate_ma_position_score(
+        self,
+        current_price: float,
+        ma_short: float,
+        ma_long: float,
+        ma_gap_ratio: float,
+    ) -> tuple[float, list[str]]:
+        """MA 위치 기반 점수"""
+        score = 0.0
+        reasons: list[str] = []
+
+        is_death_cross = ma_short < ma_long
+        is_below_ma55 = current_price < ma_short
+
+        if is_death_cross and is_below_ma55:
+            score = 10.0
+            reasons.append("데드크로스 + 현재가 MA55 하회")
+        elif is_death_cross:
+            score = 7.0
+            reasons.append("데드크로스 발생 (MA55 < MA165)")
+        elif is_below_ma55:
+            score = 5.0
+            reasons.append(f"현재가 MA55 하회 ({current_price:,.0f} < {ma_short:,.0f})")
+
+        if not is_death_cross and ma_gap_ratio < 3.0:
+            score += 3.0
+            reasons.append(f"MA 갭 축소 ({ma_gap_ratio:.1f}%) - 데드크로스 임박 주의")
+
+        return score, reasons
+
+    def _check_52week_high(
+        self,
+        symbol: str,
+        current_price: float,
+        df: pd.DataFrame,
+    ) -> tuple[bool, float, str, str]:
+        """52주 신고가 확인"""
+        min_candles = 50
+        if "high" not in df.columns or len(df) < min_candles:
+            logger.debug(f"52주 신고가 계산 불가: {symbol} 데이터 부족")
+            return False, 0.0, "", "insufficient_data"
+
+        lookback = min(252, len(df))
+        high_52w = df["high"].tail(lookback).max()
+        if pd.isna(high_52w):
+            return False, 0.0, "", "insufficient_data"
+
+        high_52w = float(high_52w)
+        is_new_high = current_price >= high_52w
+        ratio = current_price / high_52w if high_52w > 0 else 0.0
+
+        if is_new_high:
+            return (
+                True,
+                10.0,
+                f"52주 신고가 경신 ({current_price:,.0f} ≥ {high_52w:,.0f})",
+                "raw",
+            )
+
+        if ratio >= 0.95:
+            return False, 5.0, f"52주 신고가 근접 ({ratio:.1%})", "raw"
+
+        return False, 0.0, "", "raw"
+
+    def _calculate_atr(
+        self,
+        df: pd.DataFrame,
+        period: int = 14,
+    ) -> float | None:
+        """ATR 계산 (스칼라 반환)"""
+        min_candles = period + 1
+        if len(df) < min_candles:
+            return None
+
+        if not {"high", "low", "close"}.issubset(df.columns):
+            return None
+
+        return TechnicalIndicators.calculate_atr(
+            high_prices=df["high"].tolist(),
+            low_prices=df["low"].tolist(),
+            close_prices=df["close"].tolist(),
+            period=period,
+        )
 
     async def analyze_sell_signal(
         self,
@@ -70,6 +272,8 @@ class SellStrategyService:
         highest_price: float | None = None,
         trailing_stop_activated: bool = False,
         force_refresh: bool = False,
+        use_scoring: bool = True,
+        merge_strategy: str = "conservative",
     ) -> SellSignalAnalysisDTO:
         """
         매도 시그널 분석
@@ -125,8 +329,9 @@ class SellStrategyService:
         rsi_value = TechnicalIndicators.calculate_rsi(close_prices, period=14)
         df["rsi"] = rsi_value if rsi_value is not None else 50.0
 
-        # 2-1. 거래량 지표 계산
-        volume_indicators = self._calculate_volume_indicators(df)
+        # 2-1. 거래량 지표 계산 (ATR 포함)
+        atr_value = self._calculate_atr(df, period=14)
+        volume_indicators = self._calculate_volume_indicators(df, atr=atr_value)
 
         # 2-2. ADX 지표 계산
         adx_indicators = self._calculate_adx_indicators(df, period=14)
@@ -136,9 +341,40 @@ class SellStrategyService:
         close = float(latest["close"])
         ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
         ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
-        stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
-        stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
-        rsi = float(latest["rsi"]) if pd.notna(latest["rsi"]) else 50
+        rsi_raw = float(latest["rsi"]) if pd.notna(latest["rsi"]) else None
+
+        stoch_data = self._calculate_stochastic_indicators(df)
+        stoch_k_raw = stoch_data.get("stoch_k")
+        stoch_d_raw = stoch_data.get("stoch_d")
+        prev_stoch_k = stoch_data.get("prev_stoch_k")
+        prev_stoch_d = stoch_data.get("prev_stoch_d")
+        is_stoch_dead_cross = bool(stoch_data.get("is_stoch_dead_cross", False))
+        stoch_cross_type = stoch_data.get("stoch_cross_type")
+
+        stoch_k = stoch_k_raw if stoch_k_raw is not None else 50
+        stoch_d = stoch_d_raw if stoch_d_raw is not None else 50
+        rsi = rsi_raw if rsi_raw is not None else 50
+
+        # 3-1. 52주 신고가 체크
+        (
+            is_52week_high,
+            high_52week_score,
+            high_52week_reason,
+            high_52week_note,
+        ) = self._check_52week_high(
+            symbol=symbol,
+            current_price=close,
+            df=df,
+        )
+        high_52week_value: float | None = None
+        high_52week_ratio: float | None = None
+        if high_52week_note == "raw" and "high" in df.columns and len(df) > 0:
+            lookback = min(252, len(df))
+            high_52week_raw = df["high"].tail(lookback).max()
+            if high_52week_raw is not None and pd.notna(high_52week_raw):
+                high_52week_value = float(high_52week_raw)
+                if high_52week_value > 0:
+                    high_52week_ratio = close / high_52week_value
 
         # 4. 기본 지표 계산
         is_gc_active = ma_short > ma_long
@@ -191,10 +427,43 @@ class SellStrategyService:
             plus_di=adx_indicators.get("plus_di"),
             minus_di=adx_indicators.get("minus_di"),
             is_volume_sell_signal=volume_indicators.get("is_volume_sell_signal", False),
+            is_volume_spike=volume_indicators.get("is_volume_spike", False),
             profit_ratio=profit_ratio,
             dynamic_stoch_threshold=dynamic_stoch,
             dynamic_rsi_threshold=dynamic_rsi,
         )
+
+        sell_score_result = self.calculate_sell_score(
+            stoch_k=stoch_k_raw,
+            stoch_d=stoch_d_raw,
+            prev_stoch_k=prev_stoch_k,
+            prev_stoch_d=prev_stoch_d,
+            rsi=rsi_raw,
+            volume_ratio=volume_indicators.get("volume_ratio"),
+            volume_peak_score=volume_indicators.get("volume_peak_score"),
+            adx=adx_indicators.get("adx"),
+            plus_di=adx_indicators.get("plus_di"),
+            minus_di=adx_indicators.get("minus_di"),
+            is_death_cross=is_death_cross,
+            current_price=close,
+            ma_short=ma_short,
+            ma_long=ma_long,
+            ma_gap_ratio=ma_gap_ratio,
+            is_volume_peak=volume_indicators.get("is_volume_peak", False),
+            is_volume_sell_signal=volume_indicators.get("is_volume_sell_signal", False),
+            is_52week_high=is_52week_high,
+            high_52week_score=high_52week_score if high_52week_value is not None else None,
+            high_52week_reason=high_52week_reason if high_52week_value is not None else None,
+        )
+
+        final_stage = self.determine_final_stage(
+            rule_stage=sell_stage,
+            score_stage=sell_score_result.recommended_stage,
+            use_scoring=use_scoring,
+            merge_strategy=merge_strategy,
+        )
+
+        final_ratio_min, final_ratio_max = SELL_STAGE_RATIOS.get(final_stage, (0.0, 0.0))
 
         # Stage 기반 매도 비율 계산
         sell_ratios = SELL_STAGE_RATIOS.get(sell_stage, (0.0, 0.0))
@@ -260,8 +529,17 @@ class SellStrategyService:
             stoch_k=round(stoch_k, 2),
             stoch_d=round(stoch_d, 2),
             is_stoch_overbought=is_stoch_overbought,
+            is_stoch_dead_cross=is_stoch_dead_cross,
+            stoch_cross_type=stoch_cross_type,
+            prev_stoch_k=round(prev_stoch_k, 2) if prev_stoch_k is not None else None,
+            prev_stoch_d=round(prev_stoch_d, 2) if prev_stoch_d is not None else None,
             rsi=round(rsi, 2),
             is_rsi_overbought=is_rsi_overbought,
+            # 52주 신고가 관련
+            is_52week_high=is_52week_high,
+            high_52week=Decimal(str(high_52week_value)) if high_52week_value is not None else None,
+            high_52week_ratio=round(high_52week_ratio, 4) if high_52week_ratio is not None else None,
+            high_52week_data_note=high_52week_note,
             # Phase 기반 매도 시그널
             sell_phase=sell_phase.value,
             sell_phase_name=phase_info["name"],
@@ -288,6 +566,16 @@ class SellStrategyService:
             holding_quantity=None,  # 보유 수량은 외부에서 제공
             sold_ratio=0.0,
             sell_stage_reasons=stage_reasons,
+            sell_score_result=sell_score_result,
+            score_based_stage=(
+                sell_score_result.recommended_stage.value
+                if hasattr(sell_score_result.recommended_stage, "value")
+                else str(sell_score_result.recommended_stage)
+            ),
+            final_stage=final_stage,
+            final_ratio_min=final_ratio_min,
+            final_ratio_max=final_ratio_max,
+            merge_strategy=merge_strategy,
             # === 거래량 관련 신규 필드 ===
             current_volume=volume_indicators.get("current_volume"),
             prev_volume=volume_indicators.get("prev_volume"),
@@ -297,6 +585,9 @@ class SellStrategyService:
             price_drop_ratio=volume_indicators.get("price_drop_ratio"),
             is_volume_sell_signal=volume_indicators.get("is_volume_sell_signal", False),
             volume_sell_reasons=volume_indicators.get("volume_sell_reasons", []),
+            is_volume_peak=volume_indicators.get("is_volume_peak", False),
+            volume_signal_type=volume_indicators.get("volume_signal_type"),
+            volume_peak_reasons=volume_indicators.get("volume_peak_reasons", []),
             # === ADX 관련 신규 필드 ===
             adx=adx_indicators.get("adx"),
             plus_di=adx_indicators.get("plus_di"),
@@ -306,6 +597,267 @@ class SellStrategyService:
             overbought_sell_blocked=overbought_sell_blocked,
             candle_count=candle_count,
         )
+
+    def calculate_sell_score(
+        self,
+        stoch_k: float | None,
+        stoch_d: float | None,
+        prev_stoch_k: float | None,
+        prev_stoch_d: float | None,
+        rsi: float | None,
+        volume_ratio: float | None,
+        adx: float | None,
+        plus_di: float | None,
+        minus_di: float | None,
+        is_death_cross: bool,
+        current_price: float,
+        ma_short: float,
+        ma_long: float,
+        ma_gap_ratio: float,
+        volume_peak_score: float | None = None,
+        is_volume_peak: bool = False,
+        is_volume_sell_signal: bool = False,
+        is_52week_high: bool = False,
+        high_52week_score: float | None = None,
+        high_52week_reason: str | None = None,
+        settings: SellScoreSettings | None = None,
+    ) -> SellScoreResultDTO:
+        """점수 기반 매도 판단"""
+        config = settings or self.sell_score_settings
+        score_reasons: list[str] = []
+        score_breakdown: dict[str, float] = {}
+
+        stoch_k = None if self._is_nan(stoch_k) else stoch_k
+        stoch_d = None if self._is_nan(stoch_d) else stoch_d
+        rsi = None if self._is_nan(rsi) else rsi
+        volume_ratio = None if self._is_nan(volume_ratio) else volume_ratio
+        volume_peak_score = None if self._is_nan(volume_peak_score) else volume_peak_score
+        adx = None if self._is_nan(adx) else adx
+        plus_di = None if self._is_nan(plus_di) else plus_di
+        minus_di = None if self._is_nan(minus_di) else minus_di
+        high_52week_score = None if self._is_nan(high_52week_score) else high_52week_score
+
+        total_score = 0.0
+
+        # Stoch 점수
+        stoch_score = 0.0
+        if stoch_k is not None:
+            if stoch_k > 95:
+                stoch_score = config.stoch_weight
+                score_reasons.append(f"Stoch 매우 과열 (K={stoch_k:.1f} > 95)")
+            elif stoch_k > 85:
+                stoch_score = config.stoch_weight * (20.0 / 30.0)
+                score_reasons.append(f"Stoch 과열 (K={stoch_k:.1f} > 85)")
+            elif stoch_k > 70:
+                stoch_score = config.stoch_weight * (10.0 / 30.0)
+                score_reasons.append(f"Stoch 과열 초기 (K={stoch_k:.1f} > 70)")
+        total_score += stoch_score
+
+        # RSI 점수
+        rsi_score = 0.0
+        if rsi is not None:
+            if rsi > 80:
+                rsi_score = config.rsi_weight
+                score_reasons.append(f"RSI 매우 과열 (RSI={rsi:.1f} > 80)")
+            elif rsi > 70:
+                rsi_score = config.rsi_weight * (15.0 / 25.0)
+                score_reasons.append(f"RSI 과열 (RSI={rsi:.1f} > 70)")
+            elif rsi > 65:
+                rsi_score = config.rsi_weight * (5.0 / 25.0)
+                score_reasons.append(f"RSI 과열 초기 (RSI={rsi:.1f} > 65)")
+        total_score += rsi_score
+
+        # 거래량 점수
+        volume_score = 0.0
+        if volume_ratio is not None:
+            if volume_ratio >= config.volume_ratio_high:
+                volume_score = config.volume_weight
+                score_reasons.append(f"거래량 폭증 ({volume_ratio:.2f}x)")
+            elif volume_ratio >= config.volume_ratio_mid:
+                volume_score = config.volume_weight * (15.0 / 20.0)
+                score_reasons.append(f"거래량 급증 ({volume_ratio:.2f}x)")
+            elif volume_ratio >= config.volume_ratio_low:
+                volume_score = config.volume_weight * (10.0 / 20.0)
+                score_reasons.append(f"거래량 증가 ({volume_ratio:.2f}x)")
+
+        peak_score_raw = volume_peak_score if volume_peak_score is not None else 0.0
+        peak_score = peak_score_raw if is_volume_peak else 0.0
+        if is_volume_peak:
+            if is_volume_sell_signal and volume_score > 0 and peak_score > 0:
+                volume_score = max(volume_score, peak_score)
+                score_reasons.append("거래량 매도/피크 중복 → 높은 점수 적용")
+            elif peak_score > 0:
+                volume_score = max(volume_score, peak_score)
+                score_reasons.append("거래량 피크 점수 반영")
+
+            volume_score += 5.0
+            score_reasons.append("거래량 피크 보너스 (+5)")
+
+        total_score += volume_score
+
+        # 52주 신고가 점수
+        high_score = 0.0
+        if high_52week_score is not None and high_52week_score > 0:
+            high_score = high_52week_score
+            if high_52week_reason:
+                score_reasons.append(high_52week_reason)
+        total_score += high_score
+
+        # ADX 약화 점수
+        adx_score = 0.0
+        if adx is not None:
+            adx_score, adx_label = TechnicalIndicators.calculate_adx_weakness_score(adx)
+            if adx_score > 0:
+                score_reasons.append(f"ADX {adx_label} (ADX={adx:.1f})")
+        total_score += adx_score
+
+        # MA 상태 점수
+        ma_score, ma_reasons = self._calculate_ma_position_score(
+            current_price=current_price,
+            ma_short=ma_short,
+            ma_long=ma_long,
+            ma_gap_ratio=ma_gap_ratio,
+        )
+        if ma_reasons:
+            score_reasons.extend(ma_reasons)
+        total_score += ma_score
+
+        # Stoch 데드크로스 보너스
+        cross_score = 0.0
+        if stoch_k is not None and stoch_d is not None:
+            is_dead_cross, raw_cross_score, cross_reason = self._check_stoch_dead_cross(
+                stoch_k, stoch_d, prev_stoch_k, prev_stoch_d
+            )
+            if is_dead_cross and raw_cross_score > 0:
+                cross_score = raw_cross_score * (config.cross_bonus / 10.0)
+                if cross_reason:
+                    score_reasons.append(cross_reason)
+        total_score += cross_score
+
+        # 52주 신고가 + 과매수 보너스
+        overbought_bonus = 0.0
+        if is_52week_high and stoch_k is not None and stoch_k > 85:
+            overbought_bonus = 5.0
+            total_score += overbought_bonus
+            score_reasons.append("신고가 + 과매수 조합 (+5)")
+
+        # ADX 강세 감점
+        adx_penalty, adx_penalty_reason = self._calculate_adx_penalty(
+            adx, plus_di, minus_di, config
+        )
+        if adx_penalty != 0.0:
+            total_score += adx_penalty
+            if adx_penalty_reason:
+                score_reasons.append(adx_penalty_reason)
+
+        available_max = 0.0
+        if stoch_k is not None:
+            available_max += config.stoch_weight
+        if rsi is not None:
+            available_max += config.rsi_weight
+        if volume_ratio is not None:
+            available_max += config.volume_weight
+        if is_volume_peak:
+            available_max += 5.0
+        if high_52week_score is not None:
+            available_max += 10.0
+        if adx is not None:
+            available_max += config.adx_weight
+        available_max += config.ma_weight + 3.0
+        if stoch_d is not None:
+            available_max += config.cross_bonus
+        if overbought_bonus > 0:
+            available_max += overbought_bonus
+
+        normalized_score = (total_score / available_max) * 100 if available_max > 0 else 0.0
+
+        if normalized_score >= config.exit_all_threshold:
+            recommended_stage = SellStageEnum.EXIT_ALL
+        elif normalized_score >= config.reduce_2_threshold:
+            recommended_stage = SellStageEnum.REDUCE_2
+        elif normalized_score >= config.reduce_1_threshold:
+            recommended_stage = SellStageEnum.REDUCE_1
+        else:
+            recommended_stage = SellStageEnum.HOLD
+
+        score_breakdown = {
+            "stoch_score": round(stoch_score, 2),
+            "rsi_score": round(rsi_score, 2),
+            "volume_score": round(volume_score, 2),
+            "volume_peak_score": round(peak_score_raw, 2),
+            "high_52week_score": round(high_score, 2),
+            "high_52week_bonus": round(overbought_bonus, 2),
+            "adx_score": round(adx_score, 2),
+            "ma_score": round(ma_score, 2),
+            "cross_score": round(cross_score, 2),
+            "adx_penalty": round(adx_penalty, 2),
+            "raw_score": round(total_score, 2),
+        }
+
+        return SellScoreResultDTO(
+            total_score=round(total_score, 2),
+            normalized_score=round(normalized_score, 2),
+            available_max=round(available_max, 2),
+            score_breakdown=score_breakdown,
+            score_reasons=score_reasons,
+            recommended_stage=recommended_stage,
+        )
+
+    def _calculate_adx_penalty(
+        self,
+        adx: float | None,
+        plus_di: float | None,
+        minus_di: float | None,
+        settings: SellScoreSettings,
+    ) -> tuple[float, str | None]:
+        """ADX 강세 감점 계산"""
+        if adx is None or plus_di is None or minus_di is None:
+            return 0.0, None
+
+        if adx >= settings.adx_penalty_strong_threshold and plus_di > minus_di:
+            return (
+                settings.adx_penalty_strong,
+                f"ADX 강한 상승 추세 감점 (ADX={adx:.1f}, +DI={plus_di:.1f} > -DI={minus_di:.1f})",
+            )
+
+        if adx >= settings.adx_penalty_moderate_threshold and plus_di > minus_di:
+            return (
+                settings.adx_penalty_moderate,
+                f"ADX 상승 추세 감점 (ADX={adx:.1f}, +DI={plus_di:.1f} > -DI={minus_di:.1f})",
+            )
+
+        return 0.0, None
+
+    def determine_final_stage(
+        self,
+        rule_stage: SellStageEnum,
+        score_stage: SellStageEnum,
+        use_scoring: bool,
+        merge_strategy: str = "conservative",
+    ) -> SellStageEnum:
+        """
+        최종 매도 단계 결정
+
+        merge_strategy:
+        - "conservative": 두 결과 중 더 강한 단계 채택
+        - "score_only": 점수 기반만 사용
+        - "rule_only": 규칙 기반만 사용
+        """
+        if not use_scoring:
+            return rule_stage
+
+        if merge_strategy == "score_only":
+            return score_stage
+        if merge_strategy == "rule_only":
+            return rule_stage
+
+        stage_order = [
+            SellStageEnum.HOLD,
+            SellStageEnum.REDUCE_1,
+            SellStageEnum.REDUCE_2,
+            SellStageEnum.EXIT_ALL,
+        ]
+        return max(rule_stage, score_stage, key=lambda s: stage_order.index(s))
 
     def _get_dynamic_thresholds(self, profit_ratio: float) -> tuple[float, float]:
         """
@@ -456,17 +1008,19 @@ class SellStrategyService:
     def _calculate_volume_indicators(
         self,
         df: pd.DataFrame,
-    ) -> dict[str, float | bool | list[str] | None]:
+        atr: float | None = None,
+    ) -> dict[str, float | int | bool | list[str] | str | None]:
         """
         거래량 지표 계산
 
         Args:
             df: OHLCV 데이터프레임 (volume 컬럼 포함)
+            atr: ATR 값 (선택)
 
         Returns:
             dict: 거래량 관련 지표
         """
-        result: dict[str, float | bool | list[str] | None] = {
+        result: dict[str, float | int | bool | list[str] | str | None] = {
             "current_volume": None,
             "prev_volume": None,
             "volume_ma_20": None,
@@ -475,6 +1029,10 @@ class SellStrategyService:
             "price_drop_ratio": None,
             "is_volume_sell_signal": False,
             "volume_sell_reasons": [],
+            "is_volume_peak": False,
+            "volume_signal_type": "none",
+            "volume_peak_reasons": [],
+            "volume_peak_score": None,
         }
 
         if "volume" not in df.columns or len(df) < 21:
@@ -528,16 +1086,34 @@ class SellStrategyService:
             current_volume, volume_ma_20, threshold=1.3
         )
 
-        # 거래량+하락 매도 신호 (ATR은 별도 계산 필요, 여기서는 None)
+        # 거래량+하락 매도 신호 (ATR 반영)
+        if atr is None:
+            atr = self._calculate_atr(df, period=14)
+
         is_signal, reasons = TechnicalIndicators.check_volume_sell_signal(
             current_price=current_price,
             prev_price=prev_price,
             current_volume=current_volume,
             volume_ma_20=volume_ma_20,
-            atr=None,  # ATR은 ADX 계산에서 가져올 수 있으나 여기서는 생략
+            atr=atr,
             volume_ratio_threshold=1.3,
             min_drop_ratio=0.005,
         )
+
+        is_peak, peak_score, peak_reasons = TechnicalIndicators.check_volume_peak_signal(
+            current_price=current_price,
+            prev_price=prev_price,
+            current_volume=current_volume,
+            volume_ma_20=volume_ma_20,
+            price_change_threshold=0.03,
+        )
+
+        if is_signal:
+            volume_signal_type = "sell"
+        elif is_peak:
+            volume_signal_type = "peak"
+        else:
+            volume_signal_type = "none"
 
         # 가격 하락률 계산
         price_drop_ratio = (prev_price - current_price) / prev_price if prev_price > 0 else 0
@@ -550,6 +1126,10 @@ class SellStrategyService:
         result["price_drop_ratio"] = round(price_drop_ratio, 4)
         result["is_volume_sell_signal"] = is_signal
         result["volume_sell_reasons"] = reasons
+        result["is_volume_peak"] = is_peak
+        result["volume_signal_type"] = volume_signal_type
+        result["volume_peak_reasons"] = peak_reasons
+        result["volume_peak_score"] = round(peak_score, 2)
 
         return result
 
@@ -625,6 +1205,7 @@ class SellStrategyService:
         minus_di: float | None,
         is_volume_sell_signal: bool,
         profit_ratio: float | None,
+        is_volume_spike: bool = False,
         dynamic_stoch_threshold: float = 70.0,
         dynamic_rsi_threshold: float = 70.0,
     ) -> tuple[SellStageEnum, list[str]]:
@@ -636,9 +1217,10 @@ class SellStrategyService:
         2. 전량 청산 (데드크로스 + 거래량 급증) → EXIT_ALL
         3. 추세 붕괴 (데드크로스 + 극심한 과열) → EXIT_ALL
         4. ADX 추세 유지 필터 (강한 상승 추세) → HOLD
-        5. 2차 축소 (데드크로스 + 과열) → REDUCE_2
-        6. 1차 축소 (과열 초기 / 거래량 경고) → REDUCE_1
-        7. 보유 유지 → HOLD
+        5. ADX 약화 + 거래량 급증 → REDUCE_2
+        6. 2차 축소 (데드크로스 + 과열) → REDUCE_2
+        7. 1차 축소 (ADX 약화 또는 과열 초기 / 거래량 경고) → REDUCE_1
+        8. 보유 유지 → HOLD
 
         Returns:
             tuple[SellStageEnum, list[str]]: (stage, reasons)
@@ -659,7 +1241,7 @@ class SellStrategyService:
             reasons.append("데드크로스 + 극심한 과열 (Stoch>80, RSI>75)")
             return SellStageEnum.EXIT_ALL, reasons
 
-        # === 3순위: ADX 추세 유지 필터 ===
+        # === 4순위: ADX 추세 유지 필터 ===
         # (손절/전량청산 이후에만 적용)
         is_strong_uptrend = False
         if adx is not None and plus_di is not None and minus_di is not None:
@@ -668,7 +1250,12 @@ class SellStrategyService:
                 reasons.append(f"강한 상승 추세 유지 (ADX={adx:.1f}, +DI={plus_di:.1f} > -DI={minus_di:.1f})")
                 return SellStageEnum.HOLD, reasons
 
-        # === 4순위: 2차 비중 축소 (30~40%) ===
+        # === 5순위: ADX 약화 대응 ===
+        if adx is not None and adx < 15 and is_volume_spike:
+            reasons.append(f"ADX 매우 약화 + 거래량 급증 (ADX={adx:.1f})")
+            return SellStageEnum.REDUCE_2, reasons
+
+        # === 6순위: 2차 비중 축소 (30~40%) ===
         if is_death_cross and (stoch_k > dynamic_stoch_threshold or rsi > dynamic_rsi_threshold):
             reasons.append(f"데드크로스 + 과열 (Stoch>{dynamic_stoch_threshold:.0f} OR RSI>{dynamic_rsi_threshold:.0f})")
             return SellStageEnum.REDUCE_2, reasons
@@ -677,7 +1264,11 @@ class SellStrategyService:
             reasons.append("거래량 급증 하락 + MA 갭 축소 (<3%)")
             return SellStageEnum.REDUCE_2, reasons
 
-        # === 5순위: 1차 비중 축소 (20~30%) ===
+        # === 7순위: 1차 비중 축소 (20~30%) ===
+        if adx is not None and adx < 20 and stoch_k > 85:
+            reasons.append(f"ADX 약화 + Stoch 과열 (ADX={adx:.1f}, K={stoch_k:.1f})")
+            return SellStageEnum.REDUCE_1, reasons
+
         if is_gc_active and stoch_k > 85 and rsi > 80:
             reasons.append("GC 유지 + 극심한 과열 (수익 보호)")
             return SellStageEnum.REDUCE_1, reasons
@@ -690,7 +1281,7 @@ class SellStrategyService:
             reasons.append("거래량 급증 하락 감지")
             return SellStageEnum.REDUCE_1, reasons
 
-        # === 6순위: 보유 유지 ===
+        # === 8순위: 보유 유지 ===
         # 기존 Phase에서 매핑 (호환성)
         default_stage = PHASE_TO_STAGE_MAP.get(sell_phase, SellStageEnum.HOLD)
         if default_stage != SellStageEnum.HOLD:

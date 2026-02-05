@@ -231,7 +231,7 @@ class StockScreenerConfigDTO(BaseDTO):
     )
 
     # 최대 종목 수
-    max_stocks: int = Field(default=250, description="최대 종목 수", ge=10, le=500)
+    max_stocks: int = Field(default=500, description="최대 종목 수", ge=10, le=500)
 
 
 class GoldenCrossConfigDTO(BaseStrategyConfig):
@@ -499,8 +499,8 @@ class GoldenCrossScanItemDTO(BaseDTO):
     ma_gap_ratio: float = Field(description="MA 갭 비율 ((MA55-MA165)/MA165*100)")
 
     # Stochastic
-    stoch_k: float = Field(description="Stochastic %K")
-    stoch_d: float = Field(description="Stochastic %D")
+    stoch_k: float = Field(description="Stochastic %K", ge=0.0, le=100.0)
+    stoch_d: float = Field(description="Stochastic %D", ge=0.0, le=100.0)
 
     # 상태
     is_gc_active: bool = Field(description="골든크로스 활성 여부 (MA55 > MA165)")
@@ -673,6 +673,17 @@ SELL_STAGE_INFO: dict[str, dict[str, str]] = {
 }
 
 
+class SellScoreResultDTO(BaseDTO):
+    """매도 점수 결과"""
+
+    total_score: float = Field(description="점수 합계 (감점 포함)")
+    normalized_score: float = Field(description="정규화 점수 (0~100)")
+    available_max: float = Field(description="가용 최대 점수")
+    score_breakdown: dict[str, float] = Field(description="점수 구성 상세")
+    score_reasons: list[str] = Field(default_factory=list, description="점수 산출 근거")
+    recommended_stage: SellStageEnum = Field(description="점수 기반 권장 Stage")
+
+
 class SellSignalAnalysisDTO(BaseDTO):
     """매도 시그널 분석 결과 DTO"""
 
@@ -692,10 +703,29 @@ class SellSignalAnalysisDTO(BaseDTO):
     stoch_k: float = Field(description="Stochastic %K")
     stoch_d: float = Field(description="Stochastic %D")
     is_stoch_overbought: bool = Field(description="Stochastic 과매수 (K > 70)")
+    is_stoch_dead_cross: bool = Field(default=False, description="Stochastic 데드크로스 여부 (K < D)")
+    stoch_cross_type: str | None = Field(default=None, description="Stochastic 크로스 유형")
+    prev_stoch_k: float | None = Field(
+        default=None, description="이전 Stochastic %K", ge=0.0, le=100.0
+    )
+    prev_stoch_d: float | None = Field(
+        default=None, description="이전 Stochastic %D", ge=0.0, le=100.0
+    )
 
     # RSI 지표
-    rsi: float = Field(description="RSI (14일)")
+    rsi: float = Field(description="RSI (14일)", ge=0.0, le=100.0)
     is_rsi_overbought: bool = Field(description="RSI 과매수 (RSI > 70)")
+
+    # 52주 신고가 관련
+    is_52week_high: bool = Field(default=False, description="52주 신고가 여부")
+    high_52week: Decimal | None = Field(default=None, description="52주 고가")
+    high_52week_ratio: float | None = Field(
+        default=None, description="현재가/52주고가 비율", ge=0.0
+    )
+    high_52week_data_note: str | None = Field(
+        default=None,
+        description="52주 신고가 데이터 기준 (raw | adjusted | insufficient_data)",
+    )
 
     # 매도 시그널 (Phase 기반)
     sell_phase: str = Field(default="NONE", description="매도 Phase (NONE~PHASE_5)")
@@ -725,27 +755,54 @@ class SellSignalAnalysisDTO(BaseDTO):
         pattern="^(HOLD|REDUCE_1|REDUCE_2|EXIT_ALL)$",
     )
     sell_stage_name: str = Field(default="보유 유지", description="비중축소 단계 이름")
-    sell_ratio_min: float = Field(default=0.0, description="최소 매도 비율 (0.0~1.0)")
-    sell_ratio_max: float = Field(default=0.0, description="최대 매도 비율 (0.0~1.0)")
+    sell_ratio_min: float = Field(
+        default=0.0, description="최소 매도 비율 (0.0~1.0)", ge=0.0, le=1.0
+    )
+    sell_ratio_max: float = Field(
+        default=0.0, description="최대 매도 비율 (0.0~1.0)", ge=0.0, le=1.0
+    )
     sell_quantity_suggested: int | None = Field(default=None, description="권장 매도 수량")
     holding_quantity: int | None = Field(default=None, description="현재 보유 수량")
     sold_ratio: float = Field(default=0.0, description="기 매도 비율 (상태 추적용)")
     sell_stage_reasons: list[str] = Field(default_factory=list, description="비중축소 판단 근거")
+    sell_score_result: SellScoreResultDTO | None = Field(
+        default=None, description="점수 기반 매도 평가 결과"
+    )
+    score_based_stage: str | None = Field(default=None, description="점수 기반 권장 Stage")
+    final_stage: SellStageEnum = Field(
+        default=SellStageEnum.HOLD, description="최종 매도 단계"
+    )
+    final_ratio_min: float = Field(
+        default=0.0, description="최종 최소 매도 비율 (0.0~1.0)", ge=0.0, le=1.0
+    )
+    final_ratio_max: float = Field(
+        default=0.0, description="최종 최대 매도 비율 (0.0~1.0)", ge=0.0, le=1.0
+    )
+    merge_strategy: str = Field(default="conservative", description="Stage 병합 전략")
 
     # === 거래량 관련 신규 필드 ===
     current_volume: int | None = Field(default=None, description="현재 거래량")
     prev_volume: int | None = Field(default=None, description="전일 거래량")
     volume_ma_20: float | None = Field(default=None, description="거래량 20일 평균")
-    volume_ratio: float | None = Field(default=None, description="거래량 비율 (현재/평균)")
+    volume_ratio: float | None = Field(default=None, description="거래량 비율 (현재/평균)", ge=0.0)
     is_volume_spike: bool = Field(default=False, description="거래량 급증 여부 (>= 1.3x)")
     price_drop_ratio: float | None = Field(default=None, description="가격 하락률")
     is_volume_sell_signal: bool = Field(default=False, description="거래량+하락 매도 신호")
     volume_sell_reasons: list[str] = Field(default_factory=list, description="거래량 매도 신호 근거")
+    is_volume_peak: bool = Field(default=False, description="거래량 피크 신호 여부")
+    volume_signal_type: str | None = Field(default=None, description="거래량 신호 유형 (sell/peak/none)")
+    volume_peak_reasons: list[str] = Field(default_factory=list, description="거래량 피크 신호 근거")
 
     # === ADX 관련 신규 필드 ===
-    adx: float | None = Field(default=None, description="ADX 값 (0~100, 추세 강도)")
-    plus_di: float | None = Field(default=None, description="+DI 값 (상승 방향 강도)")
-    minus_di: float | None = Field(default=None, description="-DI 값 (하락 방향 강도)")
+    adx: float | None = Field(
+        default=None, description="ADX 값 (0~100, 추세 강도)", ge=0.0, le=100.0
+    )
+    plus_di: float | None = Field(
+        default=None, description="+DI 값 (상승 방향 강도)", ge=0.0, le=100.0
+    )
+    minus_di: float | None = Field(
+        default=None, description="-DI 값 (하락 방향 강도)", ge=0.0, le=100.0
+    )
     is_strong_uptrend: bool = Field(default=False, description="강한 상승 추세 여부 (ADX>25 & +DI>-DI)")
     is_strong_downtrend: bool = Field(default=False, description="강한 하락 추세 여부 (ADX>25 & -DI>+DI)")
     overbought_sell_blocked: bool = Field(default=False, description="과매수 매도 차단 여부 (강한 상승 추세)")

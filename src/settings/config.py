@@ -105,6 +105,9 @@ class Settings(BaseSettings):
     kis_api_rate_window_seconds: int = Field(default=1, ge=1, description="Rate Limit 윈도우 (초)")
     kis_api_retry_count: int = Field(default=3, ge=0, description="API 호출 실패 시 재시도 횟수")
     kis_api_timeout: int = Field(default=10, ge=1, description="API 호출 타임아웃 (초)")
+    scan_concurrency_limit: int = Field(
+        default=5, ge=1, description="스캔 동시 처리 수 (골든크로스/MA5)"
+    )
     kis_api_backoff_sequence: list[int] = Field(
         default_factory=lambda: [5, 10, 20],
         description="429/5xx 연속 발생 시 대기 시간 시퀀스 (초)",

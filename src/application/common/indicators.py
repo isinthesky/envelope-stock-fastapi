@@ -720,6 +720,51 @@ class TechnicalIndicators:
         return current_volume >= volume_ma * threshold
 
     @classmethod
+    def check_volume_peak_signal(
+        cls,
+        current_price: float,
+        prev_price: float,
+        current_volume: int,
+        volume_ma_20: float,
+        price_change_threshold: float = 0.03,
+    ) -> tuple[bool, float, list[str]]:
+        """
+        거래량 급증 + 급등 피크 신호 확인
+
+        Args:
+            current_price: 현재가
+            prev_price: 전일 종가
+            current_volume: 현재 거래량
+            volume_ma_20: 20일 거래량 평균
+            price_change_threshold: 급등 임계값 (기본: 3%)
+
+        Returns:
+            tuple[bool, float, list[str]]: (피크 신호 여부, 점수, 근거 리스트)
+        """
+        reasons: list[str] = []
+        score = 0.0
+
+        volume_ratio = cls.calculate_volume_ratio(current_volume, volume_ma_20)
+        price_change = (current_price - prev_price) / prev_price if prev_price > 0 else 0.0
+
+        if volume_ratio >= 5.0:
+            score += 20.0
+            reasons.append(f"거래량 폭증 ({volume_ratio:.2f}x)")
+        elif volume_ratio >= 4.0:
+            score += 15.0
+            reasons.append(f"거래량 급증 ({volume_ratio:.2f}x)")
+        elif volume_ratio >= 3.0:
+            score += 10.0
+            reasons.append(f"거래량 증가 ({volume_ratio:.2f}x)")
+
+        is_peak = volume_ratio >= 3.0 and price_change >= price_change_threshold
+        if is_peak:
+            score += 5.0
+            reasons.append(f"급등+급증 피크 신호 (가격 {price_change:.1%}↑)")
+
+        return is_peak, score, reasons
+
+    @classmethod
     def check_volume_sell_signal(
         cls,
         current_price: float,
@@ -775,6 +820,24 @@ class TechnicalIndicators:
         return is_signal, reasons
 
     # ==================== ADX (Average Directional Index) ====================
+
+    @staticmethod
+    def calculate_adx_weakness_score(adx: float | None) -> tuple[float, str]:
+        """
+        ADX 약화 점수 계산
+
+        Returns:
+            tuple[float, str]: (점수, 상태 문자열)
+        """
+        if adx is None:
+            return 0.0, "데이터 없음"
+        if adx < 15:
+            return 15.0, "매우 약함"
+        if adx < 20:
+            return 10.0, "약함"
+        if adx < 25:
+            return 5.0, "보통"
+        return 0.0, "강함"
 
     @staticmethod
     def _wilder_smoothing(data: list[float], period: int) -> list[float]:

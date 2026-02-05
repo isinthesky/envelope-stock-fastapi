@@ -98,9 +98,10 @@ async def get_universe(
     service: StrategyServiceDep,
     market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ)"),
     eligible_only: bool = Query(default=True, description="스크리닝 통과 종목만"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="(eligible_only=true일 때) 최대 조회 개수"),
 ) -> ResponseDTO[StockUniverseListDTO]:
     """종목 유니버스 조회 - @transaction이 세션을 관리"""
-    universe = await service.get_stock_universe(market, eligible_only)
+    universe = await service.get_stock_universe(market, eligible_only, limit=limit)
     return ResponseDTO.success_response(universe, "Universe retrieved successfully")
 
 
@@ -136,6 +137,10 @@ async def scan_golden_cross(
     stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
     gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
     include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
+    max_concurrent: int | None = Query(
+        default=None, ge=1, le=50, description="동시 처리 수 (미지정 시 설정값 사용)"
+    ),
 ) -> ResponseDTO[GoldenCrossScanListDTO]:
     """
     골든크로스 종목 스캔 - @transaction이 세션을 관리
@@ -157,6 +162,8 @@ async def scan_golden_cross(
         stoch_threshold=stoch_threshold,
         gc_only=gc_only,
         include_etf=include_etf,
+        limit=limit,
+        max_concurrent=max_concurrent,
     )
     return ResponseDTO.success_response(result, "Golden cross scan completed")
 
@@ -210,6 +217,10 @@ async def scan_ma5_breakout(
     envelope_pct: float = Query(default=0.7, ge=0.1, le=3.0, description="엔벨로프 %"),
     use_volume_filter: bool = Query(default=True, description="거래량 필터 사용"),
     include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
+    max_concurrent: int | None = Query(
+        default=None, ge=1, le=50, description="동시 처리 수 (미지정 시 설정값 사용)"
+    ),
 ) -> ResponseDTO[MA5BreakoutScanListDTO]:
     """
     MA5 돌파 종목 스캔 - @transaction이 세션을 관리
@@ -231,6 +242,8 @@ async def scan_ma5_breakout(
         envelope_pct=envelope_pct,
         use_volume_filter=use_volume_filter,
         include_etf=include_etf,
+        limit=limit,
+        max_concurrent=max_concurrent,
     )
     return ResponseDTO.success_response(result, "MA5 breakout scan completed")
 

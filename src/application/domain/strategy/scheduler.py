@@ -4,7 +4,7 @@ Strategy Scheduler - 전략 스케줄러
 
 APScheduler 기반 스케줄링:
 - 장 마감 후 전략 실행: 15:35 (월~금, 거래일 캘린더 반영, KST 기준)
-- 유니버스 갱신: 토요일 10:00
+- 유니버스 갱신(B-1): 08:00 (월~금, 기존 유니버스 데이터 갱신 + 스크리닝 재적용)
 """
 
 import asyncio
@@ -69,17 +69,18 @@ class StrategyScheduler:
                 replace_existing=True,
             )
 
-            # 유니버스 갱신 (토요일 10:00)
+            # 유니버스 갱신 (B-1: 기존 유니버스 데이터 갱신 + 스크리닝 재적용)
+            # 월~금 08:00 (장 시작 전)
             self.scheduler.add_job(
                 self._refresh_universe_job,
                 CronTrigger(
-                    day_of_week="sat",
-                    hour=10,
+                    day_of_week="mon-fri",
+                    hour=8,
                     minute=0,
                     timezone=KST,
                 ),
-                id="weekly_universe_refresh",
-                name="Weekly Universe Refresh",
+                id="daily_universe_refresh",
+                name="Daily Universe Refresh",
                 replace_existing=True,
             )
 
@@ -177,15 +178,24 @@ class StrategyScheduler:
                 logger.exception(f"[Scheduler] Strategy execution job failed: {e}")
 
     async def _refresh_universe_job(self) -> None:
-        """유니버스 갱신 작업"""
-        logger.info("[Scheduler] Starting weekly universe refresh...")
+        """유니버스 갱신 작업 (B-1)"""
+        logger.info("[Scheduler] Starting daily universe refresh...")
 
         try:
-            # TODO: KIS API에서 종목 정보 수집 및 유니버스 갱신
-            # 현재는 로그만 기록
-            logger.info("[Scheduler] Universe refresh not implemented yet.")
+            from src.application.domain.strategy.strategy_service import StrategyService
+
+            service = StrategyService()
+            result = await service.refresh_universe()
+            logger.info(
+                "[Scheduler] Universe refresh completed: "
+                f"target={result.get('target')}, updated={result.get('updated')}, screened={result.get('screened')}, errors={len(result.get('errors', []))}"
+            )
+            if result.get('errors'):
+                for err in result['errors'][:20]:
+                    logger.warning(f"[Scheduler] Universe refresh error: {err}")
         except Exception as e:
             logger.exception(f"[Scheduler] Universe refresh failed: {e}")
+
 
     async def _is_holiday(self) -> bool:
         """휴장일 체크"""
