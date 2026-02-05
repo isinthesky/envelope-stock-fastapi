@@ -1160,3 +1160,77 @@ document.addEventListener('DOMContentLoaded', () => {
     updateLastRefreshLabel(cachedRefresh.data, cachedRefresh.isStale);
   }
 });
+
+
+// ==================== Strategy Control (CRUD/Lifecycle) ====================
+
+const getControlStrategyId = () => {
+  const raw = document.getElementById('control_strategy_id')?.value;
+  const id = raw ? parseInt(raw, 10) : NaN;
+  if (!id || Number.isNaN(id)) {
+    alert('Strategy ID를 입력해줘');
+    return null;
+  }
+  return id;
+};
+
+const setControlOutput = (msg) => {
+  const el = document.getElementById('strategy_control_output');
+  if (!el) return;
+  el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+};
+
+const callStrategyAction = async (action) => {
+  const id = getControlStrategyId();
+  if (!id) return;
+  setControlOutput(`${action} 실행 중...`);
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}/${action}`, { method: 'POST' });
+    const data = await res.json();
+    setControlOutput(data);
+  } catch (e) {
+    setControlOutput(`오류: ${e.message}`);
+  }
+};
+
+const startStrategy = () => callStrategyAction('start');
+const pauseStrategy = () => callStrategyAction('pause');
+const stopStrategy = () => callStrategyAction('stop');
+
+const executeStrategy = async () => {
+  const id = getControlStrategyId();
+  if (!id) return;
+
+  const dryRun = confirm('dry_run=true로 실행할까? (확인=Dry Run / 취소=실주문 가능)');
+  const payload = { dry_run: dryRun, force: false };
+
+  setControlOutput('execute 실행 중...');
+  try {
+    const res = await fetch(`/api/v1/strategies/${id}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    setControlOutput(data);
+  } catch (e) {
+    setControlOutput(`오류: ${e.message}`);
+  }
+};
+
+const getSchedulerStatus = async () => {
+  setControlOutput('scheduler status 조회 중...');
+  try {
+    const data = await getJson('/api/v1/strategies/scheduler/status', null);
+    setControlOutput(data);
+  } catch (e) {
+    setControlOutput(`오류: ${e.message}`);
+  }
+};
+
+// expose to window (onclick handlers)
+window.startStrategy = startStrategy;
+window.pauseStrategy = pauseStrategy;
+window.stopStrategy = stopStrategy;
+window.executeStrategy = executeStrategy;
+window.getSchedulerStatus = getSchedulerStatus;

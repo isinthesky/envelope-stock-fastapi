@@ -206,6 +206,11 @@
     <input type="text" id="symbol_input" placeholder="예: 005930" style="width: 120px;" />
     <button onclick="analyzeSellSignal()">매도 시그널 분석</button>
   </div>
+  <div class="row" style="margin-top: 8px;">
+    <label style="font-size: 12px;">전략 ID (선택):</label>
+    <input id="strategy_id_input" type="number" placeholder="예: 1" style="width: 90px;" />
+    <span style="font-size: 11px; color: #64748b; margin-left: 8px;">입력 시 진입가를 DB에서 자동 조회(가능하면)</span>
+  </div>
   <div class="last-search" id="sell_last_analysis">마지막 분석: -</div>
   <div class="row" style="margin-top: 8px;">
     <label style="font-size: 12px;">진입가 (선택):</label>
@@ -584,6 +589,7 @@ const analyzeSellSignal = async (forceRefresh = false) => {
   const stochThreshold = document.getElementById("stoch_threshold").value || 70;
   const rsiThreshold = document.getElementById("rsi_threshold").value || 70;
   const entryPrice = document.getElementById("entry_price_input").value;
+  const strategyId = document.getElementById("strategy_id_input")?.value;
 
   analysisInProgress = true;
   document.getElementById("scan_output").style.display = "block";
@@ -592,6 +598,8 @@ const analyzeSellSignal = async (forceRefresh = false) => {
   let url = `/api/v1/strategies/sell-signal/${symbol}?stoch_overbought=${stochThreshold}&rsi_overbought=${rsiThreshold}`;
   if (entryPrice) {
     url += `&entry_price=${entryPrice}`;
+  } else if (strategyId) {
+    url += `&strategy_id=${strategyId}`;
   }
 
   try {

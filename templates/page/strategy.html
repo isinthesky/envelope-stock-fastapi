@@ -74,7 +74,20 @@
 </section>
 
 <section>
-  <h2>종목 스크리닝</h2>
+  
+  <h2>전략 제어 (API)</h2>
+  <div class="row">
+    <label style="font-size: 12px;">Strategy ID</label>
+    <input id="control_strategy_id" type="number" placeholder="예: 1" style="width: 90px;" />
+    <button onclick="startStrategy()" class="secondary">Start</button>
+    <button onclick="pauseStrategy()" class="secondary">Pause</button>
+    <button onclick="stopStrategy()" class="secondary">Stop</button>
+    <button onclick="executeStrategy()" style="background:#0ea5e9;color:white;">Execute</button>
+    <button onclick="getSchedulerStatus()" class="secondary">Scheduler Status</button>
+  </div>
+  <pre id="strategy_control_output" style="margin-top: 8px;">(전략 제어 결과가 여기에 표시됩니다)</pre>
+
+<h2>종목 스크리닝</h2>
   <div class="row">
     <button onclick="scanGoldenCross()">골든크로스 스캔</button>
     <button onclick="applyFinancialFilter()" style="background: #7c3aed; color: white;">재무 필터 (2차)</button>
