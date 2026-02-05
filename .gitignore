@@ -105,3 +105,5 @@ uv.lock
 
 # Claude Code local config
 CLAUDE.local.md
+# Attic cleanup (local scratch)
+_attic/cleanup_*/

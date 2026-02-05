@@ -7,12 +7,12 @@ import pytest
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 
-from src.application.domain.news_trading.dto import (
+from src.application.domain.risk.dto import (
     SafetyGuardConfigDTO,
     PositionSizingConfigDTO,
     RiskLimitConfigDTO,
 )
-from src.application.domain.news_trading.safety_guard import SafetyGuard, TradingBlockReason
+from src.application.domain.risk.safety_guard import SafetyGuard, TradingBlockReason
 
 
 class TestSafetyGuard:

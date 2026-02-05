@@ -17,9 +17,8 @@ domain/
 ├── backtest/             # 백테스트 엔진/데이터 로더
 ├── market_data/          # 현재가/호가/차트 조회
 ├── order/                # 주문 생성/조회/취소/정정
-├── strategy/             # 전략 관리/스캔/알림/스케줄러
-├── news_trading/         # 뉴스 기반 단타 전략
-└── websocket_domain/     # WS 도메인 확장 지점
+├── risk/                 # 리스크 가드(예: SafetyGuard)
+└── strategy/             # 전략 관리/스캔/알림/스케줄러
 ```
 
 ---
@@ -49,6 +48,10 @@ domain/
 - `position_manager.py` / `order_manager.py`: 가상 포지션/주문 관리
 - `service.py`: 백테스트 퍼사드
 
+### risk/
+- 재사용되는 리스크 가드 모듈
+- 예: `safety_guard.py` (현재 GoldenCross 엔진에서 사용)
+
 ### strategy/
 - `dto.py`: 전략/유니버스/시그널 DTO
 - `strategy_service.py`: 전략 CRUD/유니버스/분석 이력
@@ -60,12 +63,6 @@ domain/
 - `golden_cross_engine.py`, `state_machine.py`: 골든크로스 실행/상태 관리
 - `scheduler.py`: 전략 실행 스케줄러
 - `notification_scheduler.py`: Telegram 알림 스케줄러
-
-### news_trading/
-- 뉴스 기반 단타 전략 모듈 (상세는 해당 CLAUDE 문서 참고)
-
-### websocket_domain/
-- 실시간 도메인 확장 지점(현재는 플레이스홀더)
 
 ---
 
@@ -80,5 +77,4 @@ domain/
 
 ## 🔗 관련 문서
 - `src/application/CLAUDE.md`
-- `src/application/domain/news_trading/CLAUDE.md`
 - `src/adapters/CLAUDE.md`

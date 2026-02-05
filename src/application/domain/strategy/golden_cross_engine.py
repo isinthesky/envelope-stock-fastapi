@@ -34,7 +34,7 @@ from src.adapters.external.kis_api.client import KISAPIClient, get_kis_client
 from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.account.service import AccountService
 from src.application.domain.market_data.service import MarketDataService
-from src.application.domain.news_trading.safety_guard import SafetyGuard
+from src.application.domain.risk.safety_guard import SafetyGuard
 from src.application.domain.order.dto import OrderCreateRequestDTO
 from src.application.domain.order.service import OrderService
 from src.application.domain.strategy.dto import (
