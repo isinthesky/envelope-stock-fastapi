@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "layouts/base.html" %}
 
 {% block title %}Sell Strategy - Stock API Admin{% endblock %}
 
@@ -131,6 +131,51 @@
 .btn-save { background: #3b82f6; color: white; border: none; }
 .btn-save:hover { background: #2563eb; }
 .entry-price-badge { background: #dcfce7; color: #166534; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 4px; }
+.last-search {
+  font-size: 13px;
+  color: #1e40af;
+  margin-top: 8px;
+  padding: 10px 14px;
+  background: #eff6ff;
+  border-radius: 8px;
+  border-left: 4px solid #3b82f6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.last-search.stale {
+  background: #fef3c7;
+  border-left-color: #f59e0b;
+  color: #92400e;
+}
+.last-search .time-badge {
+  background: #3b82f6;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.last-search.stale .time-badge {
+  background: #f59e0b;
+}
+.cache-indicator {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+.cache-indicator.cached { background: #e0e7ff; color: #4338ca; }
+.cache-indicator.fresh { background: #dcfce7; color: #166534; }
+.placeholder-message {
+  text-align: center;
+  padding: 40px 20px;
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  font-size: 14px;
+}
 {% endblock %}
 
 {% block content %}
@@ -161,6 +206,7 @@
     <input type="text" id="symbol_input" placeholder="예: 005930" style="width: 120px;" />
     <button onclick="analyzeSellSignal()">매도 시그널 분석</button>
   </div>
+  <div class="last-search" id="sell_last_analysis">마지막 분석: -</div>
   <div class="row" style="margin-top: 8px;">
     <label style="font-size: 12px;">진입가 (선택):</label>
     <input id="entry_price_input" type="number" placeholder="예: 50000" style="width: 100px;" />
@@ -175,9 +221,13 @@
   <pre id="scan_output" style="display: none;"></pre>
 </section>
 
-<section id="result_section" style="display: none;">
+<section id="result_section">
   <h2>분석 결과</h2>
-  <div id="result_container"></div>
+  <div id="result_container">
+    <div class="placeholder-message">
+      결과를 불러오는 중...
+    </div>
+  </div>
 </section>
 
 <section class="history-section">
@@ -187,6 +237,7 @@
       <button class="btn-refresh" onclick="refreshHistory()">활성 종목 갱신</button>
     </div>
   </div>
+  <div class="last-search" id="sell_last_refresh" style="margin-bottom: 12px;">마지막 갱신: -</div>
   <table class="history-table">
     <thead>
       <tr>
@@ -246,6 +297,14 @@
 {% block extra_scripts %}
 let analysisHistory = [];
 let selectedHistoryId = null;
+let analysisInProgress = false;
+
+const SELL_LAST_ANALYSIS_KEY = 'sellStrategy.lastAnalysis';
+const SELL_LAST_REFRESH_KEY = 'sellStrategy.lastRefresh';
+const CACHE_SCHEMA_VERSION = 1;
+const CACHE_TTL_MS = 3600000;  // 1시간
+const ANALYSIS_COOLDOWN_MS = 60000;  // 1분
+const REFRESH_COOLDOWN_MS = 60000;  // 1분
 
 const formatNumber = (n) => {
   if (n === null || n === undefined) return '-';
@@ -254,17 +313,182 @@ const formatNumber = (n) => {
 
 const formatDateTime = (dateStr) => {
   if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '-';
+  return date.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
 };
 
 const formatTime = (dateStr) => {
   if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' });
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '-';
+  return date.toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' });
+};
+
+// 상대 시간 표시 (안전한 파싱)
+const getRelativeTime = (dateStr) => {
+  if (!dateStr) return null;
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return null;
+
+  const diff = Date.now() - date.getTime();
+  if (diff < 0) return '잠시 후';
+
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (mins < 1) return '방금 전';
+  if (mins < 60) return `${mins}분 전`;
+  if (hours < 24) return `${hours}시간 전`;
+  return `${days}일 전`;
+};
+
+// 캐시 유효성 검사
+const isCacheStale = (savedAt) => {
+  if (!savedAt) return true;
+  return (Date.now() - savedAt) > CACHE_TTL_MS;
 };
 
 const formatPercent = (ratio) => {
   if (ratio === null || ratio === undefined) return '-';
   return (ratio * 100).toFixed(2) + '%';
+};
+
+const updateLastAnalysisLabel = (data, isStale = false) => {
+  const label = document.getElementById("sell_last_analysis");
+  if (!label) return;
+
+  const timeText = formatDateTime(data?.analyzed_at);
+  const relTime = getRelativeTime(data?.analyzed_at);
+  const nameText = data?.symbol ? `${data.symbol}${data.name ? ` ${data.name}` : ''}` : '';
+
+  // 스타일 클래스 적용
+  label.classList.toggle('stale', isStale);
+
+  // nameText가 없으면 하이픈 제외
+  const mainText = nameText
+    ? `마지막 분석: ${nameText} - ${timeText}`
+    : `마지막 분석: ${timeText}`;
+
+  label.innerHTML = `
+    <span class="time-badge">${relTime || '알 수 없음'}</span>
+    <span>${mainText}</span>
+    <span class="cache-indicator ${isStale ? 'cached' : 'fresh'}">${isStale ? '캐시됨' : '최신'}</span>
+  `;
+};
+
+const saveLastAnalysis = (data) => {
+  try {
+    localStorage.setItem(SELL_LAST_ANALYSIS_KEY, JSON.stringify({
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      savedAt: Date.now(),
+      data
+    }));
+  } catch (e) {
+    console.warn('Failed to save last analysis:', e);
+  }
+};
+
+const loadLastAnalysis = () => {
+  try {
+    const raw = localStorage.getItem(SELL_LAST_ANALYSIS_KEY);
+    if (!raw) return null;
+
+    const cached = JSON.parse(raw);
+
+    // 스키마 버전 검증 (구버전이면 data만 반환)
+    if (!cached.schemaVersion) {
+      // 구버전 형식 호환
+      return { data: cached, isStale: true };
+    }
+
+    if (cached.schemaVersion !== CACHE_SCHEMA_VERSION) {
+      localStorage.removeItem(SELL_LAST_ANALYSIS_KEY);
+      return null;
+    }
+
+    const isStale = isCacheStale(cached.savedAt);
+    return { data: cached.data, isStale, savedAt: cached.savedAt };
+  } catch (e) {
+    console.warn('Failed to load last analysis:', e);
+    return null;
+  }
+};
+
+// 갱신 결과 저장/로드
+const saveLastRefresh = (data) => {
+  try {
+    // 메타데이터만 저장 (items 배열 제외하여 localStorage 용량 절약)
+    localStorage.setItem(SELL_LAST_REFRESH_KEY, JSON.stringify({
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      savedAt: Date.now(),
+      refreshedAt: data.refreshedAt,
+      updated_count: data.updated_count
+    }));
+  } catch (e) {
+    console.warn('Failed to save last refresh:', e);
+  }
+};
+
+const loadLastRefresh = () => {
+  try {
+    const raw = localStorage.getItem(SELL_LAST_REFRESH_KEY);
+    if (!raw) return null;
+
+    const cached = JSON.parse(raw);
+
+    // 스키마 불일치 시 제거
+    if (!cached.schemaVersion || cached.schemaVersion !== CACHE_SCHEMA_VERSION) {
+      localStorage.removeItem(SELL_LAST_REFRESH_KEY);
+      return null;
+    }
+
+    const isStale = isCacheStale(cached.savedAt);
+    return {
+      data: { refreshedAt: cached.refreshedAt, updated_count: cached.updated_count },
+      savedAt: cached.savedAt,
+      isStale
+    };
+  } catch (e) {
+    console.warn('Failed to load last refresh:', e);
+    return null;
+  }
+};
+
+const updateLastRefreshLabel = (data, isStale = false) => {
+  const label = document.getElementById("sell_last_refresh");
+  if (!label) return;
+
+  const refreshedAt = data?.refreshedAt;
+  const timeText = formatDateTime(refreshedAt);
+  const relTime = getRelativeTime(refreshedAt);
+  const countText = data?.updated_count != null ? `${data.updated_count}개 종목` : '';
+
+  label.classList.toggle('stale', isStale);
+
+  const mainText = countText
+    ? `마지막 갱신: ${timeText} - ${countText} 갱신됨`
+    : `마지막 갱신: ${timeText}`;
+
+  label.innerHTML = `
+    <span class="time-badge">${relTime || '알 수 없음'}</span>
+    <span>${mainText}</span>
+    <span class="cache-indicator ${isStale ? 'cached' : 'fresh'}">${isStale ? '캐시됨' : '최신'}</span>
+  `;
+};
+
+const normalizeSellReasons = (item) => {
+  let reasons = item.sell_reasons;
+  if (typeof reasons === 'string') {
+    try {
+      reasons = JSON.parse(reasons);
+    } catch (e) {
+      reasons = [reasons];
+    }
+  }
+  if (!Array.isArray(reasons)) reasons = [];
+  return reasons;
 };
 
 // Phase 이름에 번호 추가
@@ -288,6 +512,24 @@ const loadHistory = async () => {
     if (data.success && data.data) {
       analysisHistory = data.data.items;
       renderHistoryTable();
+
+      // DB 히스토리와 localStorage 캐시 비교하여 최신 결과 표시
+      const latest = analysisHistory[0];
+      if (latest) {
+        const cached = loadLastAnalysis();
+        const cachedTime = cached?.data?.analyzed_at ? new Date(cached.data.analyzed_at).getTime() : 0;
+        const historyTime = latest.analyzed_at ? new Date(latest.analyzed_at).getTime() : 0;
+
+        // DB가 더 최신이면 DB 결과로 업데이트
+        if (historyTime > cachedTime) {
+          const historyLatest = {
+            ...latest,
+            sell_reasons: normalizeSellReasons(latest)
+          };
+          displayResult(historyLatest);
+          updateLastAnalysisLabel(historyLatest, false);
+        }
+      }
     }
   } catch (e) {
     console.error('Failed to load history:', e);
@@ -296,17 +538,54 @@ const loadHistory = async () => {
   }
 };
 
-const analyzeSellSignal = async () => {
+// 중복 클릭 방지 확인
+const canAnalyze = () => {
+  if (analysisInProgress) {
+    return { allowed: false, reason: '분석 진행 중...' };
+  }
+
+  const cached = loadLastAnalysis();
+  if (!cached?.savedAt) return { allowed: true };
+
+  const elapsed = Date.now() - cached.savedAt;
+  if (elapsed < ANALYSIS_COOLDOWN_MS) {
+    const remaining = Math.ceil((ANALYSIS_COOLDOWN_MS - elapsed) / 1000);
+    return {
+      allowed: false,
+      reason: `${remaining}초 후 재분석 가능`,
+      forceAllowed: true
+    };
+  }
+  return { allowed: true };
+};
+
+const analyzeSellSignal = async (forceRefresh = false) => {
   const symbol = document.getElementById("symbol_input").value.trim();
   if (!symbol) {
     alert("종목코드를 입력해주세요.");
     return;
   }
 
+  // 중복 클릭 방지
+  if (!forceRefresh) {
+    const check = canAnalyze();
+    if (!check.allowed) {
+      if (check.forceAllowed) {
+        if (!confirm(`${check.reason}\n강제로 다시 분석하시겠습니까?`)) {
+          return;
+        }
+      } else {
+        alert(check.reason);
+        return;
+      }
+    }
+  }
+
   const stochThreshold = document.getElementById("stoch_threshold").value || 70;
   const rsiThreshold = document.getElementById("rsi_threshold").value || 70;
   const entryPrice = document.getElementById("entry_price_input").value;
 
+  analysisInProgress = true;
   document.getElementById("scan_output").style.display = "block";
   document.getElementById("scan_output").textContent = `${symbol} 분석 중... (OHLCV 데이터 조회 및 지표 계산)`;
 
@@ -320,7 +599,12 @@ const analyzeSellSignal = async () => {
     const data = await response.json();
 
     if (data.success && data.data) {
+      if (!data.data.analyzed_at) {
+        data.data.analyzed_at = new Date().toISOString();
+      }
       displayResult(data.data);
+      updateLastAnalysisLabel(data.data);
+      saveLastAnalysis(data.data);
       await saveToHistory(data.data);
       document.getElementById("scan_output").textContent = `분석 완료: ${symbol}`;
     } else {
@@ -328,6 +612,8 @@ const analyzeSellSignal = async () => {
     }
   } catch (e) {
     document.getElementById("scan_output").textContent = `오류: ${e.message}`;
+  } finally {
+    analysisInProgress = false;
   }
 };
 
@@ -435,9 +721,55 @@ const toggleActive = async (id, event) => {
 };
 
 // 활성 종목 일괄 갱신
-const refreshHistory = async () => {
+// 중복 갱신 방지 확인
+let refreshInProgress = false;
+
+const canRefresh = () => {
+  if (refreshInProgress) {
+    return { allowed: false, reason: '갱신 진행 중...' };
+  }
+
+  const cached = loadLastRefresh();
+  if (!cached?.savedAt) return { allowed: true };
+
+  const elapsed = Date.now() - cached.savedAt;
+  if (elapsed < REFRESH_COOLDOWN_MS) {
+    const remaining = Math.ceil((REFRESH_COOLDOWN_MS - elapsed) / 1000);
+    return {
+      allowed: false,
+      reason: `${remaining}초 후 재갱신 가능`,
+      forceAllowed: true
+    };
+  }
+  return { allowed: true };
+};
+
+const refreshHistory = async (forceRefresh = false) => {
+  // 중복 클릭 방지
+  if (!forceRefresh) {
+    const check = canRefresh();
+    if (!check.allowed) {
+      if (check.forceAllowed) {
+        if (!confirm(`${check.reason}\n강제로 다시 갱신하시겠습니까?`)) {
+          return;
+        }
+      } else {
+        alert(check.reason);
+        return;
+      }
+    }
+  }
+
   const tbody = document.getElementById("history_body");
+  const refreshBtn = document.querySelector('.history-section .btn-refresh');
   tbody.classList.add('loading');
+  refreshInProgress = true;
+
+  // 버튼 비활성화 및 진행 상태 표시
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '갱신 중...';
+  }
 
   try {
     const response = await fetch('/api/v1/strategies/analysis-history/refresh?analysis_type=sell', {
@@ -447,20 +779,42 @@ const refreshHistory = async () => {
     const result = await response.json();
     if (result.success && result.data) {
       // 갱신된 항목들로 기존 데이터 업데이트
-      result.data.items.forEach(updated => {
+      const items = result.data.items || [];
+      items.forEach(updated => {
         const idx = analysisHistory.findIndex(h => h.symbol === updated.symbol && h.is_active);
         if (idx >= 0) {
           analysisHistory[idx] = updated;
         }
       });
       renderHistoryTable();
-      alert(`${result.data.updated_count}개 종목 갱신 완료`);
+
+      // 갱신 결과 저장 및 라벨 업데이트 (updated_count 기본값 처리)
+      const updatedCount = result.data.updated_count ?? items.length ?? 0;
+      const refreshData = {
+        updated_count: updatedCount,
+        refreshedAt: new Date().toISOString()
+      };
+      saveLastRefresh(refreshData);
+      updateLastRefreshLabel(refreshData, false);
+
+      alert(`${updatedCount}개 종목 갱신 완료`);
+    } else {
+      // API 실패 시 사용자 피드백
+      const errorMsg = result.message || result.error || '알 수 없는 오류';
+      alert(`갱신 실패: ${errorMsg}`);
     }
   } catch (e) {
     console.error('Failed to refresh:', e);
-    alert('갱신 실패');
+    alert(`갱신 실패: ${e.message}`);
   } finally {
     tbody.classList.remove('loading');
+    refreshInProgress = false;
+
+    // 버튼 원래 상태로 복원
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = '활성 종목 갱신';
+    }
   }
 };
 
@@ -471,21 +825,11 @@ const showHistoryDetail = (id) => {
 
   selectedHistoryId = id;
 
-  // sell_reasons 처리 (문자열이면 JSON 파싱)
-  let reasons = item.sell_reasons;
-  if (typeof reasons === 'string') {
-    try {
-      reasons = JSON.parse(reasons);
-    } catch (e) {
-      reasons = [reasons];
-    }
-  }
-  if (!Array.isArray(reasons)) reasons = [];
-
   displayResult({
     ...item,
-    sell_reasons: reasons
+    sell_reasons: normalizeSellReasons(item)
   });
+  updateLastAnalysisLabel(item);
   renderHistoryTable(); // 선택 상태 표시 업데이트
 };
 
@@ -777,8 +1121,36 @@ const renderHistoryTable = () => {
   }).join('');
 };
 
-// 페이지 로드 시 히스토리 로드
-document.addEventListener('DOMContentLoaded', loadHistory);
+// 페이지 로드 시 히스토리 로드 및 마지막 분석 결과 표시
+document.addEventListener('DOMContentLoaded', () => {
+  // localStorage에서 마지막 분석 결과 로드
+  const cached = loadLastAnalysis();
+  if (cached?.data) {
+    displayResult({
+      ...cached.data,
+      sell_reasons: normalizeSellReasons(cached.data)
+    });
+    updateLastAnalysisLabel(cached.data, cached.isStale);
+    document.getElementById("result_section").style.display = "block";
+  } else {
+    // 저장된 결과 없음 - 안내 메시지 표시
+    document.getElementById("result_section").style.display = "block";
+    document.getElementById("result_container").innerHTML = `
+      <div class="placeholder-message">
+        종목 코드를 입력하고 <strong>매도 시그널 분석</strong> 버튼을 클릭하세요.<br>
+        <small style="color: #94a3b8; margin-top: 8px; display: block;">분석 결과는 자동으로 저장되어 다음 방문 시에도 표시됩니다.</small>
+      </div>
+    `;
+  }
+
+  // localStorage에서 마지막 갱신 정보 로드
+  const cachedRefresh = loadLastRefresh();
+  if (cachedRefresh?.data) {
+    updateLastRefreshLabel(cachedRefresh.data, cachedRefresh.isStale);
+  }
+
+  loadHistory();
+});
 
 // Enter 키로 분석 실행
 document.getElementById("symbol_input").addEventListener("keypress", (e) => {

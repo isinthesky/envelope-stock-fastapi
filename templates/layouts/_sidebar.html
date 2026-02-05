@@ -1,0 +1,19 @@
+<nav class="sidebar" id="sidebar">
+  <h2><a href="/mypage/">Stock API</a></h2>
+  <ul>
+    <li><a href="/mypage/" class="{% if active_page == 'index' %}active{% endif %}">Dashboard</a></li>
+    <li><a href="/mypage/auth/" class="{% if active_page == 'auth' %}active{% endif %}">Auth</a></li>
+    <li><a href="/mypage/account/" class="{% if active_page == 'account' %}active{% endif %}">Account</a></li>
+    <li><a href="/mypage/market-data/" class="{% if active_page == 'market_data' %}active{% endif %}">Market Data</a></li>
+    <li><a href="/mypage/order/" class="{% if active_page == 'order' %}active{% endif %}">Order</a></li>
+    <li class="section-title">Data</li>
+    <li><a href="/mypage/ohlcv/" class="{% if active_page == 'ohlcv' %}active{% endif %}">OHLCV Cache</a></li>
+    <li class="section-title">Strategy</li>
+    <li><a href="/mypage/strategy/" class="{% if active_page == 'strategy' %}active{% endif %}">Buy Strategy</a></li>
+    <li><a href="/mypage/sell-strategy/" class="{% if active_page == 'sell_strategy' %}active{% endif %}">Sell Strategy</a></li>
+    <li><a href="/mypage/backtest/" class="{% if active_page == 'backtest' %}active{% endif %}">Backtest</a></li>
+    <li><a href="/mypage/websocket/" class="{% if active_page == 'websocket' %}active{% endif %}">WebSocket</a></li>
+    <li class="section-title">Admin</li>
+    <li><a href="/mypage/access-logs/" class="{% if active_page == 'access_logs' %}active{% endif %}">Access Logs</a></li>
+  </ul>
+</nav>

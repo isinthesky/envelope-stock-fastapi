@@ -1,313 +1,3 @@
-{% extends "layouts/base_minimal.html" %}
-
-{% block title %}Buy Strategy - Stock API Admin{% endblock %}
-
-{% block extra_styles %}
-.strategy-info { background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); color: white; border: none; }
-.strategy-info h2 { color: #7dd3fc; margin-bottom: 16px; }
-.strategy-info p { color: #e0f2fe; line-height: 1.6; }
-.strategy-flow { display: flex; gap: 8px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
-.strategy-flow .step { background: rgba(255,255,255,0.15); padding: 8px 14px; border-radius: 6px; font-size: 13px; }
-.strategy-flow .arrow { color: #7dd3fc; font-size: 18px; }
-.config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 16px; }
-.config-item { background: rgba(255,255,255,0.1); padding: 12px; border-radius: 6px; }
-.config-item .label { font-size: 11px; color: #93c5fd; text-transform: uppercase; }
-.config-item .value { font-size: 18px; font-weight: 600; margin-top: 4px; }
-
-.stock-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
-.stock-table th { background: #f1f5f9; padding: 10px 12px; text-align: left; font-weight: 600; border-bottom: 2px solid #e2e8f0; }
-.stock-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
-.stock-table tr:hover { background: #f8fafc; }
-.stock-table tr.selected { background: #eff6ff; }
-
-.state-badge { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
-.state-waiting-gc { background: #fef3c7; color: #92400e; }
-.state-waiting-pullback { background: #dbeafe; color: #1e40af; }
-.state-ready-buy { background: #dcfce7; color: #166534; }
-.state-buy-interest { background: #fed7aa; color: #9a3412; border: 1px solid #fb923c; }
-.state-optimal-buy { background: #fef08a; color: #854d0e; border: 2px solid #eab308; font-weight: 700; }
-.state-in-position { background: #f3e8ff; color: #7c3aed; }
-
-/* 재무 필터 상태 */
-.fin-pass { background: #d1fae5; color: #065f46; }
-.fin-fail { background: #fee2e2; color: #991b1b; }
-.fin-turnaround { background: #fef3c7; color: #92400e; border: 1px dashed #f59e0b; }
-.fin-pending { background: #f1f5f9; color: #64748b; }
-.fin-error { background: #fecaca; color: #991b1b; }
-
-.indicator { font-family: ui-monospace, monospace; font-size: 12px; }
-.indicator.bullish { color: #16a34a; }
-.indicator.bearish { color: #dc2626; }
-
-.tabs { display: flex; gap: 4px; margin-bottom: 16px; }
-.tab { padding: 10px 20px; background: #f1f5f9; border: none; border-radius: 6px 6px 0 0; cursor: pointer; font-weight: 500; }
-.tab.active { background: #3b82f6; color: white; }
-.tab-content { display: none; }
-.tab-content.active { display: block; }
-
-.stats-row { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px; }
-.stat-card { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: center; }
-.stat-card .number { font-size: 28px; font-weight: 700; color: #1e293b; }
-.stat-card .label { font-size: 12px; color: #64748b; margin-top: 4px; }
-
-.btn-add { background: #dcfce7; color: #166534; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
-.btn-add:hover { background: #bbf7d0; }
-.btn-add.added { background: #e2e8f0; color: #64748b; cursor: default; }
-.btn-delete { background: #fecaca; color: #991b1b; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.btn-delete:hover { background: #fca5a5; }
-.btn-refresh { background: #dbeafe; color: #1e40af; }
-.btn-refresh:hover { background: #bfdbfe; }
-
-.history-section { margin-top: 24px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; }
-.history-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.history-header h3 { margin: 0; font-size: 16px; }
-.history-actions { display: flex; gap: 8px; }
-.active-toggle { cursor: pointer; }
-.active-toggle.active { color: #16a34a; }
-.active-toggle.inactive { color: #9ca3af; }
-.loading { opacity: 0.6; pointer-events: none; }
-{% endblock %}
-
-{% block content %}
-<h1>매수 전략 (골든크로스)</h1>
-<p>MA55/MA165 골든크로스 + Stochastic 눌림목 매수 전략</p>
-
-<section class="strategy-info">
-  <h2>전략 개요</h2>
-  <p><strong>MA55/MA165 골든크로스</strong> 발생 후 Stochastic 과매도 구간에서 매수하는 중기 추세추종 전략</p>
-
-  <div class="strategy-flow">
-    <span class="step">MA55 > MA165<br><small>골든크로스</small></span>
-    <span class="arrow">→</span>
-    <span class="step">K ≥ 50<br><small>GC 활성</small></span>
-    <span class="arrow">→</span>
-    <span class="step">K 30~50<br><small>눌림목 대기</small></span>
-    <span class="arrow">→</span>
-    <span class="step" style="background: rgba(22,163,74,0.2); border: 1px solid #16a34a;">K < 30<br><small>매수 관심</small></span>
-    <span class="arrow">→</span>
-    <span class="step" style="background: rgba(251,146,60,0.3); border: 1px solid #fb923c;">2개 조건↑<br><small>매수 관심</small></span>
-    <span class="arrow">→</span>
-    <span class="step" style="background: rgba(234,179,8,0.4); border: 2px solid #eab308;">3개 조건<br><small>매수 적기</small></span>
-  </div>
-
-  <p style="margin-top: 16px; font-size: 13px; color: #bae6fd;">
-    <strong>매수 적기 3가지 조건:</strong>
-    ① Stoch K < 30 (과매도)&nbsp;&nbsp;
-    ② MA갭 0~8% (건전한 추세)&nbsp;&nbsp;
-    ③ K > D (모멘텀 전환, 선택적)
-  </p>
-
-  <div class="config-grid">
-    <div class="config-item">
-      <div class="label">이평선</div>
-      <div class="value">MA55 / MA165</div>
-    </div>
-    <div class="config-item">
-      <div class="label">Stochastic</div>
-      <div class="value">K(14), D(3)</div>
-    </div>
-    <div class="config-item">
-      <div class="label">MA갭 허용</div>
-      <div class="value">0% ~ 8%</div>
-    </div>
-    <div class="config-item">
-      <div class="label">손절 / 익절</div>
-      <div class="value">-7% / +20%</div>
-    </div>
-    <div class="config-item">
-      <div class="label">트레일링 스탑</div>
-      <div class="value">+15%시 7%</div>
-    </div>
-    <div class="config-item">
-      <div class="label">최대 보유</div>
-      <div class="value">60일</div>
-    </div>
-  </div>
-</section>
-
-<section>
-  <h2>종목 스크리닝</h2>
-  <div class="row">
-    <button onclick="scanGoldenCross()">골든크로스 스캔</button>
-    <button onclick="applyFinancialFilter()" style="background: #7c3aed; color: white;">재무 필터 (2차)</button>
-    <button onclick="scanStocks()" class="secondary">전체 종목 스캔</button>
-    <button onclick="refreshUniverse()" class="secondary">유니버스 갱신</button>
-  </div>
-  <div class="row" style="margin-top: 8px;">
-    <label style="font-size: 12px;">Stoch 임계값:</label>
-    <input id="stoch_threshold" type="number" value="30" min="10" max="50" style="width: 60px;" />
-    <label style="font-size: 12px; margin-left: 12px;">
-      <input type="checkbox" id="gc_only" checked /> GC 활성만
-    </label>
-</div>
-
-
-  <div class="stats-row" id="stats_row" style="display:none; margin-top: 16px;">
-    <div class="stat-card">
-      <div class="number" id="stat_total">-</div>
-      <div class="label">전체 종목</div>
-    </div>
-    <div class="stat-card">
-      <div class="number" id="stat_gc">-</div>
-      <div class="label">골든크로스</div>
-    </div>
-    <div class="stat-card">
-      <div class="number" id="stat_pullback">-</div>
-      <div class="label">눌림목 대기</div>
-    </div>
-    <div class="stat-card">
-      <div class="number" id="stat_ready">-</div>
-      <div class="label">매수 관심</div>
-    </div>
-    <div class="stat-card" style="border: 2px solid #eab308;">
-      <div class="number" id="stat_optimal" style="color: #854d0e;">-</div>
-      <div class="label">매수 적기</div>
-    </div>
-    <div class="stat-card">
-      <div class="number" id="stat_position">-</div>
-      <div class="label">보유 중</div>
-    </div>
-  </div>
-
-  <!-- 재무 필터 통계 -->
-  <div class="stats-row" id="fin_stats_row" style="display:none; margin-top: 8px;">
-    <div class="stat-card" style="border: 1px solid #10b981;">
-      <div class="number" id="stat_fin_pass" style="color: #065f46;">-</div>
-      <div class="label">재무 통과</div>
-    </div>
-    <div class="stat-card" style="border: 1px solid #f59e0b;">
-      <div class="number" id="stat_fin_turnaround" style="color: #92400e;">-</div>
-      <div class="label">턴어라운드</div>
-    </div>
-    <div class="stat-card">
-      <div class="number" id="stat_fin_fail">-</div>
-      <div class="label">재무 미통과</div>
-    </div>
-    <div class="stat-card">
-      <div class="number" id="stat_fin_pending" style="color: #64748b;">-</div>
-      <div class="label">미조회</div>
-    </div>
-  </div>
-
-  <!-- Golden Cross 스캔 결과 -->
-  <div id="gc_scan_container" style="display:none; margin-top: 16px;">
-    <div class="tabs">
-      <button class="tab active" onclick="showGcTab('BUY_TARGETS')" style="background: #bbf7d0; color: #166534;">매수 대상</button>
-      <button class="tab" onclick="showGcTab('OPTIMAL_BUY')" style="background: #fef08a; color: #854d0e;">매수 적기</button>
-      <button class="tab" onclick="showGcTab('READY_TO_BUY')">매수 관심</button>
-      <button class="tab" onclick="showGcTab('FIN_PASS')" style="background: #d1fae5; color: #065f46;">재무 통과</button>
-      <button class="tab" onclick="showGcTab('FIN_TURNAROUND')" style="background: #fef3c7; color: #92400e;">턴어라운드</button>
-      <button class="tab" onclick="showGcTab('all')">전체</button>
-    </div>
-
-    <table class="stock-table">
-      <thead>
-        <tr>
-          <th style="width: 40px;"></th>
-          <th>종목코드</th>
-          <th>종목명</th>
-          <th>기술</th>
-          <th>재무</th>
-          <th>현재가</th>
-          <th>MA Gap</th>
-          <th>Stoch K/D</th>
-          <th>매출YoY</th>
-          <th>영업이익률</th>
-        </tr>
-      </thead>
-      <tbody id="gc_scan_table_body">
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Universe 종목 리스트 (종목 스캔) -->
-  <div id="universe_list_container" style="display:none; margin-top: 16px;">
-    <div class="tabs">
-      <button class="tab active" onclick="showUniverseTab('all')">전체</button>
-      <button class="tab" onclick="showUniverseTab('KOSPI')">KOSPI</button>
-      <button class="tab" onclick="showUniverseTab('KOSDAQ')">KOSDAQ</button>
-    </div>
-
-    <table class="stock-table">
-      <thead>
-        <tr>
-          <th>종목코드</th>
-          <th>종목명</th>
-          <th>시장</th>
-          <th>섹터</th>
-          <th>시가총액</th>
-          <th>현재가</th>
-          <th>거래량</th>
-          <th>점수</th>
-        </tr>
-      </thead>
-      <tbody id="universe_table_body">
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Symbol States 종목 리스트 (전략 종목 상태) -->
-  <div id="stock_list_container" style="display:none; margin-top: 16px;">
-    <div class="tabs">
-      <button class="tab active" onclick="showTab('all')">전체</button>
-      <button class="tab" onclick="showTab('ready')">매수 대기</button>
-      <button class="tab" onclick="showTab('pullback')">눌림목 대기</button>
-      <button class="tab" onclick="showTab('position')">보유 중</button>
-    </div>
-
-    <table class="stock-table">
-      <thead>
-        <tr>
-          <th>종목코드</th>
-          <th>종목명</th>
-          <th>상태</th>
-          <th>현재가</th>
-          <th>MA55</th>
-          <th>MA165</th>
-          <th>Stoch K</th>
-          <th>수익률</th>
-        </tr>
-      </thead>
-      <tbody id="stock_table_body">
-      </tbody>
-    </table>
-  </div>
-
-  <pre id="scan_output" style="margin-top: 12px;">종목 스캔 버튼을 클릭하세요</pre>
-</section>
-
-<!-- 분석 히스토리 섹션 -->
-<section class="history-section">
-  <div class="history-header">
-    <h3>관심 종목 히스토리</h3>
-    <div class="history-actions">
-      <button class="btn-refresh" onclick="refreshBuyHistory()">활성 종목 갱신</button>
-    </div>
-  </div>
-  <table class="stock-table" style="margin-top: 0;">
-    <thead>
-      <tr>
-        <th style="width: 30px;"></th>
-        <th>종목코드</th>
-        <th>종목명</th>
-        <th>상태</th>
-        <th>현재가</th>
-        <th>MA Gap</th>
-        <th>Stoch K</th>
-        <th>Stoch D</th>
-        <th>분석시간</th>
-        <th style="width: 60px;"></th>
-      </tr>
-    </thead>
-    <tbody id="buy_history_body">
-      <tr><td colspan="10" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
-    </tbody>
-  </table>
-</section>
-
-{% endblock %}
-
-{% block extra_scripts %}
 let allStocks = [];
 let universeStocks = [];
 let gcScanStocks = [];
@@ -317,6 +7,414 @@ let addedSymbols = new Set();
 let currentFilter = 'all';
 let universeFilter = 'all';
 let gcFilter = 'all';
+
+// MA5 전략 관련 변수
+let ma5ScanStocks = [];
+let ma5Filter = 'BREAKOUT';
+
+// 스캔 진행 상태
+let scanInProgress = { gc: false, ma5: false };
+
+// 캐시 설정
+const CACHE_SCHEMA_VERSION = 1;
+const CACHE_TTL_MS = 3600000;  // 1시간
+const SCAN_COOLDOWNS = {
+  gc: 300000,   // 5분
+  ma5: 180000   // 3분
+};
+const REFRESH_COOLDOWN_MS = 60000;  // 1분
+
+const BUY_STORAGE_KEYS = {
+  gc: 'buyStrategy.gcScan',
+  ma5: 'buyStrategy.ma5Scan',
+  refresh: 'buyStrategy.lastRefresh'
+};
+
+// 전략 탭 전환
+const showStrategy = (strategy) => {
+  document.querySelectorAll('.strategy-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.strategy-content').forEach(c => c.classList.remove('active'));
+
+  if (strategy === 'golden_cross') {
+    document.querySelector('.strategy-tab:not(.ma5)').classList.add('active');
+    document.getElementById('strategy_golden_cross').classList.add('active');
+  } else {
+    document.querySelector('.strategy-tab.ma5').classList.add('active');
+    document.getElementById('strategy_ma5_breakout').classList.add('active');
+  }
+};
+
+const formatDateTime = (dateStr) => {
+  if (!dateStr) return '-';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '-';
+  return date.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+};
+
+// 상대 시간 표시 (안전한 파싱)
+const getRelativeTime = (dateStr) => {
+  if (!dateStr) return null;
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return null;
+
+  const diff = Date.now() - date.getTime();
+  if (diff < 0) return '잠시 후';
+
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (mins < 1) return '방금 전';
+  if (mins < 60) return `${mins}분 전`;
+  if (hours < 24) return `${hours}시간 전`;
+  return `${days}일 전`;
+};
+
+// 캐시 유효성 검사
+const isCacheStale = (savedAt) => {
+  if (!savedAt) return true;
+  return (Date.now() - savedAt) > CACHE_TTL_MS;
+};
+
+// 스캔 가능 여부 확인
+const canScan = (scanType) => {
+  if (scanInProgress[scanType]) {
+    return { allowed: false, reason: '스캔 진행 중...' };
+  }
+
+  const cached = loadLastScan(BUY_STORAGE_KEYS[scanType]);
+  if (!cached?.savedAt) return { allowed: true };
+
+  const elapsed = Date.now() - cached.savedAt;
+  const cooldown = SCAN_COOLDOWNS[scanType] || 300000;
+
+  if (elapsed < cooldown) {
+    const remaining = Math.ceil((cooldown - elapsed) / 60000);
+    return {
+      allowed: false,
+      reason: `${remaining}분 후 재검색 가능`,
+      forceAllowed: true
+    };
+  }
+  return { allowed: true };
+};
+
+const updateLastSearchLabel = (elementId, timestamp, count, isStale = false) => {
+  const label = document.getElementById(elementId);
+  if (!label) return;
+
+  const timeText = timestamp ? formatDateTime(timestamp) : '-';
+  const relTime = getRelativeTime(timestamp);
+  const countText = typeof count === 'number' ? `${count}개 종목` : '';
+
+  // 스타일 클래스 적용
+  label.classList.toggle('stale', isStale);
+
+  label.innerHTML = `
+    <span class="time-badge">${relTime || '알 수 없음'}</span>
+    <span>마지막 검색: ${timeText} ${countText ? `- ${countText}` : ''}</span>
+    <span class="cache-indicator ${isStale ? 'cached' : 'fresh'}">${isStale ? '캐시됨' : '최신'}</span>
+  `;
+};
+
+const saveLastScan = (key, data, timestamp) => {
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      savedAt: Date.now(),
+      timestamp,
+      data
+    }));
+  } catch (e) {
+    console.warn('Failed to save last scan:', e);
+  }
+};
+
+const loadLastScan = (key) => {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+
+    const cached = JSON.parse(raw);
+
+    // 구버전 형식 호환
+    if (!cached.schemaVersion) {
+      return { data: cached.data, timestamp: cached.timestamp, isStale: true };
+    }
+
+    if (cached.schemaVersion !== CACHE_SCHEMA_VERSION) {
+      localStorage.removeItem(key);
+      return null;
+    }
+
+    const isStale = isCacheStale(cached.savedAt);
+    return { ...cached, isStale };
+  } catch (e) {
+    console.warn('Failed to load last scan:', e);
+    return null;
+  }
+};
+
+// 갱신 결과 저장/로드
+const saveLastRefresh = (data) => {
+  try {
+    // 메타데이터만 저장 (items 배열 제외하여 localStorage 용량 절약)
+    localStorage.setItem(BUY_STORAGE_KEYS.refresh, JSON.stringify({
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      savedAt: Date.now(),
+      refreshedAt: data.refreshedAt,
+      updated_count: data.updated_count
+    }));
+  } catch (e) {
+    console.warn('Failed to save last refresh:', e);
+  }
+};
+
+const loadLastRefresh = () => {
+  try {
+    const raw = localStorage.getItem(BUY_STORAGE_KEYS.refresh);
+    if (!raw) return null;
+
+    const cached = JSON.parse(raw);
+
+    // 스키마 불일치 시 제거
+    if (!cached.schemaVersion || cached.schemaVersion !== CACHE_SCHEMA_VERSION) {
+      localStorage.removeItem(BUY_STORAGE_KEYS.refresh);
+      return null;
+    }
+
+    const isStale = isCacheStale(cached.savedAt);
+    return {
+      data: { refreshedAt: cached.refreshedAt, updated_count: cached.updated_count },
+      savedAt: cached.savedAt,
+      isStale
+    };
+  } catch (e) {
+    console.warn('Failed to load last refresh:', e);
+    return null;
+  }
+};
+
+const updateLastRefreshLabel = (data, isStale = false) => {
+  const label = document.getElementById("buy_last_refresh");
+  if (!label) return;
+
+  const refreshedAt = data?.refreshedAt;
+  const timeText = formatDateTime(refreshedAt);
+  const relTime = getRelativeTime(refreshedAt);
+  const countText = data?.updated_count != null ? `${data.updated_count}개 종목` : '';
+
+  label.classList.toggle('stale', isStale);
+
+  const mainText = countText
+    ? `마지막 갱신: ${timeText} - ${countText} 갱신됨`
+    : `마지막 갱신: ${timeText}`;
+
+  label.innerHTML = `
+    <span class="time-badge">${relTime || '알 수 없음'}</span>
+    <span>${mainText}</span>
+    <span class="cache-indicator ${isStale ? 'cached' : 'fresh'}">${isStale ? '캐시됨' : '최신'}</span>
+  `;
+};
+
+// MA5 돌파 스캔 (유니버스 전체)
+const scanMA5Breakout = async (forceRefresh = false) => {
+  // 중복 클릭 방지
+  if (!forceRefresh) {
+    const check = canScan('ma5');
+    if (!check.allowed) {
+      if (check.forceAllowed) {
+        if (!confirm(`${check.reason}\n강제로 다시 스캔하시겠습니까?`)) {
+          return;
+        }
+      } else {
+        alert(check.reason);
+        return;
+      }
+    }
+  }
+
+  scanInProgress.ma5 = true;
+  document.getElementById("ma5_scan_output").textContent = "MA5 돌파 스캔 중...";
+
+  const shortPeriod = parseInt(document.getElementById("ma5_short_period").value) || 5;
+  const longPeriod = parseInt(document.getElementById("ma5_long_period").value) || 300;
+  const envelopePct = parseFloat(document.getElementById("ma5_envelope_pct").value) || 0.7;
+  const useVolume = document.getElementById("ma5_use_volume").checked;
+
+  const url = `/api/v1/strategies/universe/ma5-breakout-scan?short_period=${shortPeriod}&long_period=${longPeriod}&envelope_pct=${envelopePct}&use_volume_filter=${useVolume}`;
+
+  try {
+    const response = await fetch(url);
+    const result = await response.json();
+
+    if (result.success && result.data) {
+      displayMA5ScanResults(result.data);
+      document.getElementById("ma5_scan_output").textContent =
+        `스캔 완료: ${result.data.stocks?.length || 0}개 종목 발견 (총 ${result.data.total_scanned}개 스캔)`;
+    } else {
+      document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${result.message || 'Unknown error'}`;
+    }
+  } catch (e) {
+    console.error('MA5 scan failed:', e);
+    document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${e.message}`;
+  } finally {
+    scanInProgress.ma5 = false;
+  }
+};
+
+// MA5 돌파 직접 입력 스캔
+const scanMA5Symbols = async (forceRefresh = false) => {
+  // 중복 클릭 방지
+  if (!forceRefresh && scanInProgress.ma5) {
+    alert('스캔 진행 중...');
+    return;
+  }
+
+  const symbolsText = document.getElementById("ma5_symbols").value.trim();
+  if (!symbolsText) {
+    alert("종목코드를 입력하세요.");
+    return;
+  }
+
+  const symbolList = symbolsText.split(/[\n,]/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+    .map(symbol => ({ symbol, name: null, market: "UNKNOWN" }));
+
+  if (symbolList.length === 0) {
+    alert("유효한 종목코드가 없습니다.");
+    return;
+  }
+
+  scanInProgress.ma5 = true;
+  document.getElementById("ma5_scan_output").textContent = `${symbolList.length}개 종목 MA5 스캔 중...`;
+
+  const shortPeriod = parseInt(document.getElementById("ma5_short_period").value) || 5;
+  const longPeriod = parseInt(document.getElementById("ma5_long_period").value) || 300;
+  const envelopePct = parseFloat(document.getElementById("ma5_envelope_pct").value) || 0.7;
+  const useVolume = document.getElementById("ma5_use_volume").checked;
+
+  try {
+    const response = await fetch(
+      `/api/v1/strategies/universe/ma5-breakout-scan-symbols?short_period=${shortPeriod}&long_period=${longPeriod}&envelope_pct=${envelopePct}&use_volume_filter=${useVolume}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(symbolList)
+      }
+    );
+
+    const result = await response.json();
+    if (result.success && result.data) {
+      displayMA5ScanResults(result.data);
+      document.getElementById("ma5_scan_output").textContent =
+        `스캔 완료: ${result.data.stocks?.length || 0}개 종목 발견`;
+    } else {
+      document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${result.message || 'Unknown error'}`;
+    }
+  } catch (e) {
+    console.error('MA5 symbol scan failed:', e);
+    document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${e.message}`;
+  } finally {
+    scanInProgress.ma5 = false;
+  }
+};
+
+// MA5 스캔 결과 표시
+const displayMA5ScanResults = (data, options = { persist: true }) => {
+  ma5ScanStocks = data.stocks || [];
+
+  document.getElementById("ma5_scan_container").style.display = "block";
+  document.getElementById("ma5_stats_row").style.display = "flex";
+
+  // 통계 계산
+  const breakoutCount = ma5ScanStocks.filter(s => s.ma5_state === 'BREAKOUT').length;
+  const aboveCount = ma5ScanStocks.filter(s => s.ma5_state === 'ABOVE').length;
+  const belowCount = ma5ScanStocks.filter(s => s.ma5_state === 'BELOW').length;
+
+  document.getElementById("ma5_stat_total").textContent = data.total_scanned || ma5ScanStocks.length;
+  document.getElementById("ma5_stat_breakout").textContent = breakoutCount;
+  document.getElementById("ma5_stat_above").textContent = aboveCount;
+  document.getElementById("ma5_stat_below").textContent = belowCount;
+
+  ma5Filter = 'BREAKOUT';
+  renderMA5ScanTable(ma5ScanStocks);
+
+  const scanTime = data.scan_time || new Date().toISOString();
+  if (options.persist) {
+    saveLastScan(BUY_STORAGE_KEYS.ma5, data, scanTime);
+  }
+  updateLastSearchLabel("ma5_last_search", scanTime, data.stocks?.length, !options.persist);
+};
+
+// MA5 테이블 렌더링
+const renderMA5ScanTable = (stocks) => {
+  let filtered;
+  if (ma5Filter === 'all') {
+    filtered = stocks;
+  } else if (ma5Filter === 'BREAKOUT') {
+    filtered = stocks.filter(s => s.ma5_state === 'BREAKOUT');
+  } else if (ma5Filter === 'ABOVE') {
+    filtered = stocks.filter(s => s.ma5_state === 'ABOVE' || s.ma5_state === 'BREAKOUT');
+  } else {
+    filtered = stocks.filter(s => s.ma5_state === ma5Filter);
+  }
+
+  const tbody = document.getElementById("ma5_scan_table_body");
+
+  // 필터 결과가 없으면 안내 메시지 표시
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="9" class="placeholder-message" style="border: none;">
+      해당 조건에 맞는 종목이 없습니다.
+    </td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(stock => {
+    const stateClass = getMA5StateClass(stock.ma5_state);
+    const stateLabel = getMA5StateLabel(stock.ma5_state);
+    const gapClass = stock.gap_ratio > 0 ? 'bullish' : 'bearish';
+    const volRatioClass = stock.volume_ratio >= 1 ? 'bullish' : '';
+
+    return `<tr>
+      <td><strong>${stock.symbol}</strong></td>
+      <td>${stock.name || '-'}</td>
+      <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
+      <td class="indicator">${formatNumber(stock.current_price)}</td>
+      <td class="indicator">${formatNumber(stock.ma5)}</td>
+      <td class="indicator">${formatNumber(stock.ma300)}</td>
+      <td class="indicator">${formatNumber(stock.upper_band)}</td>
+      <td class="indicator ${gapClass}">${stock.gap_ratio?.toFixed(2) || '-'}%</td>
+      <td class="indicator ${volRatioClass}">${stock.volume_ratio?.toFixed(2) || '-'}x</td>
+    </tr>`;
+  }).join('');
+};
+
+const showMA5Tab = (filter) => {
+  ma5Filter = filter;
+  document.querySelectorAll('#ma5_scan_container .tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  renderMA5ScanTable(ma5ScanStocks);
+};
+
+const getMA5StateClass = (state) => {
+  const map = {
+    'BREAKOUT': 'state-ma5-breakout',
+    'ABOVE': 'state-ma5-above',
+    'BELOW': 'state-ma5-below'
+  };
+  return map[state] || '';
+};
+
+const getMA5StateLabel = (state) => {
+  const map = {
+    'BREAKOUT': '돌파',
+    'ABOVE': '상단 위',
+    'BELOW': '상단 아래'
+  };
+  return map[state] || state;
+};
 
 // 페이지 로드 시 히스토리 조회
 const loadBuyHistory = async () => {
@@ -426,9 +524,55 @@ const toggleBuyActive = async (id, event) => {
 };
 
 // 활성 종목 일괄 갱신
-const refreshBuyHistory = async () => {
+// 중복 갱신 방지
+let refreshInProgress = false;
+
+const canRefresh = () => {
+  if (refreshInProgress) {
+    return { allowed: false, reason: '갱신 진행 중...' };
+  }
+
+  const cached = loadLastRefresh();
+  if (!cached?.savedAt) return { allowed: true };
+
+  const elapsed = Date.now() - cached.savedAt;
+  if (elapsed < REFRESH_COOLDOWN_MS) {
+    const remaining = Math.ceil((REFRESH_COOLDOWN_MS - elapsed) / 1000);
+    return {
+      allowed: false,
+      reason: `${remaining}초 후 재갱신 가능`,
+      forceAllowed: true
+    };
+  }
+  return { allowed: true };
+};
+
+const refreshBuyHistory = async (forceRefresh = false) => {
+  // 중복 클릭 방지
+  if (!forceRefresh) {
+    const check = canRefresh();
+    if (!check.allowed) {
+      if (check.forceAllowed) {
+        if (!confirm(`${check.reason}\n강제로 다시 갱신하시겠습니까?`)) {
+          return;
+        }
+      } else {
+        alert(check.reason);
+        return;
+      }
+    }
+  }
+
   const tbody = document.getElementById("buy_history_body");
+  const refreshBtn = document.querySelector('.history-section .btn-refresh');
   tbody.classList.add('loading');
+  refreshInProgress = true;
+
+  // 버튼 비활성화 및 진행 상태 표시
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '갱신 중...';
+  }
 
   try {
     const response = await fetch('/api/v1/strategies/analysis-history/refresh?analysis_type=buy', {
@@ -438,20 +582,42 @@ const refreshBuyHistory = async () => {
     const result = await response.json();
     if (result.success && result.data) {
       // 갱신된 항목들로 기존 데이터 업데이트
-      result.data.items.forEach(updated => {
+      const items = result.data.items || [];
+      items.forEach(updated => {
         const idx = buyHistory.findIndex(h => h.symbol === updated.symbol && h.is_active);
         if (idx >= 0) {
           buyHistory[idx] = updated;
         }
       });
       renderBuyHistoryTable();
-      alert(`${result.data.updated_count}개 종목 갱신 완료`);
+
+      // 갱신 결과 저장 및 라벨 업데이트 (updated_count 기본값 처리)
+      const updatedCount = result.data.updated_count ?? items.length ?? 0;
+      const refreshData = {
+        updated_count: updatedCount,
+        refreshedAt: new Date().toISOString()
+      };
+      saveLastRefresh(refreshData);
+      updateLastRefreshLabel(refreshData, false);
+
+      alert(`${updatedCount}개 종목 갱신 완료`);
+    } else {
+      // API 실패 시 사용자 피드백
+      const errorMsg = result.message || result.error || '알 수 없는 오류';
+      alert(`갱신 실패: ${errorMsg}`);
     }
   } catch (e) {
     console.error('Failed to refresh:', e);
-    alert('갱신 실패');
+    alert(`갱신 실패: ${e.message}`);
   } finally {
     tbody.classList.remove('loading');
+    refreshInProgress = false;
+
+    // 버튼 원래 상태로 복원
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = '활성 종목 갱신';
+    }
   }
 };
 
@@ -492,7 +658,7 @@ const renderBuyHistoryTable = () => {
 
 const scanStocks = async () => {
   document.getElementById("scan_output").textContent = "스캔 중...";
-  const data = await getJson("/api/v1/strategies/universe", null);
+  const data = await getJson("/api/v1/strategies/universe?eligible_only=false&limit=500", null);
   if (data && data.data) {
     displayUniverseStocks(data.data);
     document.getElementById("scan_output").textContent = `${data.data.total_count}개 종목 스캔 완료 (스크리닝 통과: ${data.data.eligible_count}개)`;
@@ -505,23 +671,43 @@ const refreshUniverse = async () => {
 };
 
 // Golden Cross 스캔
-const scanGoldenCross = async () => {
+const scanGoldenCross = async (forceRefresh = false) => {
+  // 중복 클릭 방지
+  if (!forceRefresh) {
+    const check = canScan('gc');
+    if (!check.allowed) {
+      if (check.forceAllowed) {
+        if (!confirm(`${check.reason}\n강제로 다시 스캔하시겠습니까?`)) {
+          return;
+        }
+      } else {
+        alert(check.reason);
+        return;
+      }
+    }
+  }
+
+  scanInProgress.gc = true;
   document.getElementById("scan_output").textContent = "골든크로스 스캔 중... (OHLCV 데이터 조회 및 지표 계산)";
 
-  const stochThreshold = document.getElementById("stoch_threshold").value || 30;
-  const gcOnly = document.getElementById("gc_only").checked;
-  const includeEtf = true; // always include ETF
+  try {
+    const stochThreshold = document.getElementById("stoch_threshold").value || 30;
+    const gcOnly = document.getElementById("gc_only").checked;
+    const includeEtf = true; // always include ETF
 
-  const url = `/api/v1/strategies/universe/golden-cross-scan?stoch_threshold=${stochThreshold}&gc_only=${gcOnly}&include_etf=${includeEtf}`;
-  const data = await getJson(url, null);
+    const url = `/api/v1/strategies/universe/golden-cross-scan?stoch_threshold=${stochThreshold}&gc_only=${gcOnly}&include_etf=${includeEtf}`;
+    const data = await getJson(url, null);
 
-  if (data && data.data) {
-    displayGcScanResults(data.data);
-    const scanTime = formatTime(data.data.scan_time);
-    const etfLabel = ''; // ETF always included
-    document.getElementById("scan_output").textContent =
-      `스캔 완료${etfLabel} (${scanTime}): ${data.data.stocks?.length || 0}개 종목 발견 ` +
-      `(총 ${data.data.total_scanned}개 스캔, 오류 ${data.data.errors?.length || 0}개)`;
+    if (data && data.data) {
+      displayGcScanResults(data.data);
+      const scanTime = formatTime(data.data.scan_time);
+      const etfLabel = ''; // ETF always included
+      document.getElementById("scan_output").textContent =
+        `스캔 완료${etfLabel} (${scanTime}): ${data.data.stocks?.length || 0}개 종목 발견 ` +
+        `(총 ${data.data.total_scanned}개 스캔, 오류 ${data.data.errors?.length || 0}개)`;
+    }
+  } finally {
+    scanInProgress.gc = false;
   }
 };
 
@@ -589,7 +775,7 @@ const applyFinancialFilter = async () => {
 };
 
 // Golden Cross 스캔 결과 표시
-const displayGcScanResults = (data) => {
+const displayGcScanResults = (data, options = { persist: true }) => {
   gcScanStocks = data.stocks || [];
 
   // 원본 메타데이터 저장 (재무 필터 적용 시 사용)
@@ -636,6 +822,12 @@ const displayGcScanResults = (data) => {
   // 기본값: 매수 대상 종목만 표시
   gcFilter = 'BUY_TARGETS';
   renderGcScanTable(gcScanStocks);
+
+  const scanTime = data.scan_time || new Date().toISOString();
+  if (options.persist) {
+    saveLastScan(BUY_STORAGE_KEYS.gc, data, scanTime);
+  }
+  updateLastSearchLabel("gc_last_search", scanTime, data.stocks?.length, !options.persist);
 };
 
 // Golden Cross 테이블 렌더링
@@ -656,6 +848,15 @@ const renderGcScanTable = (stocks) => {
   }
 
   const tbody = document.getElementById("gc_scan_table_body");
+
+  // 필터 결과가 없으면 안내 메시지 표시
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="10" class="placeholder-message" style="border: none;">
+      해당 조건에 맞는 종목이 없습니다.
+    </td></tr>`;
+    return;
+  }
+
   tbody.innerHTML = filtered.map(stock => {
     const stateClass = getGcStateClass(stock.gc_state);
     const stateLabel = getGcStateLabel(stock.gc_state);
@@ -885,7 +1086,9 @@ const formatNumber = (num) => {
 
 const formatTime = (dateStr) => {
   if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' });
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '-';
+  return date.toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' });
 };
 
 const formatMarketCap = (cap) => {
@@ -904,6 +1107,56 @@ const formatVolume = (vol) => {
   return num.toLocaleString();
 };
 
-// 페이지 로드 시 히스토리 로드
-document.addEventListener('DOMContentLoaded', loadBuyHistory);
-{% endblock %}
+const loadSavedScans = () => {
+  const gcSaved = loadLastScan(BUY_STORAGE_KEYS.gc);
+  if (gcSaved?.data) {
+    // persist: false로 캐시 데이터 표시 (savedAt 갱신 방지)
+    displayGcScanResults(gcSaved.data, { persist: false });
+    updateLastSearchLabel("gc_last_search", gcSaved.timestamp, gcSaved.data.stocks?.length, gcSaved.isStale);
+    const staleText = gcSaved.isStale ? ' (캐시됨)' : '';
+    document.getElementById("scan_output").textContent =
+      `마지막 스캔${staleText} (${formatDateTime(gcSaved.timestamp)}): ` +
+      `${gcSaved.data.stocks?.length || 0}개 종목`;
+  } else {
+    // 저장된 결과 없음 - 안내 메시지 표시
+    document.getElementById("gc_scan_container").style.display = "block";
+    document.getElementById("gc_scan_table_body").innerHTML = `
+      <tr><td colspan="10" class="placeholder-message" style="border: none;">
+        저장된 스캔 결과가 없습니다.<br>
+        <small style="color: #94a3b8;">골든크로스 스캔 버튼을 클릭하세요.</small>
+      </td></tr>
+    `;
+  }
+
+  const ma5Saved = loadLastScan(BUY_STORAGE_KEYS.ma5);
+  if (ma5Saved?.data) {
+    // persist: false로 캐시 데이터 표시 (savedAt 갱신 방지)
+    displayMA5ScanResults(ma5Saved.data, { persist: false });
+    updateLastSearchLabel("ma5_last_search", ma5Saved.timestamp, ma5Saved.data.stocks?.length, ma5Saved.isStale);
+    const staleText = ma5Saved.isStale ? ' (캐시됨)' : '';
+    document.getElementById("ma5_scan_output").textContent =
+      `마지막 스캔${staleText} (${formatDateTime(ma5Saved.timestamp)}): ` +
+      `${ma5Saved.data.stocks?.length || 0}개 종목`;
+  } else {
+    // 저장된 결과 없음 - 안내 메시지 표시
+    document.getElementById("ma5_scan_container").style.display = "block";
+    document.getElementById("ma5_scan_table_body").innerHTML = `
+      <tr><td colspan="9" class="placeholder-message" style="border: none;">
+        저장된 스캔 결과가 없습니다.<br>
+        <small style="color: #94a3b8;">MA5 돌파 스캔 버튼을 클릭하세요.</small>
+      </td></tr>
+    `;
+  }
+};
+
+// 페이지 로드 시 히스토리 로드 + 마지막 스캔 복원
+document.addEventListener('DOMContentLoaded', () => {
+  loadBuyHistory();
+  loadSavedScans();
+
+  // localStorage에서 마지막 갱신 정보 로드
+  const cachedRefresh = loadLastRefresh();
+  if (cachedRefresh?.data) {
+    updateLastRefreshLabel(cachedRefresh.data, cachedRefresh.isStale);
+  }
+});

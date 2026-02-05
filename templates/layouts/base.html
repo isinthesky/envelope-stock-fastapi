@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Stock API Admin{% endblock %}</title>
+    <link rel="stylesheet" href="/static/styles/mypage.css" />
+    {% block extra_css_links %}{% endblock %}
+  <style>
+    {% block extra_styles %}{% endblock %}
+  </style>
+</head>
+<body>
+  <button class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true">Hide menu</button>
+  <div class="sidebar-backdrop" data-sidebar-backdrop="1"></div>
+  <div class="layout">
+    {% include "layouts/_sidebar.html" %}
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script>
+    const SIDEBAR_STORAGE_KEY = "sidebarHidden";
+    const parseJson = (text) => {
+      try { return JSON.parse(text); } catch (e) { return text; }
+    };
+
+    async function request(method, url, body, outputId) {
+      const opts = { method, headers: { "Content-Type": "application/json" } };
+      if (body && (method === "POST" || method === "PATCH" || method === "DELETE")) {
+        opts.body = JSON.stringify(body);
+      }
+      try {
+        const res = await fetch(url, opts);
+        const raw = await res.text();
+        const data = parseJson(raw);
+        if (outputId) {
+          document.getElementById(outputId).textContent = JSON.stringify(data, null, 2);
+        }
+        return data;
+      } catch (e) {
+        if (outputId) {
+          document.getElementById(outputId).textContent = 'Error: ' + e.message;
+        }
+        throw e;
+      }
+    }
+
+    const getJson = (url, outputId) => request("GET", url, null, outputId);
+    const postJson = (url, body, outputId) => request("POST", url, body, outputId);
+    const patchJson = (url, body, outputId) => request("PATCH", url, body, outputId);
+    const deleteJson = (url, outputId) => request("DELETE", url, null, outputId);
+
+    const sidebarToggle = document.querySelector(".sidebar-toggle");
+    const sidebarBackdrop = document.querySelector("[data-sidebar-backdrop]");
+    const isMobile = () => window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+
+    const setSidebarHidden = (hidden) => {
+      document.body.classList.toggle("sidebar-hidden", hidden);
+      if (sidebarToggle) {
+        sidebarToggle.setAttribute("aria-expanded", (!hidden).toString());
+        sidebarToggle.textContent = hidden ? "Show menu" : "Hide menu";
+      }
+    };
+
+    const loadSidebarPreference = () => {
+      try {
+        const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+        if (stored === null) {
+          // Default: mobile = hidden, desktop = shown
+          setSidebarHidden(isMobile());
+          return;
+        }
+        setSidebarHidden(stored === "true");
+      } catch (e) {
+        setSidebarHidden(isMobile());
+      }
+    };
+
+    const saveSidebarPreference = (hidden) => {
+      try {
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, hidden ? "true" : "false");
+      } catch (e) {
+        return;
+      }
+    };
+
+    if (sidebarToggle) {
+      sidebarToggle.addEventListener("click", () => {
+        const isHidden = document.body.classList.contains("sidebar-hidden");
+        const nextHidden = !isHidden;
+        setSidebarHidden(nextHidden);
+        saveSidebarPreference(nextHidden);
+      });
+    }
+
+
+
+    if (sidebarBackdrop) {
+      sidebarBackdrop.addEventListener("click", () => {
+        setSidebarHidden(true);
+        saveSidebarPreference(true);
+      });
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        const isHidden = document.body.classList.contains("sidebar-hidden");
+        if (!isHidden) {
+          setSidebarHidden(true);
+          saveSidebarPreference(true);
+        }
+      }
+    });
+
+    loadSidebarPreference();
+
+    {% block extra_scripts %}{% endblock %}
+  </script>
+  {% block extra_script_tags %}{% endblock %}
+</body>
+</html>

@@ -213,6 +213,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Static files (CSS)
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+app.mount("/static/styles", StaticFiles(directory=str(BASE_DIR / "static" / "styles")), name="styles")
+app.mount("/static/js", StaticFiles(directory=str(BASE_DIR / "static" / "js")), name="js")
+
 # CORS 미들웨어 추가
 app.add_middleware(
     CORSMiddleware,
