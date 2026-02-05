@@ -671,8 +671,16 @@ class StrategyService:
                         break
 
             if rows:
-                await universe_repo.create_many(rows, session=session)
+                # seed는 별도 세션에서 커밋해서 worker 세션에서도 즉시 보이게 함
+                async with AsyncSessionLocal() as seed_session:
+                    seed_repo = StockUniverseRepository(seed_session)
+                    await seed_repo.create_many(rows, session=seed_session)
+                    await seed_session.commit()
                 seeded = len(rows)
+
+                # 현재 세션에서 이후 조회가 최신 커밋을 볼 수 있도록 트랜잭션 스냅샷을 갱신
+                # (refresh_universe는 이 시점에 쓰기 작업이 없으므로 rollback은 안전)
+                await session.rollback()
 
         # 현재는 "활성 + 제외 아님" 종목 중 상위 500개를 갱신 대상으로 사용
         target_stocks = await universe_repo.get_active_stocks(limit=500, session=session)
@@ -691,15 +699,27 @@ class StrategyService:
         market_data_service = MarketDataService(kis_client, redis_client)
         naver_client = get_naver_stock_client()
 
+        import logging, time
+        logger = logging.getLogger(__name__)
+        started_at = time.monotonic()
+
+        # timeout은 대기 무한을 피하기 위한 운영 안전장치
+        kis_timeout = float(getattr(settings, "kis_api_timeout", 10))
+        naver_timeout = 10.0
+        ohlcv_timeout = max(20.0, kis_timeout * 3)
+        MAX_ERRORS = 50
+
         concurrency = max(1, min(settings.scan_concurrency_limit, 20))
+        logger.info(f"[universe.refresh] start: target={len(target_stocks)} seeded={seeded} concurrency={concurrency}")
 
         work_queue: asyncio.Queue[tuple[int, object]] = asyncio.Queue()
         for idx, stock in enumerate(target_stocks):
             work_queue.put_nowait((idx, stock))
 
-        async def worker() -> tuple[int, int, list[str]]:
+        async def worker() -> tuple[int, int, int, list[str]]:
             updated = 0
             screened = 0
+            error_count = 0
             errors: list[str] = []
 
             async with AsyncSessionLocal() as worker_session:
@@ -719,21 +739,42 @@ class StrategyService:
 
                     try:
                         # 1) 현재가/누적거래량
-                        price = await market_data_service.get_current_price(symbol, use_cache=True)
+                        price = None
+                        try:
+                            price = await asyncio.wait_for(
+                                market_data_service.get_current_price(symbol, use_cache=True),
+                                timeout=kis_timeout,
+                            )
+                        except Exception as e:
+                            logger.warning(f"[universe.refresh] price fetch failed: {symbol}: {e}")
 
                         # 2) 시총/종목명 (네이버) — 실패해도 진행
-                        fin = await naver_client.get_stock_financial_data(symbol)
+                        fin = None
+                        try:
+                            fin = await asyncio.wait_for(
+                                naver_client.get_stock_financial_data(symbol),
+                                timeout=naver_timeout,
+                            )
+                        except Exception as e:
+                            logger.warning(f"[universe.refresh] naver fetch failed: {symbol}: {e}")
 
                         # 3) OHLCV 캐시 최신화 + 20일 평균 거래량 계산
-                        load = await data_loader.load_ohlcv_with_stats(
-                            symbol=symbol,
-                            days=60,
-                            interval="1d",
-                            min_candles=30,
-                            cache_freshness_days=3,
-                            force_refresh=False,
-                        )
-                        df = load.df
+                        load = None
+                        try:
+                            load = await asyncio.wait_for(
+                                data_loader.load_ohlcv_with_stats(
+                                    symbol=symbol,
+                                    days=60,
+                                    interval="1d",
+                                    min_candles=30,
+                                    cache_freshness_days=3,
+                                    force_refresh=False,
+                                ),
+                                timeout=ohlcv_timeout,
+                            )
+                        except Exception as e:
+                            logger.warning(f"[universe.refresh] ohlcv load failed: {symbol}: {e}")
+                        df = load.df if load is not None else None
 
                         avg_vol_20d = None
                         if df is not None and not df.empty and len(df) >= 20:
@@ -761,26 +802,40 @@ class StrategyService:
 
                     except Exception as e:
                         await worker_session.rollback()
-                        errors.append(f"{symbol}: {e}")
+                        error_count += 1
+                        logger.exception(f"[universe.refresh] worker failed: {symbol}")
+                        if len(errors) < MAX_ERRORS:
+                            errors.append(f"{symbol}: {type(e).__name__}: {e}")
                     finally:
                         work_queue.task_done()
 
-            return updated, screened, errors
+            return updated, screened, error_count, errors
 
         workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
         results = await asyncio.gather(*workers, return_exceptions=True)
 
         total_updated = 0
         total_screened = 0
+        total_error_count = 0
         errors: list[str] = []
         for item in results:
             if isinstance(item, Exception):
-                errors.append(str(item))
+                total_error_count += 1
+                logger.error("[universe.refresh] worker task crashed", exc_info=item)
+                if len(errors) < MAX_ERRORS:
+                    errors.append(str(item))
                 continue
-            u, s, e = item
+            u, s, ec, e = item
             total_updated += u
             total_screened += s
-            errors.extend(e)
+            total_error_count += ec
+            if len(errors) < MAX_ERRORS:
+                errors.extend(e[: max(0, MAX_ERRORS - len(errors))])
+
+        elapsed = time.monotonic() - started_at
+        logger.info(
+            f"[universe.refresh] done: target={len(target_stocks)} updated={total_updated} screened={total_screened} errors={total_error_count} elapsed={elapsed:.1f}s"
+        )
 
         return {
             "success": True,
@@ -791,6 +846,8 @@ class StrategyService:
             "universe_size_before": universe_size_before,
             "universe_size_after": universe_size_before + seeded,
             "concurrency": concurrency,
+            "error_count": total_error_count,
+            "errors_truncated": total_error_count > len(errors),
             "errors": errors,
             "refreshed_at": datetime.now().isoformat(),
         }
