@@ -266,7 +266,21 @@ const patchStrategy = async () => {
       const parsed = await readJsonSafely(res);
       setStrategyPatchOutput(parsed.data);
       if (parsed.ok && (parsed.data?.success ?? true)) {
-        await loadSelectedStrategyDetail();
+        // NOTE: loadSelectedStrategyDetail() is guarded by withInFlight; calling it here would no-op.
+        // Refresh detail inline to reflect latest state after PATCH.
+        setStrategyDetailOutput('전략 ' + id + ' 상세 로딩 중...');
+        const validated = await validateStrategyId(id);
+        if (!validated.ok) {
+          setStrategyDetailOutput(validated.error);
+          explainNoContext('전략 검증 실패(404/권한/오류 등).');
+          return;
+        }
+
+        currentStrategy = validated.strategy;
+        updateSelectedStrategyLabel(currentStrategy);
+        setStrategyDetailOutput(validated.dto);
+        persistSelection({ id: currentStrategy.id, account_no: currentStrategy.account_no });
+        fillStrategyPatchForm(currentStrategy);
       }
     } catch (e) {
       setStrategyPatchOutput(`오류: ${e.message}`);
