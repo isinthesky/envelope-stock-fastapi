@@ -3,12 +3,14 @@
 {% block title %}Buy Strategy Symbol States - Stock API Admin{% endblock %}
 
 {% block extra_css_links %}
-<link rel=stylesheet href=/static/styles/strategy.css />
+<link rel="stylesheet" href="/static/styles/strategy.css?v={{ static_version }}" />
 {% endblock %}
 
 {% block content %}
 <h1>Symbol States</h1>
 <p>전략별 심볼 상태 조회</p>
+
+<div id="strategy_context_warning" style="margin: 12px 0; padding: 10px 12px; border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 8px; display: none;"></div>
 
 <div class="row" style="margin: 12px 0; flex-wrap: wrap;">
   <button class="secondary" onclick="location.href='/mypage/strategy/'">← Buy Strategy</button>
@@ -31,7 +33,7 @@
 <section>
   <h2>조회</h2>
   <div class="row" style="margin-top: 8px;">
-    <button onclick="loadSymbolStates()" class="secondary">Load Symbol States</button>
+    <button id="btn_load_symbol_states" onclick="loadSymbolStates()" class="secondary">Load Symbol States</button>
   </div>
 
   <table class="stock-table" style="margin-top: 8px;">
@@ -53,5 +55,6 @@
 {% endblock %}
 
 {% block extra_script_tags %}
-<script src=/static/js/pages/strategy_symbol_states.js></script>
+<script src="/static/js/pages/strategy_shared.js?v={{ static_version }}"></script>
+<script src="/static/js/pages/strategy_symbol_states.js?v={{ static_version }}"></script>
 {% endblock %}

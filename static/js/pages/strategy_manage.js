@@ -1,19 +1,14 @@
-const SELECTED_STRATEGY_ID_KEY = 'buyStrategy.selectedStrategyId';
+const {
+  readJsonSafely,
+  extractStrategy,
+  parsePositiveInt,
+  escapeHtml,
+  persistSelection,
+  loadSelection,
+  buildUrl,
+} = window.StrategyShared;
 
-const readJsonSafely = async (res) => {
-  try {
-    const data = await res.json();
-    if (!res.ok) {
-      return { ok: false, data: { ...data, status: res.status, success: data?.success ?? false } };
-    }
-    return { ok: true, data };
-  } catch (e) {
-    return {
-      ok: false,
-      data: { success: false, status: res.status, detail: 'JSON 파싱 실패' },
-    };
-  }
-};
+let selectedStrategy = null;
 
 const setStrategyDetailOutput = (msg) => {
   const el = document.getElementById('strategy_detail_output');
@@ -21,61 +16,44 @@ const setStrategyDetailOutput = (msg) => {
   el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
 };
 
-const updateSelectedStrategyLabel = (id) => {
+const updateSelectedStrategyLabel = (strategyOrId) => {
   const el = document.getElementById('selected_strategy_label');
   if (!el) return;
-  el.textContent = id ? `ID ${id}` : '-';
-};
 
-const persistSelectedStrategyId = (id) => {
-  try {
-    if (!id) {
-      localStorage.removeItem(SELECTED_STRATEGY_ID_KEY);
-      return;
-    }
-    localStorage.setItem(SELECTED_STRATEGY_ID_KEY, String(id));
-  } catch (e) {
-    // ignore
+  if (!strategyOrId) {
+    el.textContent = '-';
+    return;
   }
-};
 
-const loadPersistedSelectedStrategyId = () => {
-  try {
-    const raw = localStorage.getItem(SELECTED_STRATEGY_ID_KEY);
-    if (!raw) return null;
-    const id = parseInt(raw, 10);
-    return Number.isNaN(id) || id <= 0 ? null : id;
-  } catch (e) {
-    return null;
+  if (typeof strategyOrId === 'number') {
+    el.textContent = `ID ${strategyOrId}`;
+    return;
   }
+
+  const s = strategyOrId;
+  const bits = [`ID ${s.id}`];
+  if (s.name) bits.push(s.name);
+  if (s.status) bits.push(`(${s.status})`);
+  el.textContent = bits.join(' ');
 };
 
-const setSelectedStrategyId = (id) => {
+const setSelectedStrategyIdInput = (id) => {
   const input = document.getElementById('control_strategy_id');
-  if (input) input.value = id ? String(id) : '';
-  updateSelectedStrategyLabel(id);
-  persistSelectedStrategyId(id);
+  if (!input) return;
+  input.value = id ? String(id) : '';
 };
 
-const getSelectedStrategyId = () => {
+const getSelectedStrategyIdFromInput = () => {
   const raw = document.getElementById('control_strategy_id')?.value;
-  const id = raw ? parseInt(raw, 10) : NaN;
-  if (!id || Number.isNaN(id)) return null;
-  return id;
+  return parsePositiveInt(raw);
 };
 
 const parseSymbols = (raw) => {
   if (!raw) return [];
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
-};
-
-const getStrategyFromResponse = (payload) => {
-  if (!payload) return null;
-  if (payload.data?.strategy) return payload.data.strategy;
-  if (payload.data?.id) return payload.data;
-  if (payload.strategy) return payload.strategy;
-  if (payload.id) return payload;
-  return null;
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 };
 
 function renderStrategyList(strategies) {
@@ -83,27 +61,31 @@ function renderStrategyList(strategies) {
   if (!body) return;
 
   if (!strategies || !strategies.length) {
-    body.innerHTML = `<tr><td colspan="6" class="placeholder-message" style="border:none;">전략이 없습니다.</td></tr>`;
+    body.innerHTML =
+      '<tr><td colspan="6" class="placeholder-message" style="border:none;">전략이 없습니다.</td></tr>';
     return;
   }
 
   body.innerHTML = strategies
     .map((s) => {
+      const id = Number(s.id);
       const symbols = Array.isArray(s.symbols) ? s.symbols.join(', ') : s.symbols || '';
       return `
-      <tr onclick="selectStrategy(${s.id})">
-        <td>${s.id}</td>
-        <td>${s.name || '-'}</td>
-        <td>${s.strategy_type || '-'}</td>
-        <td>${s.status || '-'}</td>
-        <td style="max-width: 360px; overflow:hidden; text-overflow: ellipsis; white-space: nowrap;">${symbols}</td>
+      <tr onclick="selectStrategy(${id})">
+        <td>${id}</td>
+        <td>${escapeHtml(s.name || '-')}</td>
+        <td>${escapeHtml(s.strategy_type || '-')}</td>
+        <td>${escapeHtml(s.status || '-')}</td>
+        <td style="max-width: 360px; overflow:hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(
+          symbols
+        )}</td>
         <td>
-          <button class="secondary" onclick="event.stopPropagation(); selectStrategy(${s.id})">Select</button>
-          <button class="secondary" onclick="event.stopPropagation(); goOperate(${s.id})">Operate</button>
-          <button class="secondary" onclick="event.stopPropagation(); goEdit(${s.id})">Edit</button>
-          <button class="secondary" onclick="event.stopPropagation(); goSymbolStates(${s.id})">States</button>
-          <button class="secondary" onclick="event.stopPropagation(); goSignals(${s.id})">Signals</button>
-          <button onclick="event.stopPropagation(); deleteStrategy(${s.id})" style="background:#fecaca;color:#991b1b;">Delete</button>
+          <button class="secondary" onclick="event.stopPropagation(); selectStrategy(${id})">Select</button>
+          <button class="secondary" onclick="event.stopPropagation(); goOperate(${id})">Operate</button>
+          <button class="secondary" onclick="event.stopPropagation(); goEdit(${id})">Edit</button>
+          <button class="secondary" onclick="event.stopPropagation(); goSymbolStates(${id})">States</button>
+          <button class="secondary" onclick="event.stopPropagation(); goSignals(${id})">Signals</button>
+          <button onclick="event.stopPropagation(); deleteStrategy(${id})" style="background:#fecaca;color:#991b1b;">Delete</button>
         </td>
       </tr>
     `;
@@ -113,8 +95,17 @@ function renderStrategyList(strategies) {
 
 async function loadStrategies() {
   setStrategyDetailOutput('전략 목록 로딩 중...');
+
+  const qs = new URLSearchParams();
+  const accountNo = document.getElementById('filter_account_no')?.value?.trim();
+  const statusFilter = document.getElementById('filter_status_filter')?.value;
+  if (accountNo) qs.set('account_no', accountNo);
+  if (statusFilter) qs.set('status_filter', statusFilter);
+
+  const url = `/api/v1/strategies${qs.toString() ? `?${qs.toString()}` : ''}`;
+
   try {
-    const res = await fetch('/api/v1/strategies');
+    const res = await fetch(url);
     const parsed = await readJsonSafely(res);
     if (parsed.ok && parsed.data?.success && parsed.data?.data) {
       renderStrategyList(parsed.data.data.strategies || []);
@@ -128,16 +119,26 @@ async function loadStrategies() {
 }
 
 async function selectStrategy(id) {
-  setSelectedStrategyId(id);
+  const strategyId = parsePositiveInt(id);
+  if (!strategyId) return;
 
-  setStrategyDetailOutput(`전략 ${id} 상세 로딩 중...`);
+  setSelectedStrategyIdInput(strategyId);
+  updateSelectedStrategyLabel(strategyId);
+  persistSelection({ id: strategyId });
+
+  setStrategyDetailOutput(`전략 ${strategyId} 상세 로딩 중...`);
   try {
-    const res = await fetch(`/api/v1/strategies/${id}`);
+    const res = await fetch(`/api/v1/strategies/${strategyId}`);
     const parsed = await readJsonSafely(res);
     setStrategyDetailOutput(parsed.data);
 
-    if (parsed.ok) {
-      getStrategyFromResponse(parsed.data);
+    if (parsed.ok && (parsed.data?.success ?? true)) {
+      const s = extractStrategy(parsed.data);
+      if (s?.id) {
+        selectedStrategy = s;
+        updateSelectedStrategyLabel(s);
+        persistSelection({ id: s.id, account_no: s.account_no });
+      }
     }
   } catch (e) {
     setStrategyDetailOutput(`오류: ${e.message}`);
@@ -145,7 +146,7 @@ async function selectStrategy(id) {
 }
 
 async function loadSelectedStrategyDetail() {
-  const id = getSelectedStrategyId();
+  const id = getSelectedStrategyIdFromInput();
   if (!id) {
     setStrategyDetailOutput('먼저 Strategy ID를 선택하거나 입력해줘.');
     return;
@@ -196,10 +197,13 @@ async function createStrategy() {
 }
 
 async function deleteStrategy(id) {
-  if (!confirm(`전략 ${id}를 삭제할까?`)) return;
+  const strategyId = parsePositiveInt(id);
+  if (!strategyId) return;
+
+  if (!confirm(`전략 ${strategyId}를 삭제할까?`)) return;
   setStrategyDetailOutput('전략 삭제 중...');
   try {
-    const res = await fetch(`/api/v1/strategies/${id}`, { method: 'DELETE' });
+    const res = await fetch(`/api/v1/strategies/${strategyId}`, { method: 'DELETE' });
     if (res.status === 204) {
       setStrategyDetailOutput({ success: true, detail: 'deleted (204)' });
     } else {
@@ -213,23 +217,62 @@ async function deleteStrategy(id) {
 }
 
 const goOperate = (id) => {
-  setSelectedStrategyId(id);
-  location.href = '/mypage/strategy/operate';
+  const strategyId = parsePositiveInt(id);
+  if (!strategyId) return;
+  persistSelection({ id: strategyId });
+  location.href = buildUrl('/mypage/strategy/operate', strategyId);
 };
 
 const goEdit = (id) => {
-  setSelectedStrategyId(id);
-  location.href = '/mypage/strategy/edit';
+  const strategyId = parsePositiveInt(id);
+  if (!strategyId) return;
+  persistSelection({ id: strategyId });
+  location.href = buildUrl('/mypage/strategy/edit', strategyId);
 };
 
 const goSymbolStates = (id) => {
-  setSelectedStrategyId(id);
-  location.href = '/mypage/strategy/symbol-states';
+  const strategyId = parsePositiveInt(id);
+  if (!strategyId) return;
+  persistSelection({ id: strategyId });
+  location.href = buildUrl('/mypage/strategy/symbol-states', strategyId);
 };
 
 const goSignals = (id) => {
-  setSelectedStrategyId(id);
-  location.href = '/mypage/strategy/signals';
+  const strategyId = parsePositiveInt(id);
+  if (!strategyId) return;
+  persistSelection({ id: strategyId });
+  location.href = buildUrl('/mypage/strategy/signals', strategyId);
+};
+
+const requireSelected = () => {
+  const id = getSelectedStrategyIdFromInput();
+  if (!id) {
+    alert('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return null;
+  }
+  persistSelection({ id });
+  return id;
+};
+
+const goOperateSelected = () => {
+  const id = requireSelected();
+  if (!id) return;
+  goOperate(id);
+};
+const goEditSelected = () => {
+  const id = requireSelected();
+  if (!id) return;
+  goEdit(id);
+};
+const goSymbolStatesSelected = () => {
+  const id = requireSelected();
+  if (!id) return;
+  goSymbolStates(id);
+};
+const goSignalsSelected = () => {
+  const id = requireSelected();
+  if (!id) return;
+  goSignals(id);
 };
 
 window.loadStrategies = loadStrategies;
@@ -241,11 +284,16 @@ window.goOperate = goOperate;
 window.goEdit = goEdit;
 window.goSymbolStates = goSymbolStates;
 window.goSignals = goSignals;
+window.goOperateSelected = goOperateSelected;
+window.goEditSelected = goEditSelected;
+window.goSymbolStatesSelected = goSymbolStatesSelected;
+window.goSignalsSelected = goSignalsSelected;
 
 document.addEventListener('DOMContentLoaded', () => {
-  const persisted = loadPersistedSelectedStrategyId();
-  if (persisted) {
-    setSelectedStrategyId(persisted);
+  const stored = loadSelection();
+  if (stored?.id) {
+    setSelectedStrategyIdInput(stored.id);
+    updateSelectedStrategyLabel(stored.id);
   } else {
     updateSelectedStrategyLabel(null);
   }
@@ -253,9 +301,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const input = document.getElementById('control_strategy_id');
   if (input) {
     input.addEventListener('input', () => {
-      const id = getSelectedStrategyId();
+      const id = getSelectedStrategyIdFromInput();
       updateSelectedStrategyLabel(id);
-      persistSelectedStrategyId(id);
     });
   }
 

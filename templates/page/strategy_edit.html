@@ -3,12 +3,14 @@
 {% block title %}Buy Strategy Edit - Stock API Admin{% endblock %}
 
 {% block extra_css_links %}
-<link rel=stylesheet href=/static/styles/strategy.css />
+<link rel="stylesheet" href="/static/styles/strategy.css?v={{ static_version }}" />
 {% endblock %}
 
 {% block content %}
 <h1>전략 수정</h1>
 <p>전략 PATCH + Config GET/PATCH</p>
+
+<div id="strategy_context_warning" style="margin: 12px 0; padding: 10px 12px; border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 8px; display: none;"></div>
 
 <div class="row" style="margin: 12px 0; flex-wrap: wrap;">
   <button class="secondary" onclick="location.href='/mypage/strategy/'">← Buy Strategy</button>
@@ -25,7 +27,7 @@
     <input id="control_strategy_id" type="number" placeholder="예: 1" style="width: 90px;" />
     <div style="font-size: 12px; color: #64748b;">선택:</div>
     <div id="selected_strategy_label" style="font-size: 12px; color: #0f172a; background: #e2e8f0; padding: 4px 8px; border-radius: 999px;">-</div>
-    <button onclick="loadSelectedStrategyDetail()" class="secondary">상세 새로고침</button>
+    <button id="btn_detail_refresh" onclick="loadSelectedStrategyDetail()" class="secondary">상세 새로고침</button>
   </div>
 
   <pre id="strategy_detail_output" style="margin-top: 12px;">(선택한 전략 상세 JSON이 여기에 표시됩니다)</pre>
@@ -48,12 +50,16 @@
 
     <label style="font-size: 12px; margin-left: 8px;">설명</label>
     <input id="patch_strategy_description" type="text" placeholder="(선택)" style="width: 260px;" />
+    <label style="font-size: 12px; display:flex; align-items:center; gap: 4px; margin-left: 6px;">
+      <input id="patch_strategy_description_clear" type="checkbox" />
+      설명 비우기(null)
+    </label>
 
     <label style="font-size: 12px; margin-left: 8px;">심볼</label>
     <input id="patch_strategy_symbols" type="text" placeholder="005930,000660" style="width: 240px;" />
 
-    <button onclick="patchStrategy()" style="background:#0ea5e9;color:white;">PATCH</button>
-    <button onclick="resetStrategyPatchForm()" class="secondary">Reset</button>
+    <button id="btn_patch_strategy" onclick="patchStrategy()" style="background:#0ea5e9;color:white;">PATCH</button>
+    <button id="btn_reset_patch" onclick="resetStrategyPatchForm()" class="secondary">Reset</button>
   </div>
 
   <pre id="strategy_patch_output" style="margin-top: 8px;">(PATCH 결과가 여기에 표시됩니다)</pre>
@@ -62,8 +68,8 @@
 <section>
   <h2>Config (GET/PATCH)</h2>
   <div class="row" style="margin-top: 8px;">
-    <button onclick="getStrategyConfig()" class="secondary">GET Config</button>
-    <button onclick="patchStrategyConfig()" style="background:#0ea5e9;color:white;">PATCH Config</button>
+    <button id="btn_get_config" onclick="getStrategyConfig()" class="secondary">GET Config</button>
+    <button id="btn_patch_config" onclick="patchStrategyConfig()" style="background:#0ea5e9;color:white;">PATCH Config</button>
   </div>
   <textarea id="strategy_config_textarea" rows="10" style="width: 100%; margin-top: 8px; font-family: monospace;" placeholder={example: value}></textarea>
   <pre id="strategy_config_output" style="margin-top: 8px;">(Config 조회 결과가 여기에 표시됩니다)</pre>
@@ -71,5 +77,6 @@
 {% endblock %}
 
 {% block extra_script_tags %}
-<script src=/static/js/pages/strategy_edit.js></script>
+<script src="/static/js/pages/strategy_shared.js?v={{ static_version }}"></script>
+<script src="/static/js/pages/strategy_edit.js?v={{ static_version }}"></script>
 {% endblock %}

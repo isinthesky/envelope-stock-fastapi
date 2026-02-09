@@ -3,12 +3,14 @@
 {% block title %}Buy Strategy Signals - Stock API Admin{% endblock %}
 
 {% block extra_css_links %}
-<link rel=stylesheet href=/static/styles/strategy.css />
+<link rel="stylesheet" href="/static/styles/strategy.css?v={{ static_version }}" />
 {% endblock %}
 
 {% block content %}
 <h1>Signals + Statistics</h1>
 <p>전략별 Signals 조회 + 통계</p>
+
+<div id="strategy_context_warning" style="margin: 12px 0; padding: 10px 12px; border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 8px; display: none;"></div>
 
 <div class="row" style="margin: 12px 0; flex-wrap: wrap;">
   <button class="secondary" onclick="location.href='/mypage/strategy/'">← Buy Strategy</button>
@@ -35,8 +37,8 @@
     <input id="signals_limit" type="number" value="50" min="1" max="500" style="width: 80px;" />
     <label style="font-size: 12px; margin-left: 8px;">offset</label>
     <input id="signals_offset" type="number" value="0" min="0" style="width: 80px;" />
-    <button onclick="loadSignals()" style="background:#0ea5e9;color:white;">Load Signals</button>
-    <button onclick="loadSignalStatistics()" class="secondary">Load Statistics</button>
+    <button id="btn_load_signals" onclick="loadSignals()" style="background:#0ea5e9;color:white;">Load Signals</button>
+    <button id="btn_load_statistics" onclick="loadSignalStatistics()" class="secondary">Load Statistics</button>
   </div>
 
   <table class="stock-table" style="margin-top: 8px;">
@@ -61,5 +63,6 @@
 {% endblock %}
 
 {% block extra_script_tags %}
-<script src=/static/js/pages/strategy_signals.js></script>
+<script src="/static/js/pages/strategy_shared.js?v={{ static_version }}"></script>
+<script src="/static/js/pages/strategy_signals.js?v={{ static_version }}"></script>
 {% endblock %}

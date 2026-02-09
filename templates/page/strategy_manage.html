@@ -3,7 +3,7 @@
 {% block title %}Buy Strategy Manage - Stock API Admin{% endblock %}
 
 {% block extra_css_links %}
-<link rel=stylesheet href=/static/styles/strategy.css />
+<link rel="stylesheet" href="/static/styles/strategy.css?v={{ static_version }}" />
 {% endblock %}
 
 {% block content %}
@@ -12,10 +12,10 @@
 
 <div class="row" style="margin: 12px 0; flex-wrap: wrap;">
   <button class="secondary" onclick="location.href='/mypage/strategy/'">← Buy Strategy</button>
-  <button class="secondary" onclick="location.href='/mypage/strategy/operate'">전략 운영</button>
-  <button class="secondary" onclick="location.href='/mypage/strategy/edit'">전략 수정</button>
-  <button class="secondary" onclick="location.href='/mypage/strategy/symbol-states'">Symbol States</button>
-  <button class="secondary" onclick="location.href='/mypage/strategy/signals'">Signals + Statistics</button>
+  <button class="secondary" onclick="goOperateSelected()">전략 운영</button>
+  <button class="secondary" onclick="goEditSelected()">전략 수정</button>
+  <button class="secondary" onclick="goSymbolStatesSelected()">Symbol States</button>
+  <button class="secondary" onclick="goSignalsSelected()">Signals + Statistics</button>
 </div>
 
 <section>
@@ -34,6 +34,25 @@
   <div class="row">
     <button onclick="loadStrategies()" class="secondary">전략 목록 새로고침</button>
   </div>
+
+  <details style="margin-top: 8px;">
+    <summary style="cursor: pointer; color: #334155;">고급 필터</summary>
+    <div class="row" style="margin-top: 8px; flex-wrap: wrap;">
+      <label style="font-size: 12px;">account_no</label>
+      <input id="filter_account_no" type="text" placeholder="(선택)" style="width: 140px;" />
+
+      <label style="font-size: 12px; margin-left: 8px;">status_filter</label>
+      <select id="filter_status_filter" style="width: 160px;">
+        <option value="">(전체)</option>
+        <option value="active">active</option>
+        <option value="paused">paused</option>
+        <option value="stopped">stopped</option>
+        <option value="completed">completed</option>
+      </select>
+
+      <button onclick="loadStrategies()" class="secondary">필터로 조회</button>
+    </div>
+  </details>
 
   <div class="row" style="margin-top: 8px; flex-wrap: wrap;">
     <label style="font-size: 12px;">이름</label>
@@ -75,5 +94,6 @@
 {% endblock %}
 
 {% block extra_script_tags %}
-<script src=/static/js/pages/strategy_manage.js></script>
+<script src="/static/js/pages/strategy_shared.js?v={{ static_version }}"></script>
+<script src="/static/js/pages/strategy_manage.js?v={{ static_version }}"></script>
 {% endblock %}

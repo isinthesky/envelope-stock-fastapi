@@ -1,18 +1,37 @@
-const SELECTED_STRATEGY_ID_KEY = 'buyStrategy.selectedStrategyId';
+const {
+  readJsonSafely,
+  resolveStrategyId,
+  validateStrategyId,
+  extractStrategy,
+  parsePositiveInt,
+  persistSelection,
+  clearSelection,
+} = window.StrategyShared;
 
-const readJsonSafely = async (res) => {
-  try {
-    const data = await res.json();
-    if (!res.ok) {
-      return { ok: false, data: { ...data, status: res.status, success: data?.success ?? false } };
-    }
-    return { ok: true, data };
-  } catch (e) {
-    return {
-      ok: false,
-      data: { success: false, status: res.status, detail: 'JSON 파싱 실패' },
-    };
+let currentStrategy = null;
+let inFlight = false;
+
+const warningEl = () => document.getElementById('strategy_context_warning');
+
+const setWarning = (html) => {
+  const el = warningEl();
+  if (!el) return;
+  if (!html) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
   }
+  el.style.display = 'block';
+  el.innerHTML = html;
+};
+
+const setButtonsDisabled = (disabled) => {
+  ['btn_detail_refresh', 'btn_patch_strategy', 'btn_reset_patch', 'btn_get_config', 'btn_patch_config'].forEach(
+    (id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = !!disabled;
+    }
+  );
 };
 
 const setStrategyDetailOutput = (msg) => {
@@ -33,75 +52,54 @@ const setStrategyConfigOutput = (msg) => {
   el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
 };
 
-const persistSelectedStrategyId = (id) => {
-  try {
-    if (!id) {
-      localStorage.removeItem(SELECTED_STRATEGY_ID_KEY);
-      return;
-    }
-    localStorage.setItem(SELECTED_STRATEGY_ID_KEY, String(id));
-  } catch (e) {
-    // ignore
-  }
-};
-
-const loadPersistedSelectedStrategyId = () => {
-  try {
-    const raw = localStorage.getItem(SELECTED_STRATEGY_ID_KEY);
-    if (!raw) return null;
-    const id = parseInt(raw, 10);
-    return Number.isNaN(id) || id <= 0 ? null : id;
-  } catch (e) {
-    return null;
-  }
-};
-
-const updateSelectedStrategyLabel = (id) => {
+const updateSelectedStrategyLabel = (strategyOrId) => {
   const el = document.getElementById('selected_strategy_label');
   if (!el) return;
-  el.textContent = id ? `ID ${id}` : '-';
+
+  if (!strategyOrId) {
+    el.textContent = '-';
+    return;
+  }
+
+  if (typeof strategyOrId === 'number') {
+    el.textContent = `ID ${strategyOrId}`;
+    return;
+  }
+
+  const s = strategyOrId;
+  const bits = [`ID ${s.id}`];
+  if (s.name) bits.push(s.name);
+  if (s.status) bits.push(`(${s.status})`);
+  el.textContent = bits.join(' ');
 };
 
-const getSelectedStrategyId = (outputElId) => {
+const getSelectedStrategyId = () => {
   const raw = document.getElementById('control_strategy_id')?.value;
-  const id = raw ? parseInt(raw, 10) : NaN;
-  if (!id || Number.isNaN(id)) {
-    const msg = '먼저 Strategy ID를 선택하거나 입력해줘.';
-    if (outputElId) {
-      const el = document.getElementById(outputElId);
-      if (el) el.textContent = msg;
-    } else {
-      alert(msg);
-    }
-    return null;
-  }
-  return id;
+  return parsePositiveInt(raw);
 };
 
 const parseSymbols = (raw) => {
   if (!raw) return [];
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
-};
-
-const getStrategyFromResponse = (payload) => {
-  if (!payload) return null;
-  if (payload.data?.strategy) return payload.data.strategy;
-  if (payload.data?.id) return payload.data;
-  if (payload.strategy) return payload.strategy;
-  if (payload.id) return payload;
-  return null;
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 };
 
 const fillStrategyPatchForm = (strategy) => {
   if (!strategy) return;
+
   const name = document.getElementById('patch_strategy_name');
   const status = document.getElementById('patch_strategy_status');
   const desc = document.getElementById('patch_strategy_description');
+  const descClear = document.getElementById('patch_strategy_description_clear');
   const symbols = document.getElementById('patch_strategy_symbols');
 
   if (name) name.value = strategy.name || '';
   if (status) status.value = strategy.status || '';
   if (desc) desc.value = strategy.description || '';
+  if (descClear) descClear.checked = false;
+
   if (symbols) {
     const list = Array.isArray(strategy.symbols) ? strategy.symbols.join(',') : strategy.symbols || '';
     symbols.value = list;
@@ -109,54 +107,138 @@ const fillStrategyPatchForm = (strategy) => {
 };
 
 const resetStrategyPatchForm = () => {
-  const ids = [
-    'patch_strategy_name',
-    'patch_strategy_status',
-    'patch_strategy_description',
-    'patch_strategy_symbols',
-  ];
+  ['patch_strategy_name', 'patch_strategy_status', 'patch_strategy_description', 'patch_strategy_symbols'].forEach(
+    (id) => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    }
+  );
 
-  ids.forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.value = '';
-  });
+  const descClear = document.getElementById('patch_strategy_description_clear');
+  if (descClear) descClear.checked = false;
 
   setStrategyPatchOutput('(PATCH 결과가 여기에 표시됩니다)');
 };
 
-const loadSelectedStrategyDetail = async () => {
-  const id = getSelectedStrategyId('strategy_detail_output');
-  if (!id) return;
+const explainNoContext = (detail, isQueryFailClose = false) => {
+  currentStrategy = null;
+  updateSelectedStrategyLabel(null);
+  setButtonsDisabled(true);
 
+  const extra = isQueryFailClose
+    ? ' (query param이 무효라서 localStorage로 fallback 하지 않았습니다)'
+    : '';
+  setWarning(
+    `전략 컨텍스트가 없습니다. ${detail || ''}${extra} → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`
+  );
+};
+
+const loadAndValidateFromResolved = async () => {
+  const resolved = resolveStrategyId();
+  const input = document.getElementById('control_strategy_id');
+
+  if (resolved.source === 'query' && !resolved.id) {
+    if (input) input.value = '';
+    explainNoContext(`strategy_id=${resolved.queryRaw || '(empty)'} 가 유효하지 않습니다.`, true);
+    return;
+  }
+
+  if (resolved.id && input) {
+    input.value = String(resolved.id);
+  }
+
+  const id = resolved.id || getSelectedStrategyId();
+  if (!id) {
+    explainNoContext('strategy_id가 없습니다.');
+    return;
+  }
+
+  setWarning(null);
+  setButtonsDisabled(false);
   setStrategyDetailOutput(`전략 ${id} 상세 로딩 중...`);
-  try {
-    const res = await fetch(`/api/v1/strategies/${id}`);
-    const parsed = await readJsonSafely(res);
-    setStrategyDetailOutput(parsed.data);
-    if (parsed.ok) {
-      const strategy = getStrategyFromResponse(parsed.data);
-      if (strategy) fillStrategyPatchForm(strategy);
+
+  const validated = await validateStrategyId(id);
+  if (!validated.ok) {
+    if (resolved.source === 'storage') {
+      clearSelection();
     }
-  } catch (e) {
-    setStrategyDetailOutput(`오류: ${e.message}`);
+    setStrategyDetailOutput(validated.error);
+    explainNoContext('전략 검증 실패(404/권한/오류 등).');
+    return;
+  }
+
+  currentStrategy = validated.strategy;
+  updateSelectedStrategyLabel(currentStrategy);
+  setStrategyDetailOutput(validated.dto);
+  persistSelection({ id: currentStrategy.id, account_no: currentStrategy.account_no });
+  fillStrategyPatchForm(currentStrategy);
+};
+
+const withInFlight = async (fn) => {
+  if (inFlight) return;
+  inFlight = true;
+  setButtonsDisabled(true);
+  try {
+    await fn();
+  } finally {
+    inFlight = false;
+    setButtonsDisabled(false);
   }
 };
 
+const loadSelectedStrategyDetail = async () => {
+  const id = getSelectedStrategyId();
+  if (!id) {
+    alert('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return;
+  }
+
+  setWarning(null);
+  await withInFlight(async () => {
+    setStrategyDetailOutput(`전략 ${id} 상세 로딩 중...`);
+    const validated = await validateStrategyId(id);
+    if (!validated.ok) {
+      setStrategyDetailOutput(validated.error);
+      explainNoContext('전략 검증 실패(404/권한/오류 등).');
+      return;
+    }
+
+    currentStrategy = validated.strategy;
+    updateSelectedStrategyLabel(currentStrategy);
+    setStrategyDetailOutput(validated.dto);
+    persistSelection({ id: currentStrategy.id, account_no: currentStrategy.account_no });
+    fillStrategyPatchForm(currentStrategy);
+  });
+};
+
 const patchStrategy = async () => {
-  const id = getSelectedStrategyId('strategy_patch_output');
-  if (!id) return;
+  const id = getSelectedStrategyId();
+  if (!id) {
+    setStrategyPatchOutput('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return;
+  }
 
   const name = document.getElementById('patch_strategy_name')?.value?.trim();
   const status = document.getElementById('patch_strategy_status')?.value;
-  const description = document.getElementById('patch_strategy_description')?.value?.trim();
+
+  const descClear = document.getElementById('patch_strategy_description_clear')?.checked ?? false;
+  const descriptionRaw = document.getElementById('patch_strategy_description')?.value;
+  const description = descriptionRaw?.trim();
+
   const symbolsRaw = document.getElementById('patch_strategy_symbols')?.value;
   const symbols = parseSymbols(symbolsRaw);
 
   const payload = {};
   if (name) payload.name = name;
   if (status) payload.status = status;
-  if (description) payload.description = description;
+
+  // clear/null 정책: 빈 문자열은 변경 안 함. 비우기는 체크박스가 SSOT.
+  if (descClear) {
+    payload.description = null;
+  } else if (description) {
+    payload.description = description;
+  }
+
   if (symbols.length) payload.symbols = symbols;
 
   if (Object.keys(payload).length === 0) {
@@ -164,47 +246,57 @@ const patchStrategy = async () => {
     return;
   }
 
-  setStrategyPatchOutput('전략 PATCH 중...');
-  try {
-    const res = await fetch(`/api/v1/strategies/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const parsed = await readJsonSafely(res);
-    setStrategyPatchOutput(parsed.data);
-    if (parsed.ok) {
-      await loadSelectedStrategyDetail();
+  await withInFlight(async () => {
+    setStrategyPatchOutput('전략 PATCH 중...');
+    try {
+      const res = await fetch(`/api/v1/strategies/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const parsed = await readJsonSafely(res);
+      setStrategyPatchOutput(parsed.data);
+      if (parsed.ok && (parsed.data?.success ?? true)) {
+        await loadSelectedStrategyDetail();
+      }
+    } catch (e) {
+      setStrategyPatchOutput(`오류: ${e.message}`);
     }
-  } catch (e) {
-    setStrategyPatchOutput(`오류: ${e.message}`);
-  }
+  });
 };
 
 const getStrategyConfig = async () => {
-  const id = getSelectedStrategyId('strategy_config_output');
-  if (!id) return;
-
-  setStrategyConfigOutput('Config 조회 중...');
-  try {
-    const res = await fetch(`/api/v1/strategies/${id}/config`);
-    const parsed = await readJsonSafely(res);
-    setStrategyConfigOutput(parsed.data);
-    if (parsed.ok) {
-      const textarea = document.getElementById('strategy_config_textarea');
-      if (textarea) {
-        const cfg = parsed.data?.data?.config ?? parsed.data?.data ?? {};
-        textarea.value = JSON.stringify(cfg, null, 2);
-      }
-    }
-  } catch (e) {
-    setStrategyConfigOutput(`오류: ${e.message}`);
+  const id = getSelectedStrategyId();
+  if (!id) {
+    setStrategyConfigOutput('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return;
   }
+
+  await withInFlight(async () => {
+    setStrategyConfigOutput('Config 조회 중...');
+    try {
+      const res = await fetch(`/api/v1/strategies/${id}/config`);
+      const parsed = await readJsonSafely(res);
+      setStrategyConfigOutput(parsed.data);
+      if (parsed.ok && (parsed.data?.success ?? true)) {
+        const textarea = document.getElementById('strategy_config_textarea');
+        if (textarea) {
+          const cfg = parsed.data?.data?.config ?? parsed.data?.data ?? {};
+          textarea.value = JSON.stringify(cfg, null, 2);
+        }
+      }
+    } catch (e) {
+      setStrategyConfigOutput(`오류: ${e.message}`);
+    }
+  });
 };
 
 const patchStrategyConfig = async () => {
-  const id = getSelectedStrategyId('strategy_config_output');
-  if (!id) return;
+  const id = getSelectedStrategyId();
+  if (!id) {
+    setStrategyConfigOutput('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return;
+  }
 
   const textarea = document.getElementById('strategy_config_textarea');
   const raw = textarea?.value?.trim();
@@ -222,21 +314,23 @@ const patchStrategyConfig = async () => {
     return;
   }
 
-  setStrategyConfigOutput('Config PATCH 중...');
-  try {
-    const res = await fetch(`/api/v1/strategies/${id}/config`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const parsed = await readJsonSafely(res);
-    setStrategyConfigOutput(parsed.data);
-    if (parsed.ok && textarea) {
-      textarea.value = JSON.stringify(parsed.data?.data ?? {}, null, 2);
+  await withInFlight(async () => {
+    setStrategyConfigOutput('Config PATCH 중...');
+    try {
+      const res = await fetch(`/api/v1/strategies/${id}/config`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const parsed = await readJsonSafely(res);
+      setStrategyConfigOutput(parsed.data);
+      if (parsed.ok && (parsed.data?.success ?? true) && textarea) {
+        textarea.value = JSON.stringify(parsed.data?.data ?? {}, null, 2);
+      }
+    } catch (e) {
+      setStrategyConfigOutput(`오류: ${e.message}`);
     }
-  } catch (e) {
-    setStrategyConfigOutput(`오류: ${e.message}`);
-  }
+  });
 };
 
 window.loadSelectedStrategyDetail = loadSelectedStrategyDetail;
@@ -247,21 +341,12 @@ window.patchStrategyConfig = patchStrategyConfig;
 
 document.addEventListener('DOMContentLoaded', () => {
   const input = document.getElementById('control_strategy_id');
-  const persisted = loadPersistedSelectedStrategyId();
-  if (input && persisted) {
-    input.value = String(persisted);
-  }
-
-  const id = input ? parseInt(input.value || '', 10) : NaN;
-  const normalized = !Number.isNaN(id) && id > 0 ? id : null;
-  updateSelectedStrategyLabel(normalized);
-
   if (input) {
     input.addEventListener('input', () => {
-      const nextId = parseInt(input.value || '', 10);
-      const n = !Number.isNaN(nextId) && nextId > 0 ? nextId : null;
-      updateSelectedStrategyLabel(n);
-      persistSelectedStrategyId(n);
+      updateSelectedStrategyLabel(getSelectedStrategyId());
     });
   }
+
+  setButtonsDisabled(true);
+  loadAndValidateFromResolved();
 });

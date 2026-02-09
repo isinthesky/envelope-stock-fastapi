@@ -1,77 +1,73 @@
-const SELECTED_STRATEGY_ID_KEY = 'buyStrategy.selectedStrategyId';
+const {
+  readJsonSafely,
+  resolveStrategyId,
+  validateStrategyId,
+  parsePositiveInt,
+  escapeHtml,
+  persistSelection,
+  clearSelection,
+} = window.StrategyShared;
 
-const readJsonSafely = async (res) => {
-  try {
-    const data = await res.json();
-    if (!res.ok) {
-      return { ok: false, data: { ...data, status: res.status, success: data?.success ?? false } };
-    }
-    return { ok: true, data };
-  } catch (e) {
-    return {
-      ok: false,
-      data: { success: false, status: res.status, detail: 'JSON 파싱 실패' },
-    };
+let validatedStrategy = null;
+
+const warningEl = () => document.getElementById('strategy_context_warning');
+
+const setWarning = (html) => {
+  const el = warningEl();
+  if (!el) return;
+  if (!html) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
   }
+  el.style.display = 'block';
+  el.innerHTML = html;
 };
 
-const persistSelectedStrategyId = (id) => {
-  try {
-    if (!id) {
-      localStorage.removeItem(SELECTED_STRATEGY_ID_KEY);
-      return;
-    }
-    localStorage.setItem(SELECTED_STRATEGY_ID_KEY, String(id));
-  } catch (e) {
-    // ignore
-  }
-};
-
-const loadPersistedSelectedStrategyId = () => {
-  try {
-    const raw = localStorage.getItem(SELECTED_STRATEGY_ID_KEY);
-    if (!raw) return null;
-    const id = parseInt(raw, 10);
-    return Number.isNaN(id) || id <= 0 ? null : id;
-  } catch (e) {
-    return null;
-  }
-};
-
-const updateSelectedStrategyLabel = (id) => {
+const updateSelectedStrategyLabel = (strategyOrId) => {
   const el = document.getElementById('selected_strategy_label');
   if (!el) return;
-  el.textContent = id ? `ID ${id}` : '-';
-};
 
-const getSelectedStrategyId = (outputElId) => {
-  const raw = document.getElementById('control_strategy_id')?.value;
-  const id = raw ? parseInt(raw, 10) : NaN;
-  if (!id || Number.isNaN(id)) {
-    const msg = '먼저 Strategy ID를 선택하거나 입력해줘.';
-    if (outputElId) {
-      const el = document.getElementById(outputElId);
-      if (el) el.textContent = msg;
-    } else {
-      alert(msg);
-    }
-    return null;
+  if (!strategyOrId) {
+    el.textContent = '-';
+    return;
   }
-  return id;
+
+  if (typeof strategyOrId === 'number') {
+    el.textContent = `ID ${strategyOrId}`;
+    return;
+  }
+
+  const s = strategyOrId;
+  const bits = [`ID ${s.id}`];
+  if (s.name) bits.push(s.name);
+  if (s.status) bits.push(`(${s.status})`);
+  el.textContent = bits.join(' ');
 };
 
-const setSymbolStatesOutput = (msg) => {
+const setOutput = (msg) => {
   const el = document.getElementById('symbol_states_output');
   if (!el) return;
   el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
 };
 
-const renderSymbolStatesTable = (items) => {
+const setLoadDisabled = (disabled) => {
+  const btn = document.getElementById('btn_load_symbol_states');
+  if (btn) btn.disabled = !!disabled;
+};
+
+const getStrategyId = () => {
+  const raw = document.getElementById('control_strategy_id')?.value;
+  return parsePositiveInt(raw);
+};
+
+const renderTable = (items) => {
   const body = document.getElementById('symbol_states_table_body');
   if (!body) return;
 
   if (!items || items.length === 0) {
-    body.innerHTML = `<tr><td colspan="4" class="placeholder-message" style="border:none;">결과가 없습니다.</td></tr>`;
+    body.innerHTML =
+      '<tr><td colspan="4" class="placeholder-message" style="border:none;">결과가 없습니다.</td></tr>';
     return;
   }
 
@@ -79,10 +75,10 @@ const renderSymbolStatesTable = (items) => {
     .map((item) => {
       return `
       <tr>
-        <td>${item.symbol || '-'}</td>
-        <td>${item.state || '-'}</td>
-        <td>${item.last_close ?? '-'}</td>
-        <td>${item.unrealized_pnl_ratio ?? '-'}</td>
+        <td>${escapeHtml(item.symbol || '-')}</td>
+        <td>${escapeHtml(item.state || '-')}</td>
+        <td>${escapeHtml(item.last_close ?? '-')}</td>
+        <td>${escapeHtml(item.unrealized_pnl_ratio ?? item.unrealized_pnl_pct ?? '-')}</td>
       </tr>
     `;
     })
@@ -90,51 +86,78 @@ const renderSymbolStatesTable = (items) => {
 };
 
 const loadSymbolStates = async () => {
-  const id = getSelectedStrategyId('symbol_states_output');
-  if (!id) return;
+  const id = getStrategyId();
+  if (!id) {
+    setOutput('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return;
+  }
 
-  setSymbolStatesOutput('Symbol States 조회 중...');
+  setOutput('Symbol States 조회 중...');
   try {
     const res = await fetch(`/api/v1/strategies/${id}/symbol-states`);
     const parsed = await readJsonSafely(res);
-    setSymbolStatesOutput(parsed.data);
-    if (parsed.ok) {
+    setOutput(parsed.data);
+    if (parsed.ok && (parsed.data?.success ?? true)) {
       const list =
-        parsed.data?.data?.items ||
         parsed.data?.data?.symbol_states ||
-        parsed.data?.data?.states ||
-        parsed.data?.data?.symbols ||
-        parsed.data?.items ||
+        parsed.data?.data?.items ||
         parsed.data?.symbol_states ||
-        parsed.data?.states ||
-        parsed.data?.symbols ||
+        parsed.data?.items ||
         [];
-      renderSymbolStatesTable(Array.isArray(list) ? list : []);
+      renderTable(Array.isArray(list) ? list : []);
     }
   } catch (e) {
-    setSymbolStatesOutput(`오류: ${e.message}`);
+    setOutput(`오류: ${e.message}`);
   }
 };
 
 window.loadSymbolStates = loadSymbolStates;
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   const input = document.getElementById('control_strategy_id');
-  const persisted = loadPersistedSelectedStrategyId();
-  if (input && persisted) {
-    input.value = String(persisted);
-  }
-
-  const id = input ? parseInt(input.value || '', 10) : NaN;
-  const normalized = !Number.isNaN(id) && id > 0 ? id : null;
-  updateSelectedStrategyLabel(normalized);
-
   if (input) {
     input.addEventListener('input', () => {
-      const nextId = parseInt(input.value || '', 10);
-      const n = !Number.isNaN(nextId) && nextId > 0 ? nextId : null;
-      updateSelectedStrategyLabel(n);
-      persistSelectedStrategyId(n);
+      updateSelectedStrategyLabel(getStrategyId());
     });
   }
+
+  setLoadDisabled(true);
+
+  const resolved = resolveStrategyId();
+  if (resolved.source === 'query' && !resolved.id) {
+    if (input) input.value = '';
+    setWarning(
+      `strategy_id=${resolved.queryRaw || '(empty)'} 가 유효하지 않습니다. (fail-close) → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`
+    );
+    updateSelectedStrategyLabel(null);
+    return;
+  }
+
+  if (resolved.id && input) {
+    input.value = String(resolved.id);
+  }
+
+  const id = resolved.id || getStrategyId();
+  if (!id) {
+    setWarning(`전략을 선택하세요 → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`);
+    updateSelectedStrategyLabel(null);
+    return;
+  }
+
+  setWarning(null);
+  const validated = await validateStrategyId(id);
+  if (!validated.ok) {
+    if (resolved.source === 'storage') {
+      clearSelection();
+    }
+    setWarning(`전략 검증 실패 → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`);
+    updateSelectedStrategyLabel(null);
+    setOutput(validated.error);
+    return;
+  }
+
+  validatedStrategy = validated.strategy;
+  updateSelectedStrategyLabel(validatedStrategy);
+  persistSelection({ id: validatedStrategy.id, account_no: validatedStrategy.account_no });
+  setLoadDisabled(false);
 });

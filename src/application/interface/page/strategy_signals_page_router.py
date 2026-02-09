@@ -7,6 +7,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from src.settings.config import settings
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -25,6 +27,7 @@ async def strategy_signals_page(request: Request) -> HTMLResponse:
         "page/strategy_signals.html",
         {
             "request": request,
-            "active_page": "strategy",
+            "active_page": "strategy_signals",
+            "static_version": settings.app_version,
         },
     )

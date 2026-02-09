@@ -3,7 +3,7 @@
 {% block title %}Buy Strategy - Stock API Admin{% endblock %}
 
 {% block extra_css_links %}
-<link rel=stylesheet href=/static/styles/strategy.css />
+<link rel="stylesheet" href="/static/styles/strategy.css?v={{ static_version }}" />
 {% endblock %}
 
 {% block content %}
@@ -363,5 +363,5 @@
 {% endblock %}
 
 {% block extra_script_tags %}
-<script src=/static/js/pages/strategy.js></script>
+<script src="/static/js/pages/strategy.js?v={{ static_version }}"></script>
 {% endblock %}

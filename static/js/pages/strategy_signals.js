@@ -1,63 +1,48 @@
-const SELECTED_STRATEGY_ID_KEY = 'buyStrategy.selectedStrategyId';
+const {
+  readJsonSafely,
+  resolveStrategyId,
+  validateStrategyId,
+  parsePositiveInt,
+  escapeHtml,
+  persistSelection,
+  clearSelection,
+} = window.StrategyShared;
 
-const readJsonSafely = async (res) => {
-  try {
-    const data = await res.json();
-    if (!res.ok) {
-      return { ok: false, data: { ...data, status: res.status, success: data?.success ?? false } };
-    }
-    return { ok: true, data };
-  } catch (e) {
-    return {
-      ok: false,
-      data: { success: false, status: res.status, detail: 'JSON 파싱 실패' },
-    };
+let validatedStrategy = null;
+
+const warningEl = () => document.getElementById('strategy_context_warning');
+
+const setWarning = (html) => {
+  const el = warningEl();
+  if (!el) return;
+  if (!html) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
   }
+  el.style.display = 'block';
+  el.innerHTML = html;
 };
 
-const persistSelectedStrategyId = (id) => {
-  try {
-    if (!id) {
-      localStorage.removeItem(SELECTED_STRATEGY_ID_KEY);
-      return;
-    }
-    localStorage.setItem(SELECTED_STRATEGY_ID_KEY, String(id));
-  } catch (e) {
-    // ignore
-  }
-};
-
-const loadPersistedSelectedStrategyId = () => {
-  try {
-    const raw = localStorage.getItem(SELECTED_STRATEGY_ID_KEY);
-    if (!raw) return null;
-    const id = parseInt(raw, 10);
-    return Number.isNaN(id) || id <= 0 ? null : id;
-  } catch (e) {
-    return null;
-  }
-};
-
-const updateSelectedStrategyLabel = (id) => {
+const updateSelectedStrategyLabel = (strategyOrId) => {
   const el = document.getElementById('selected_strategy_label');
   if (!el) return;
-  el.textContent = id ? `ID ${id}` : '-';
-};
 
-const getSelectedStrategyId = (outputElId) => {
-  const raw = document.getElementById('control_strategy_id')?.value;
-  const id = raw ? parseInt(raw, 10) : NaN;
-  if (!id || Number.isNaN(id)) {
-    const msg = '먼저 Strategy ID를 선택하거나 입력해줘.';
-    if (outputElId) {
-      const el = document.getElementById(outputElId);
-      if (el) el.textContent = msg;
-    } else {
-      alert(msg);
-    }
-    return null;
+  if (!strategyOrId) {
+    el.textContent = '-';
+    return;
   }
-  return id;
+
+  if (typeof strategyOrId === 'number') {
+    el.textContent = `ID ${strategyOrId}`;
+    return;
+  }
+
+  const s = strategyOrId;
+  const bits = [`ID ${s.id}`];
+  if (s.name) bits.push(s.name);
+  if (s.status) bits.push(`(${s.status})`);
+  el.textContent = bits.join(' ');
 };
 
 const setSignalsOutput = (msg) => {
@@ -72,12 +57,25 @@ const setSignalsStatisticsOutput = (msg) => {
   el.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
 };
 
+const setButtonsDisabled = (disabled) => {
+  const b1 = document.getElementById('btn_load_signals');
+  const b2 = document.getElementById('btn_load_statistics');
+  if (b1) b1.disabled = !!disabled;
+  if (b2) b2.disabled = !!disabled;
+};
+
+const getStrategyId = () => {
+  const raw = document.getElementById('control_strategy_id')?.value;
+  return parsePositiveInt(raw);
+};
+
 const renderSignalsTable = (items) => {
   const body = document.getElementById('signals_table_body');
   if (!body) return;
 
   if (!items || items.length === 0) {
-    body.innerHTML = `<tr><td colspan="6" class="placeholder-message" style="border:none;">결과가 없습니다.</td></tr>`;
+    body.innerHTML =
+      '<tr><td colspan="6" class="placeholder-message" style="border:none;">결과가 없습니다.</td></tr>';
     return;
   }
 
@@ -86,12 +84,12 @@ const renderSignalsTable = (items) => {
       const ts = item.signal_at || item.created_at || item.time || item.timestamp || '-';
       return `
       <tr>
-        <td>${ts}</td>
-        <td>${item.symbol || '-'}</td>
-        <td>${item.signal_type || '-'}</td>
-        <td>${item.signal_status || '-'}</td>
-        <td>${item.signal_price ?? '-'}</td>
-        <td>${item.target_quantity ?? item.executed_quantity ?? '-'}</td>
+        <td>${escapeHtml(ts)}</td>
+        <td>${escapeHtml(item.symbol || '-')}</td>
+        <td>${escapeHtml(item.signal_type || '-')}</td>
+        <td>${escapeHtml(item.signal_status || '-')}</td>
+        <td>${escapeHtml(item.signal_price ?? '-')}</td>
+        <td>${escapeHtml(item.target_quantity ?? item.executed_quantity ?? '-')}</td>
       </tr>
     `;
     })
@@ -99,8 +97,11 @@ const renderSignalsTable = (items) => {
 };
 
 const loadSignals = async () => {
-  const id = getSelectedStrategyId('signals_output');
-  if (!id) return;
+  const id = getStrategyId();
+  if (!id) {
+    setSignalsOutput('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return;
+  }
 
   const limit = parseInt(document.getElementById('signals_limit')?.value || '50', 10);
   const offset = parseInt(document.getElementById('signals_offset')?.value || '0', 10);
@@ -110,7 +111,7 @@ const loadSignals = async () => {
     const res = await fetch(`/api/v1/strategies/${id}/signals?limit=${limit}&offset=${offset}`);
     const parsed = await readJsonSafely(res);
     setSignalsOutput(parsed.data);
-    if (parsed.ok) {
+    if (parsed.ok && (parsed.data?.success ?? true)) {
       const list =
         parsed.data?.data?.signals ||
         parsed.data?.data?.items ||
@@ -125,8 +126,11 @@ const loadSignals = async () => {
 };
 
 const loadSignalStatistics = async () => {
-  const id = getSelectedStrategyId('signals_statistics_output');
-  if (!id) return;
+  const id = getStrategyId();
+  if (!id) {
+    setSignalsStatisticsOutput('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return;
+  }
 
   setSignalsStatisticsOutput('Signals statistics 조회 중...');
   try {
@@ -141,23 +145,51 @@ const loadSignalStatistics = async () => {
 window.loadSignals = loadSignals;
 window.loadSignalStatistics = loadSignalStatistics;
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   const input = document.getElementById('control_strategy_id');
-  const persisted = loadPersistedSelectedStrategyId();
-  if (input && persisted) {
-    input.value = String(persisted);
-  }
-
-  const id = input ? parseInt(input.value || '', 10) : NaN;
-  const normalized = !Number.isNaN(id) && id > 0 ? id : null;
-  updateSelectedStrategyLabel(normalized);
-
   if (input) {
     input.addEventListener('input', () => {
-      const nextId = parseInt(input.value || '', 10);
-      const n = !Number.isNaN(nextId) && nextId > 0 ? nextId : null;
-      updateSelectedStrategyLabel(n);
-      persistSelectedStrategyId(n);
+      updateSelectedStrategyLabel(getStrategyId());
     });
   }
+
+  setButtonsDisabled(true);
+
+  const resolved = resolveStrategyId();
+  if (resolved.source === 'query' && !resolved.id) {
+    if (input) input.value = '';
+    setWarning(
+      `strategy_id=${resolved.queryRaw || '(empty)'} 가 유효하지 않습니다. (fail-close) → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`
+    );
+    updateSelectedStrategyLabel(null);
+    return;
+  }
+
+  if (resolved.id && input) {
+    input.value = String(resolved.id);
+  }
+
+  const id = resolved.id || getStrategyId();
+  if (!id) {
+    setWarning(`전략을 선택하세요 → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`);
+    updateSelectedStrategyLabel(null);
+    return;
+  }
+
+  setWarning(null);
+  const validated = await validateStrategyId(id);
+  if (!validated.ok) {
+    if (resolved.source === 'storage') {
+      clearSelection();
+    }
+    setWarning(`전략 검증 실패 → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`);
+    updateSelectedStrategyLabel(null);
+    setSignalsOutput(validated.error);
+    return;
+  }
+
+  validatedStrategy = validated.strategy;
+  updateSelectedStrategyLabel(validatedStrategy);
+  persistSelection({ id: validatedStrategy.id, account_no: validatedStrategy.account_no });
+  setButtonsDisabled(false);
 });

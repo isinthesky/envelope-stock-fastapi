@@ -3,12 +3,14 @@
 {% block title %}Buy Strategy Operate - Stock API Admin{% endblock %}
 
 {% block extra_css_links %}
-<link rel=stylesheet href=/static/styles/strategy.css />
+<link rel="stylesheet" href="/static/styles/strategy.css?v={{ static_version }}" />
 {% endblock %}
 
 {% block content %}
 <h1>전략 운영</h1>
 <p>Start/Pause/Stop/Execute + Scheduler Status</p>
+
+<div id="strategy_context_warning" style="margin: 12px 0; padding: 10px 12px; border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 8px; display: none;"></div>
 
 <div class="row" style="margin: 12px 0; flex-wrap: wrap;">
   <button class="secondary" onclick="location.href='/mypage/strategy/'">← Buy Strategy</button>
@@ -34,16 +36,27 @@
 <section>
   <h2>전략 제어 (API)</h2>
   <div class="row" style="align-items: center; gap: 8px; flex-wrap: wrap;">
-    <button onclick="startStrategy()" class="secondary">Start</button>
-    <button onclick="pauseStrategy()" class="secondary">Pause</button>
-    <button onclick="stopStrategy()" class="secondary">Stop</button>
-    <button onclick="executeStrategy()" style="background:#0ea5e9;color:white;">Execute</button>
-    <button onclick="getSchedulerStatus()" class="secondary">Scheduler Status</button>
+    <button id="btn_start" onclick="startStrategy()" class="secondary">Start</button>
+    <button id="btn_pause" onclick="pauseStrategy()" class="secondary">Pause</button>
+    <button id="btn_stop" onclick="stopStrategy()" class="secondary">Stop</button>
+
+    <label style="font-size: 12px; display:flex; align-items:center; gap: 4px; margin-left: 8px;">
+      <input id="execute_dry_run" type="checkbox" checked />
+      dry_run
+    </label>
+    <label style="font-size: 12px; display:flex; align-items:center; gap: 4px;">
+      <input id="execute_force" type="checkbox" />
+      force
+    </label>
+
+    <button id="btn_execute" onclick="executeStrategy()" style="background:#0ea5e9;color:white;">Execute</button>
+    <button id="btn_scheduler" onclick="getSchedulerStatus()" class="secondary">Scheduler Status</button>
   </div>
   <pre id="strategy_control_output" style="margin-top: 8px;">(전략 제어 결과가 여기에 표시됩니다)</pre>
 </section>
 {% endblock %}
 
 {% block extra_script_tags %}
-<script src=/static/js/pages/strategy_operate.js></script>
+<script src="/static/js/pages/strategy_shared.js?v={{ static_version }}"></script>
+<script src="/static/js/pages/strategy_operate.js?v={{ static_version }}"></script>
 {% endblock %}
