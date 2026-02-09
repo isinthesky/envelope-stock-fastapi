@@ -163,7 +163,9 @@ const loadAndValidateFromResolved = async () => {
   }
 
   setWarning(null);
-  setButtonsDisabled(false);
+  setButtonsDisabled(true);
+  const refreshBtn = document.getElementById('btn_detail_refresh');
+  if (refreshBtn) refreshBtn.disabled = !id;
   setStrategyDetailOutput(`전략 ${id} 상세 로딩 중...`);
 
   const validated = await validateStrategyId(id);
@@ -181,6 +183,7 @@ const loadAndValidateFromResolved = async () => {
   setStrategyDetailOutput(validated.dto);
   persistSelection({ id: currentStrategy.id, account_no: currentStrategy.account_no });
   fillStrategyPatchForm(currentStrategy);
+  setButtonsDisabled(false);
 };
 
 const withInFlight = async (fn) => {
@@ -191,6 +194,14 @@ const withInFlight = async (fn) => {
     await fn();
   } finally {
     inFlight = false;
+
+    if (!currentStrategy) {
+      setButtonsDisabled(true);
+      const refreshBtn = document.getElementById('btn_detail_refresh');
+      if (refreshBtn) refreshBtn.disabled = !getSelectedStrategyId();
+      return;
+    }
+
     setButtonsDisabled(false);
   }
 };
@@ -224,6 +235,14 @@ const patchStrategy = async () => {
   const id = getSelectedStrategyId();
   if (!id) {
     setStrategyPatchOutput('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return;
+  }
+
+  if (!currentStrategy || currentStrategy.id !== id) {
+    setStrategyPatchOutput('먼저 상세 새로고침으로 전략을 검증해줘.');
+    explainNoContext('전략 컨텍스트가 없습니다.');
+    const refreshBtn = document.getElementById('btn_detail_refresh');
+    if (refreshBtn) refreshBtn.disabled = !id;
     return;
   }
 
@@ -295,6 +314,14 @@ const getStrategyConfig = async () => {
     return;
   }
 
+  if (!currentStrategy || currentStrategy.id !== id) {
+    setStrategyConfigOutput('먼저 상세 새로고침으로 전략을 검증해줘.');
+    explainNoContext('전략 컨텍스트가 없습니다.');
+    const refreshBtn = document.getElementById('btn_detail_refresh');
+    if (refreshBtn) refreshBtn.disabled = !id;
+    return;
+  }
+
   await withInFlight(async () => {
     setStrategyConfigOutput('Config 조회 중...');
     try {
@@ -318,6 +345,14 @@ const patchStrategyConfig = async () => {
   const id = getSelectedStrategyId();
   if (!id) {
     setStrategyConfigOutput('먼저 Strategy ID를 선택하거나 입력해줘.');
+    return;
+  }
+
+  if (!currentStrategy || currentStrategy.id !== id) {
+    setStrategyConfigOutput('먼저 상세 새로고침으로 전략을 검증해줘.');
+    explainNoContext('전략 컨텍스트가 없습니다.');
+    const refreshBtn = document.getElementById('btn_detail_refresh');
+    if (refreshBtn) refreshBtn.disabled = !id;
     return;
   }
 
@@ -367,12 +402,22 @@ document.addEventListener('DOMContentLoaded', () => {
   if (input) {
     input.addEventListener('input', () => {
       const id = getSelectedStrategyId();
+      // typing invalidates the previously validated context
+      if (!currentStrategy || currentStrategy.id !== id) {
+        currentStrategy = null;
+        setButtonsDisabled(true);
+        if (id) {
+          setWarning('ID가 변경되었습니다. 상세 새로고침으로 다시 검증한 뒤 수정/Config 작업을 할 수 있어요.', '/mypage/strategy/manage');
+        } else {
+          setWarning('전략을 선택하세요', '/mypage/strategy/manage');
+        }
+      }
+
       updateSelectedStrategyLabel(id);
 
       // Recovery UX: allow manual entry even when opened directly (no query/storage)
       const refreshBtn = document.getElementById('btn_detail_refresh');
       if (refreshBtn) refreshBtn.disabled = !id;
-      if (id) setWarning(null);
     });
   }
 

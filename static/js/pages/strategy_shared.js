@@ -12,8 +12,11 @@
 
   const parsePositiveInt = (raw) => {
     if (raw == null) return null;
-    const n = parseInt(String(raw), 10);
-    if (!Number.isFinite(n) || Number.isNaN(n) || n <= 0) return null;
+    const s = String(raw).trim();
+    // fail-close: only accept strict positive integer strings
+    if (!/^[1-9][0-9]*$/.test(s)) return null;
+    const n = Number(s);
+    if (!Number.isSafeInteger(n) || n <= 0) return null;
     return n;
   };
 

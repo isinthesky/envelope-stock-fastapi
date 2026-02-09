@@ -84,9 +84,9 @@ const applyStatusGuard = (strategy) => {
   if (!startBtn || !pauseBtn || !stopBtn) return;
 
   if (!strategy?.status) {
-    startBtn.disabled = false;
-    pauseBtn.disabled = false;
-    stopBtn.disabled = false;
+    startBtn.disabled = true;
+    pauseBtn.disabled = true;
+    stopBtn.disabled = true;
     return;
   }
 
@@ -157,6 +157,7 @@ const loadAndValidateFromResolved = async () => {
   }
 
   setWarning(null);
+  setButtonsDisabled(true);
   setStrategyDetailOutput(`전략 ${id} 상세 로딩 중...`);
 
   const validated = await validateStrategyId(id);
@@ -187,7 +188,13 @@ const withInFlight = async (fn) => {
     await fn();
   } finally {
     inFlight = false;
-    // restore based on latest strategy status (if any)
+
+    if (!currentStrategy) {
+      setButtonsDisabled(true);
+      return;
+    }
+
+    // restore based on latest strategy status
     setButtonsDisabled(false);
     applyStatusGuard(currentStrategy);
   }
@@ -197,6 +204,12 @@ const callStrategyAction = async (action) => {
   const id = getControlStrategyId();
   if (!id) {
     alert('Strategy ID를 입력해줘');
+    return;
+  }
+
+  if (!currentStrategy || currentStrategy.id !== id) {
+    disableAndExplain('입력한 ID가 현재 검증된 전략과 다릅니다. 상세 새로고침으로 다시 검증해줘.');
+    setControlOutput('먼저 상세 새로고침으로 전략을 검증한 뒤 실행해줘.');
     return;
   }
 
@@ -222,6 +235,12 @@ const stopStrategy = async () => {
     alert('Strategy ID를 입력해줘');
     return;
   }
+
+  if (!currentStrategy || currentStrategy.id !== id) {
+    disableAndExplain('입력한 ID가 현재 검증된 전략과 다릅니다. 상세 새로고침으로 다시 검증해줘.');
+    setControlOutput('먼저 상세 새로고침으로 전략을 검증한 뒤 실행해줘.');
+    return;
+  }
   if (!confirm(`전략을 중지할까? (ID=${id})`)) return;
   return callStrategyAction('stop');
 };
@@ -230,6 +249,12 @@ const executeStrategy = async () => {
   const id = getControlStrategyId();
   if (!id) {
     alert('Strategy ID를 입력해줘');
+    return;
+  }
+
+  if (!currentStrategy || currentStrategy.id !== id) {
+    disableAndExplain('입력한 ID가 현재 검증된 전략과 다릅니다. 상세 새로고침으로 다시 검증해줘.');
+    setControlOutput('먼저 상세 새로고침으로 전략을 검증한 뒤 실행해줘.');
     return;
   }
 
@@ -290,7 +315,9 @@ const loadSelectedStrategyDetail = async () => {
     alert('Strategy ID를 입력해줘');
     return;
   }
+
   setWarning(null);
+  setButtonsDisabled(true);
   setStrategyDetailOutput(`전략 ${id} 상세 로딩 중...`);
   const validated = await validateStrategyId(id);
   if (!validated.ok) {
@@ -318,6 +345,16 @@ document.addEventListener('DOMContentLoaded', () => {
   if (input) {
     input.addEventListener('input', () => {
       const id = getControlStrategyId();
+      // typing invalidates the previously validated context
+      if (!currentStrategy || currentStrategy.id !== id) {
+        currentStrategy = null;
+        setButtonsDisabled(true);
+        if (id) {
+          setWarning('ID가 변경되었습니다. 상세 새로고침으로 다시 검증한 뒤 실행할 수 있어요.', '/mypage/strategy/manage');
+        } else {
+          setWarning('전략을 선택하세요', '/mypage/strategy/manage');
+        }
+      }
       updateSelectedStrategyLabel(id);
       // do not persist on raw typing (validated selection only)
     });
