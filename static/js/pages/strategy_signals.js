@@ -12,16 +12,27 @@ let validatedStrategy = null;
 
 const warningEl = () => document.getElementById('strategy_context_warning');
 
-const setWarning = (html) => {
+const setWarning = (msg, linkHref = null, linkText = null) => {
   const el = warningEl();
   if (!el) return;
-  if (!html) {
+
+  if (!msg) {
     el.style.display = 'none';
     el.textContent = '';
     return;
   }
+
   el.style.display = 'block';
-  el.innerHTML = html;
+  el.textContent = '';
+  el.appendChild(document.createTextNode(String(msg)));
+
+  if (linkHref) {
+    el.appendChild(document.createTextNode(' → '));
+    const a = document.createElement('a');
+    a.href = linkHref;
+    a.textContent = linkText || linkHref;
+    el.appendChild(a);
+  }
 };
 
 const updateSelectedStrategyLabel = (strategyOrId) => {
@@ -149,7 +160,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const input = document.getElementById('control_strategy_id');
   if (input) {
     input.addEventListener('input', () => {
-      updateSelectedStrategyLabel(getStrategyId());
+      const id = getStrategyId();
+      updateSelectedStrategyLabel(id);
+      setButtonsDisabled(!id);
+      if (id) setWarning(null);
     });
   }
 
@@ -159,7 +173,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (resolved.source === 'query' && !resolved.id) {
     if (input) input.value = '';
     setWarning(
-      `strategy_id=${resolved.queryRaw || '(empty)'} 가 유효하지 않습니다. (fail-close) → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`
+      `strategy_id=${resolved.queryRaw || '(empty)'} 가 유효하지 않습니다. (fail-close)`,
+      '/mypage/strategy/manage'
     );
     updateSelectedStrategyLabel(null);
     return;
@@ -171,7 +186,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const id = resolved.id || getStrategyId();
   if (!id) {
-    setWarning(`전략을 선택하세요 → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`);
+    setWarning('전략을 선택하세요', '/mypage/strategy/manage');
     updateSelectedStrategyLabel(null);
     return;
   }
@@ -182,7 +197,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (resolved.source === 'storage') {
       clearSelection();
     }
-    setWarning(`전략 검증 실패 → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`);
+    setWarning('전략 검증 실패', '/mypage/strategy/manage');
     updateSelectedStrategyLabel(null);
     setSignalsOutput(validated.error);
     return;

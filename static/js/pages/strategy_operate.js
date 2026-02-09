@@ -13,16 +13,27 @@ let inFlight = false;
 
 const warningEl = () => document.getElementById('strategy_context_warning');
 
-const setWarning = (html) => {
+const setWarning = (msg, linkHref = null, linkText = null) => {
   const el = warningEl();
   if (!el) return;
-  if (!html) {
+
+  if (!msg) {
     el.style.display = 'none';
     el.textContent = '';
     return;
   }
+
   el.style.display = 'block';
-  el.innerHTML = html;
+  el.textContent = '';
+  el.appendChild(document.createTextNode(String(msg)));
+
+  if (linkHref) {
+    el.appendChild(document.createTextNode(' → '));
+    const a = document.createElement('a');
+    a.href = linkHref;
+    a.textContent = linkText || linkHref;
+    el.appendChild(a);
+  }
 };
 
 const updateSelectedStrategyLabel = (strategyOrId) => {
@@ -122,9 +133,7 @@ const disableAndExplain = (reason, isQuerySsoFailClose = false) => {
     ? ' (query param이 무효라서 localStorage로 fallback 하지 않았습니다)'
     : '';
 
-  setWarning(
-    `전략 컨텍스트가 없습니다. ${detail}${extra} → <a href="/mypage/strategy/manage">/mypage/strategy/manage</a>`
-  );
+  setWarning(`전략 컨텍스트가 없습니다. ${detail}${extra}`, '/mypage/strategy/manage');
 };
 
 const loadAndValidateFromResolved = async () => {
