@@ -1160,7 +1160,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // 전략 목록 로드(선택)
-  if (typeof loadStrategies === "function") {
+  if (document.getElementById('strategy_list_table_body') && typeof loadStrategies === "function") {
     loadStrategies();
   }
 
