@@ -1,0 +1,65 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Buy Strategy Signals - Stock API Admin{% endblock %}
+
+{% block extra_css_links %}
+<link rel=stylesheet href=/static/styles/strategy.css />
+{% endblock %}
+
+{% block content %}
+<h1>Signals + Statistics</h1>
+<p>전략별 Signals 조회 + 통계</p>
+
+<div class="row" style="margin: 12px 0; flex-wrap: wrap;">
+  <button class="secondary" onclick="location.href=/mypage/strategy/">← Buy Strategy</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/manage">전략 목록관리</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/operate">전략 운영</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/edit">전략 수정</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/symbol-states">Symbol States</button>
+</div>
+
+<section>
+  <h2>공통 선택 ID</h2>
+  <div class="row" style="align-items: center; gap: 8px; flex-wrap: wrap;">
+    <label style="font-size: 12px;">Strategy ID</label>
+    <input id="control_strategy_id" type="number" placeholder="예: 1" style="width: 90px;" />
+    <div style="font-size: 12px; color: #64748b;">선택:</div>
+    <div id="selected_strategy_label" style="font-size: 12px; color: #0f172a; background: #e2e8f0; padding: 4px 8px; border-radius: 999px;">-</div>
+  </div>
+</section>
+
+<section>
+  <h2>Signals + Statistics</h2>
+  <div class="row" style="margin-top: 8px; flex-wrap: wrap;">
+    <label style="font-size: 12px;">limit</label>
+    <input id="signals_limit" type="number" value="50" min="1" max="500" style="width: 80px;" />
+    <label style="font-size: 12px; margin-left: 8px;">offset</label>
+    <input id="signals_offset" type="number" value="0" min="0" style="width: 80px;" />
+    <button onclick="loadSignals()" style="background:#0ea5e9;color:white;">Load Signals</button>
+    <button onclick="loadSignalStatistics()" class="secondary">Load Statistics</button>
+  </div>
+
+  <table class="stock-table" style="margin-top: 8px;">
+    <thead>
+      <tr>
+        <th>시간</th>
+        <th>심볼</th>
+        <th>유형</th>
+        <th>상태</th>
+        <th>시그널가</th>
+        <th>목표/체결 수량</th>
+      </tr>
+    </thead>
+    <tbody id="signals_table_body">
+      <tr><td colspan="6" class="placeholder-message" style="border: none;">Signals 조회 결과가 여기에 표시됩니다.</td></tr>
+    </tbody>
+  </table>
+
+  <pre id="signals_output" style="margin-top: 8px;">(Signals JSON)</pre>
+  <pre id="signals_statistics_output" style="margin-top: 8px;">(Signals statistics JSON)</pre>
+</section>
+{% endblock %}
+
+{% block extra_script_tags %}
+<script src=/static/js/pages/strategy_signals.js></script>
+{% endblock %}

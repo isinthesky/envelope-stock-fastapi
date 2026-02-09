@@ -1,0 +1,49 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Buy Strategy Operate - Stock API Admin{% endblock %}
+
+{% block extra_css_links %}
+<link rel=stylesheet href=/static/styles/strategy.css />
+{% endblock %}
+
+{% block content %}
+<h1>전략 운영</h1>
+<p>Start/Pause/Stop/Execute + Scheduler Status</p>
+
+<div class="row" style="margin: 12px 0; flex-wrap: wrap;">
+  <button class="secondary" onclick="location.href=/mypage/strategy/">← Buy Strategy</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/manage">전략 목록관리</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/edit">전략 수정</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/symbol-states">Symbol States</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/signals">Signals + Statistics</button>
+</div>
+
+<section>
+  <h2>공통 선택 ID</h2>
+  <div class="row" style="align-items: center; gap: 8px; flex-wrap: wrap;">
+    <label style="font-size: 12px;">Strategy ID</label>
+    <input id="control_strategy_id" type="number" placeholder="예: 1" style="width: 90px;" />
+    <div style="font-size: 12px; color: #64748b;">선택:</div>
+    <div id="selected_strategy_label" style="font-size: 12px; color: #0f172a; background: #e2e8f0; padding: 4px 8px; border-radius: 999px;">-</div>
+    <button onclick="loadSelectedStrategyDetail()" class="secondary">상세 새로고침</button>
+  </div>
+
+  <pre id="strategy_detail_output" style="margin-top: 12px;">(선택한 전략 상세 JSON이 여기에 표시됩니다)</pre>
+</section>
+
+<section>
+  <h2>전략 제어 (API)</h2>
+  <div class="row" style="align-items: center; gap: 8px; flex-wrap: wrap;">
+    <button onclick="startStrategy()" class="secondary">Start</button>
+    <button onclick="pauseStrategy()" class="secondary">Pause</button>
+    <button onclick="stopStrategy()" class="secondary">Stop</button>
+    <button onclick="executeStrategy()" style="background:#0ea5e9;color:white;">Execute</button>
+    <button onclick="getSchedulerStatus()" class="secondary">Scheduler Status</button>
+  </div>
+  <pre id="strategy_control_output" style="margin-top: 8px;">(전략 제어 결과가 여기에 표시됩니다)</pre>
+</section>
+{% endblock %}
+
+{% block extra_script_tags %}
+<script src=/static/js/pages/strategy_operate.js></script>
+{% endblock %}

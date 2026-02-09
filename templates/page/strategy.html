@@ -6,16 +6,22 @@
 <link rel=stylesheet href=/static/styles/strategy.css />
 {% endblock %}
 
-
-
 {% block content %}
 <h1>매수 전략</h1>
 <p>골든크로스 / MA5 돌파 전략</p>
 
+<div class="row" style="margin: 12px 0; flex-wrap: wrap;">
+  <button class="secondary" onclick="location.href=/mypage/strategy/manage">전략 목록관리</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/operate">전략 운영</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/edit">전략 수정</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/symbol-states">Symbol States</button>
+  <button class="secondary" onclick="location.href=/mypage/strategy/signals">Signals + Statistics</button>
+</div>
+
 <!-- 전략 선택 탭 -->
 <div class="strategy-tabs">
-  <button class="strategy-tab active" onclick="showStrategy('golden_cross')">골든크로스 (MA55/165)</button>
-  <button class="strategy-tab ma5" onclick="showStrategy('ma5_breakout')">MA5 돌파 (MA5/300)</button>
+  <button class="strategy-tab active" onclick="showStrategy(golden_cross)">골든크로스 (MA55/165)</button>
+  <button class="strategy-tab ma5" onclick="showStrategy(ma5_breakout)">MA5 돌파 (MA5/300)</button>
 </div>
 
 <!-- 골든크로스 전략 -->
@@ -74,150 +80,7 @@
 </section>
 
 <section>
-  
-
-  <h2>전략 목록/관리</h2>
-  <div class="row">
-    <button onclick="loadStrategies()" class="secondary">전략 목록 새로고침</button>
-  </div>
-
-  <div class="row" style="margin-top: 8px; flex-wrap: wrap;">
-    <label style="font-size: 12px;">이름</label>
-    <input id="create_strategy_name" type="text" placeholder="예: golden-cross-1" style="width: 160px;" />
-
-    <label style="font-size: 12px; margin-left: 8px;">유형</label>
-    <select id="create_strategy_type" style="width: 140px;">
-      <option value="golden_cross" selected>golden_cross</option>
-      <option value="mean_reversion">mean_reversion</option>
-    </select>
-
-    <label style="font-size: 12px; margin-left: 8px;">계좌</label>
-    <input id="create_strategy_account" type="text" placeholder="(선택)" style="width: 120px;" />
-
-    <label style="font-size: 12px; margin-left: 8px;">심볼</label>
-    <input id="create_strategy_symbols" type="text" placeholder="005930,000660" style="width: 220px;" />
-
-    <button onclick="createStrategy()" style="background:#16a34a;color:white;">Create</button>
-  </div>
-
-  <table class="stock-table" style="margin-top: 12px;">
-    <thead>
-      <tr>
-        <th style="width: 60px;">ID</th>
-        <th style="width: 180px;">Name</th>
-        <th style="width: 140px;">Type</th>
-        <th style="width: 120px;">Status</th>
-        <th>Symbols</th>
-        <th style="width: 220px;">Actions</th>
-      </tr>
-    </thead>
-    <tbody id="strategy_list_table_body">
-      <tr><td colspan="6" class="placeholder-message" style="border: none;">전략 목록을 불러오려면 전략 목록 새로고침을 클릭하세요.</td></tr>
-    </tbody>
-  </table>
-
-  <pre id="strategy_detail_output" style="margin-top: 12px;">(선택한 전략 상세 JSON이 여기에 표시됩니다)</pre>
-
-  <h2>전략 운영</h2>
-  <div class="row" style="align-items: center; gap: 8px;">
-    <div style="font-size: 12px; color: #64748b;">공통 선택 ID</div>
-    <div id="selected_strategy_label" style="font-size: 12px; color: #0f172a; background: #e2e8f0; padding: 4px 8px; border-radius: 999px;">-</div>
-    <button onclick="loadSelectedStrategyDetail()" class="secondary">상세 새로고침</button>
-  </div>
-
-  <h3 style="margin-top: 12px;">전략 PATCH</h3>
-  <div class="row" style="margin-top: 8px; flex-wrap: wrap;">
-    <label style="font-size: 12px;">이름</label>
-    <input id="patch_strategy_name" type="text" placeholder="strategy name" style="width: 160px;" />
-
-    <label style="font-size: 12px; margin-left: 8px;">상태</label>
-    <select id="patch_strategy_status" style="width: 140px;">
-      <option value="">(변경 안 함)</option>
-      <option value="active">active</option>
-      <option value="paused">paused</option>
-      <option value="stopped">stopped</option>
-      <option value="completed">completed</option>
-    </select>
-
-    <label style="font-size: 12px; margin-left: 8px;">설명</label>
-    <input id="patch_strategy_description" type="text" placeholder="(선택)" style="width: 260px;" />
-
-    <label style="font-size: 12px; margin-left: 8px;">심볼</label>
-    <input id="patch_strategy_symbols" type="text" placeholder="005930,000660" style="width: 240px;" />
-
-    <button onclick="patchStrategy()" style="background:#0ea5e9;color:white;">PATCH</button>
-    <button onclick="resetStrategyPatchForm()" class="secondary">Reset</button>
-  </div>
-  <pre id="strategy_patch_output" style="margin-top: 8px;">(PATCH 결과가 여기에 표시됩니다)</pre>
-
-  <h3 style="margin-top: 12px;">Config (GET/PATCH)</h3>
-  <div class="row" style="margin-top: 8px;">
-    <button onclick="getStrategyConfig()" class="secondary">GET Config</button>
-    <button onclick="patchStrategyConfig()" style="background:#0ea5e9;color:white;">PATCH Config</button>
-  </div>
-  <textarea id="strategy_config_textarea" rows="6" style="width: 100%; margin-top: 8px; font-family: monospace;" placeholder='{"example": "value"}'></textarea>
-  <pre id="strategy_config_output" style="margin-top: 8px;">(Config 조회 결과가 여기에 표시됩니다)</pre>
-
-  <h3 style="margin-top: 12px;">Symbol States</h3>
-  <div class="row" style="margin-top: 8px;">
-    <button onclick="loadSymbolStates()" class="secondary">Load Symbol States</button>
-  </div>
-  <table class="stock-table" style="margin-top: 8px;">
-    <thead>
-      <tr>
-        <th>심볼</th>
-        <th>상태</th>
-        <th>최근 종가</th>
-        <th>미실현 수익률</th>
-      </tr>
-    </thead>
-    <tbody id="symbol_states_table_body">
-      <tr><td colspan="4" class="placeholder-message" style="border: none;">전략을 선택하고 조회 버튼을 누르세요.</td></tr>
-    </tbody>
-  </table>
-  <pre id="symbol_states_output" style="margin-top: 8px;">(Symbol States JSON)</pre>
-
-  <h3 style="margin-top: 12px;">Signals + Statistics</h3>
-  <div class="row" style="margin-top: 8px; flex-wrap: wrap;">
-    <label style="font-size: 12px;">limit</label>
-    <input id="signals_limit" type="number" value="50" min="1" max="500" style="width: 80px;" />
-    <label style="font-size: 12px; margin-left: 8px;">offset</label>
-    <input id="signals_offset" type="number" value="0" min="0" style="width: 80px;" />
-    <button onclick="loadSignals()" style="background:#0ea5e9;color:white;">Load Signals</button>
-    <button onclick="loadSignalStatistics()" class="secondary">Load Statistics</button>
-  </div>
-  <table class="stock-table" style="margin-top: 8px;">
-    <thead>
-      <tr>
-        <th>시간</th>
-        <th>심볼</th>
-        <th>유형</th>
-        <th>상태</th>
-        <th>시그널가</th>
-        <th>목표/체결 수량</th>
-      </tr>
-    </thead>
-    <tbody id="signals_table_body">
-      <tr><td colspan="6" class="placeholder-message" style="border: none;">Signals 조회 결과가 여기에 표시됩니다.</td></tr>
-    </tbody>
-  </table>
-  <pre id="signals_output" style="margin-top: 8px;">(Signals JSON)</pre>
-
-  <pre id="signals_statistics_output" style="margin-top: 8px;">(Signals statistics JSON)</pre>
-
-  <h2>전략 제어 (API)</h2>
-  <div class="row">
-    <label style="font-size: 12px;">Strategy ID</label>
-    <input id="control_strategy_id" type="number" placeholder="예: 1" style="width: 90px;" />
-    <button onclick="startStrategy()" class="secondary">Start</button>
-    <button onclick="pauseStrategy()" class="secondary">Pause</button>
-    <button onclick="stopStrategy()" class="secondary">Stop</button>
-    <button onclick="executeStrategy()" style="background:#0ea5e9;color:white;">Execute</button>
-    <button onclick="getSchedulerStatus()" class="secondary">Scheduler Status</button>
-  </div>
-  <pre id="strategy_control_output" style="margin-top: 8px;">(전략 제어 결과가 여기에 표시됩니다)</pre>
-
-<h2>종목 스크리닝</h2>
+  <h2>종목 스크리닝</h2>
   <div class="row">
     <button onclick="scanGoldenCross()">골든크로스 스캔</button>
     <button onclick="applyFinancialFilter()" style="background: #7c3aed; color: white;">재무 필터 (2차)</button>
@@ -231,8 +94,7 @@
     <label style="font-size: 12px; margin-left: 12px;">
       <input type="checkbox" id="gc_only" checked /> GC 활성만
     </label>
-</div>
-
+  </div>
 
   <div class="stats-row" id="stats_row" style="display:none; margin-top: 16px;">
     <div class="stat-card">
@@ -261,7 +123,6 @@
     </div>
   </div>
 
-  <!-- 재무 필터 통계 -->
   <div class="stats-row" id="fin_stats_row" style="display:none; margin-top: 8px;">
     <div class="stat-card" style="border: 1px solid #10b981;">
       <div class="number" id="stat_fin_pass" style="color: #065f46;">-</div>
@@ -281,15 +142,14 @@
     </div>
   </div>
 
-  <!-- Golden Cross 스캔 결과 -->
   <div id="gc_scan_container" style="margin-top: 16px;">
     <div class="tabs">
-      <button class="tab active" onclick="showGcTab('BUY_TARGETS')" style="background: #bbf7d0; color: #166534;">매수 대상</button>
-      <button class="tab" onclick="showGcTab('OPTIMAL_BUY')" style="background: #fef08a; color: #854d0e;">매수 적기</button>
-      <button class="tab" onclick="showGcTab('READY_TO_BUY')">매수 관심</button>
-      <button class="tab" onclick="showGcTab('FIN_PASS')" style="background: #d1fae5; color: #065f46;">재무 통과</button>
-      <button class="tab" onclick="showGcTab('FIN_TURNAROUND')" style="background: #fef3c7; color: #92400e;">턴어라운드</button>
-      <button class="tab" onclick="showGcTab('all')">전체</button>
+      <button class="tab active" onclick="showGcTab(BUY_TARGETS)" style="background: #bbf7d0; color: #166534;">매수 대상</button>
+      <button class="tab" onclick="showGcTab(OPTIMAL_BUY)" style="background: #fef08a; color: #854d0e;">매수 적기</button>
+      <button class="tab" onclick="showGcTab(READY_TO_BUY)">매수 관심</button>
+      <button class="tab" onclick="showGcTab(FIN_PASS)" style="background: #d1fae5; color: #065f46;">재무 통과</button>
+      <button class="tab" onclick="showGcTab(FIN_TURNAROUND)" style="background: #fef3c7; color: #92400e;">턴어라운드</button>
+      <button class="tab" onclick="showGcTab(all)">전체</button>
     </div>
 
     <table class="stock-table">
@@ -315,12 +175,11 @@
     </table>
   </div>
 
-  <!-- Universe 종목 리스트 (종목 스캔) -->
   <div id="universe_list_container" style="display:none; margin-top: 16px;">
     <div class="tabs">
-      <button class="tab active" onclick="showUniverseTab('all')">전체</button>
-      <button class="tab" onclick="showUniverseTab('KOSPI')">KOSPI</button>
-      <button class="tab" onclick="showUniverseTab('KOSDAQ')">KOSDAQ</button>
+      <button class="tab active" onclick="showUniverseTab(all)">전체</button>
+      <button class="tab" onclick="showUniverseTab(KOSPI)">KOSPI</button>
+      <button class="tab" onclick="showUniverseTab(KOSDAQ)">KOSDAQ</button>
     </div>
 
     <table class="stock-table">
@@ -341,37 +200,9 @@
     </table>
   </div>
 
-  <!-- Symbol States 종목 리스트 (전략 종목 상태) -->
-  <div id="stock_list_container" style="display:none; margin-top: 16px;">
-    <div class="tabs">
-      <button class="tab active" onclick="showTab('all')">전체</button>
-      <button class="tab" onclick="showTab('ready')">매수 대기</button>
-      <button class="tab" onclick="showTab('pullback')">눌림목 대기</button>
-      <button class="tab" onclick="showTab('position')">보유 중</button>
-    </div>
-
-    <table class="stock-table">
-      <thead>
-        <tr>
-          <th>종목코드</th>
-          <th>종목명</th>
-          <th>상태</th>
-          <th>현재가</th>
-          <th>MA55</th>
-          <th>MA165</th>
-          <th>Stoch K</th>
-          <th>수익률</th>
-        </tr>
-      </thead>
-      <tbody id="stock_table_body">
-      </tbody>
-    </table>
-  </div>
-
   <pre id="scan_output" style="margin-top: 12px;">종목 스캔 버튼을 클릭하세요</pre>
 </section>
 
-<!-- 분석 히스토리 섹션 -->
 <section class="history-section">
   <div class="history-header">
     <h3>관심 종목 히스토리</h3>
@@ -471,14 +302,12 @@
     </label>
   </div>
 
-  <!-- 직접 입력 스캔 -->
   <div style="margin-top: 16px; padding: 16px; background: #fdf2f8; border: 1px solid #fbcfe8; border-radius: 8px;">
     <h4 style="margin: 0 0 8px 0; color: #9d174d;">종목 직접 입력</h4>
     <p style="font-size: 12px; color: #64748b; margin-bottom: 8px;">한 줄에 하나의 종목코드를 입력하세요.</p>
     <textarea id="ma5_symbols" rows="3" placeholder="005930&#10;000660&#10;035720" style="width: 100%; margin-bottom: 8px; font-family: monospace;"></textarea>
   </div>
 
-  <!-- 통계 -->
   <div class="stats-row" id="ma5_stats_row" style="display:none; margin-top: 16px;">
     <div class="stat-card">
       <div class="number" id="ma5_stat_total">-</div>
@@ -498,12 +327,11 @@
     </div>
   </div>
 
-  <!-- MA5 스캔 결과 -->
   <div id="ma5_scan_container" style="margin-top: 16px;">
     <div class="tabs">
-      <button class="tab active" onclick="showMA5Tab('BREAKOUT')" style="background: #fce7f3; color: #9d174d;">돌파 종목</button>
-      <button class="tab" onclick="showMA5Tab('ABOVE')">상단 위</button>
-      <button class="tab" onclick="showMA5Tab('all')">전체</button>
+      <button class="tab active" onclick="showMA5Tab(BREAKOUT)" style="background: #fce7f3; color: #9d174d;">돌파 종목</button>
+      <button class="tab" onclick="showMA5Tab(ABOVE)">상단 위</button>
+      <button class="tab" onclick="showMA5Tab(all)">전체</button>
     </div>
 
     <table class="stock-table">
