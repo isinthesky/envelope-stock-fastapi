@@ -195,6 +195,81 @@ class TelegramNotifier:
         message = "\n".join(lines)
         return await self.send_message(message)
 
+
+    async def send_golden_cross_recommendations_summary(
+        self,
+        recommendations: dict,
+    ) -> bool:
+        """골든크로스 추천 요약(Top 종목 + Top 업종) 알림 전송
+
+        Args:
+            recommendations: GoldenCrossRecommendationDTO를 dict로 dump한 값
+              - top_stocks: list
+              - top_industries: list
+              - buy_candidate_count: int
+              - scan_time: str|datetime
+        """
+        if not recommendations:
+            return False
+
+        top_stocks = recommendations.get("top_stocks") or []
+        top_industries = recommendations.get("top_industries") or []
+        buy_candidate_count = recommendations.get("buy_candidate_count")
+        scan_time = recommendations.get("scan_time")
+
+        # scan_time 표기 정리
+        scan_time_str = ""
+        try:
+            if hasattr(scan_time, "strftime"):
+                scan_time_str = scan_time.strftime("%Y-%m-%d %H:%M")
+            elif isinstance(scan_time, str) and scan_time:
+                scan_time_str = scan_time.replace("T", " ")[:16]
+        except Exception:
+            scan_time_str = ""
+
+        now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+
+        lines: list[str] = [
+            "🧭 <b>골든크로스 추천 요약</b>",
+            f"📅 {now}",
+        ]
+
+        if buy_candidate_count is not None:
+            lines.append(f"매수 후보: {buy_candidate_count}개")
+
+        if scan_time_str:
+            lines.append(f"(scan_time: {scan_time_str})")
+
+        lines.append("")
+
+        if top_industries:
+            lines.append("🏷️ <b>Top 업종</b>")
+            for ind in top_industries:
+                code = ind.get("industry_code")
+                name = ind.get("industry_name") or "(unknown)"
+                cnt = ind.get("count")
+                if code is not None and cnt is not None:
+                    lines.append(f"• {name} ({code}) : {cnt}")
+                else:
+                    lines.append(f"• {name}")
+            lines.append("")
+
+        if top_stocks:
+            lines.append("📌 <b>Top 종목</b>")
+            for s in top_stocks[:10]:
+                symbol = s.get("symbol")
+                name = s.get("name")
+                gc_state = s.get("gc_state")
+                ind_name = s.get("industry_name")
+                ind_part = f" | 업종: {ind_name}" if ind_name else ""
+                lines.append(f"• <b>{name}</b> ({symbol})\n  상태: {gc_state}{ind_part}")
+
+            if len(top_stocks) > 10:
+                lines.append(f"\n... 외 {len(top_stocks) - 10}개")
+
+        message = "\n".join(lines)
+        return await self.send_message(message)
+
     async def send_no_buy_signals_alert(self, total_scanned: int = 0) -> bool:
         """
         매수 권장 종목 없음 알림 전송

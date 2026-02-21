@@ -15,6 +15,8 @@ from fastapi import APIRouter, Query, status
 
 from src.application.common.exceptions import ServiceUnavailableError
 
+from src.adapters.external.telegram import get_telegram_notifier
+
 from src.application.common.dependencies import (
     BuyStrategyServiceDep,
     MarketDataServiceDep,
@@ -203,6 +205,49 @@ async def golden_cross_recommendations(
         top_industries_n=top_industries_n,
     )
     return ResponseDTO.success_response(result, "Golden cross recommendations generated")
+
+
+@router.post(
+    "/universe/golden-cross-recommendations/notify",
+    response_model=ResponseDTO[GoldenCrossRecommendationDTO],
+    status_code=status.HTTP_200_OK,
+    summary="골든크로스 추천 요약을 Telegram DM으로 전송",
+    description="골든크로스 추천 요약(Top10 + Top 업종)을 생성하고, 설정된 Telegram Chat ID로 DM 전송",
+)
+async def notify_golden_cross_recommendations(
+    service: StrategyServiceDep,
+    market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
+    stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
+    gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
+    include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
+    max_concurrent: int | None = Query(default=None, ge=1, le=50, description="동시 처리 수"),
+    top_n: int = Query(default=10, ge=1, le=50, description="Top 종목 개수"),
+    top_industries_n: int = Query(default=3, ge=1, le=20, description="Top 업종 개수"),
+) -> ResponseDTO[GoldenCrossRecommendationDTO]:
+    result = await service.get_golden_cross_recommendations(
+        market=market,
+        stoch_threshold=stoch_threshold,
+        gc_only=gc_only,
+        include_etf=include_etf,
+        limit=limit,
+        max_concurrent=max_concurrent,
+        top_n=top_n,
+        top_industries_n=top_industries_n,
+    )
+
+    notifier = get_telegram_notifier()
+    sent = await notifier.send_golden_cross_recommendations_summary(
+        result.model_dump(mode="json")
+    )
+
+    msg = "Golden cross recommendations generated"
+    if sent:
+        msg += " and sent to Telegram"
+    else:
+        msg += " (telegram disabled or not configured)"
+
+    return ResponseDTO.success_response(result, msg)
 
 
 @router.post(
