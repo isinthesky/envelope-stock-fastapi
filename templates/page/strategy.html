@@ -11,11 +11,7 @@
 <p>골든크로스 / MA5 돌파 전략</p>
 
 <div class="row" style="margin: 12px 0; flex-wrap: wrap;">
-  <button class="secondary" onclick="location.href='/mypage/strategy/manage'">전략 목록관리</button>
-  <button class="secondary" onclick="location.href='/mypage/strategy/operate'">전략 운영</button>
-  <button class="secondary" onclick="location.href='/mypage/strategy/edit'">전략 수정</button>
-  <button class="secondary" onclick="location.href='/mypage/strategy/symbol-states'">Symbol States</button>
-  <button class="secondary" onclick="location.href='/mypage/strategy/signals'">Signals + Statistics</button>
+  <button class="secondary" onclick="location.href='/mypage/strategy/dashboard'">My Strategies</button>
 </div>
 
 <!-- 전략 선택 탭 -->
@@ -160,6 +156,7 @@
           <th>종목명</th>
           <th>기술</th>
           <th>재무</th>
+          <th>섹터</th>
           <th>현재가</th>
           <th>MA Gap</th>
           <th>Stoch K/D</th>
@@ -168,7 +165,7 @@
         </tr>
       </thead>
       <tbody id="gc_scan_table_body">
-        <tr><td colspan="10" class="placeholder-message" style="border: none;">
+        <tr><td colspan="11" class="placeholder-message" style="border: none;">
           결과를 불러오는 중...
         </td></tr>
       </tbody>

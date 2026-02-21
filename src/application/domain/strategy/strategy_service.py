@@ -42,10 +42,13 @@ from src.application.domain.strategy.dto import (
     GoldenCrossScanListDTO,
     GoldenCrossRecommendationDTO,
     IndustrySummaryDTO,
+    PresetActivateRequestDTO,
     SELL_PHASE_INFO,
     SellSignalAnalysisDTO,
     SignalListDTO,
     SignalStatisticsDTO,
+    StrategyPresetDTO,
+    StrategyPresetListDTO,
     StockUniverseItemDTO,
     StockUniverseListDTO,
     StrategyConfigDTO,
@@ -115,6 +118,58 @@ class StrategyService:
     def session(self, value: AsyncSession | None) -> None:
         """session 설정"""
         self._session = value
+
+    # ==================== 프리셋 ====================
+
+    def get_preset_list(self) -> StrategyPresetListDTO:
+        """프리셋 목록 조회 (DB 불필요, 동기 메서드)"""
+        from src.application.domain.strategy.presets import list_presets
+
+        presets = list_presets()
+        preset_dtos = [
+            StrategyPresetDTO(
+                preset_id=p.preset_id,
+                name=p.name,
+                description=p.description,
+                strategy_type=p.strategy_type,
+                tags=p.tags,
+                risk_level=p.risk_level,
+            )
+            for p in presets
+        ]
+        return StrategyPresetListDTO(presets=preset_dtos, total_count=len(preset_dtos))
+
+    async def activate_preset(
+        self,
+        preset_id: str,
+        request: PresetActivateRequestDTO,
+    ) -> StrategyDetailResponseDTO:
+        """프리셋으로 전략 생성 (기존 create_strategy 재사용)"""
+        from src.application.domain.strategy.presets import get_preset
+
+        preset = get_preset(preset_id)
+        if not preset:
+            raise StrategyError(f"Preset not found: {preset_id}")
+
+        # 심볼 결정: 요청에 없으면 유니버스 상위 eligible 종목 사용
+        symbols = request.symbols
+        if not symbols:
+            universe = await self.get_stock_universe(eligible_only=True, limit=50)
+            symbols = [s.symbol for s in universe.stocks]
+            if not symbols:
+                raise StrategyError("No eligible symbols found in universe")
+
+        name = request.name_override or f"{preset.name} ({preset_id})"
+
+        create_request = StrategyCreateRequestDTO(
+            name=name,
+            description=preset.description,
+            strategy_type=preset.strategy_type,
+            symbols=symbols,
+            config=preset.config,
+        )
+
+        return await self.create_strategy(create_request)
 
     # ==================== 전략 생성 ====================
 

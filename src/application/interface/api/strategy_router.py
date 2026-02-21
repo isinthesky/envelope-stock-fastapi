@@ -35,10 +35,12 @@ from src.application.domain.strategy.dto import (
     GoldenCrossScanListDTO,
     GoldenCrossRecommendationDTO,
     MA5BreakoutScanListDTO,
+    PresetActivateRequestDTO,
     SellSignalAnalysisDTO,
     SignalListDTO,
     SignalStatisticsDTO,
     StockUniverseListDTO,
+    StrategyPresetListDTO,
     UniverseRefreshResultDTO,
     StrategyCreateRequestDTO,
     StrategyDetailResponseDTO,
@@ -623,6 +625,42 @@ async def delete_analysis_history(
 ) -> None:
     """분석 이력 삭제 - @transaction이 세션을 관리"""
     await service.delete_analysis_history(history_id)
+
+
+# ==================== Preset Endpoints (정적 경로) ====================
+
+
+@router.get(
+    "/presets",
+    response_model=ResponseDTO[StrategyPresetListDTO],
+    status_code=status.HTTP_200_OK,
+    summary="전략 프리셋 목록 조회",
+    description="사전 정의된 전략 프리셋 목록 반환",
+)
+async def get_presets(
+    service: StrategyServiceDep,
+) -> ResponseDTO[StrategyPresetListDTO]:
+    """프리셋 목록 조회 (DB 불필요)"""
+    preset_list = service.get_preset_list()
+    return ResponseDTO.success_response(preset_list, "Presets retrieved successfully")
+
+
+@router.post(
+    "/presets/{preset_id}/activate",
+    response_model=ResponseDTO[StrategyDetailResponseDTO],
+    status_code=status.HTTP_201_CREATED,
+    summary="프리셋으로 전략 생성",
+    description="프리셋을 선택하여 전략을 생성. 심볼과 이름만 지정하면 됩니다.",
+)
+async def activate_preset(
+    preset_id: str,
+    service: StrategyServiceDep,
+    request: PresetActivateRequestDTO | None = None,
+) -> ResponseDTO[StrategyDetailResponseDTO]:
+    """프리셋 활성화 - 기존 create_strategy 재사용"""
+    req = request or PresetActivateRequestDTO()
+    strategy_data = await service.activate_preset(preset_id, req)
+    return ResponseDTO.success_response(strategy_data, "Strategy created from preset successfully")
 
 
 # ==================== Scheduler Status (정적 경로) ====================

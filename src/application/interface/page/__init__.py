@@ -27,22 +27,10 @@ from src.application.interface.page.public_strategy_page_router import (
 from src.application.interface.page.sell_strategy_page_router import (
     router as sell_strategy_page_router,
 )
-from src.application.interface.page.strategy_edit_page_router import (
-    router as strategy_edit_page_router,
-)
-from src.application.interface.page.strategy_manage_page_router import (
-    router as strategy_manage_page_router,
-)
-from src.application.interface.page.strategy_operate_page_router import (
-    router as strategy_operate_page_router,
+from src.application.interface.page.strategy_dashboard_page_router import (
+    router as strategy_dashboard_page_router,
 )
 from src.application.interface.page.strategy_page_router import router as strategy_page_router
-from src.application.interface.page.strategy_signals_page_router import (
-    router as strategy_signals_page_router,
-)
-from src.application.interface.page.strategy_symbol_states_page_router import (
-    router as strategy_symbol_states_page_router,
-)
 from src.application.interface.page.websocket_page_router import (
     router as websocket_page_router,
 )
@@ -55,11 +43,7 @@ mypage_routers = [
     market_data_page_router,
     order_page_router,
     strategy_page_router,
-    strategy_manage_page_router,
-    strategy_operate_page_router,
-    strategy_edit_page_router,
-    strategy_symbol_states_page_router,
-    strategy_signals_page_router,
+    strategy_dashboard_page_router,
     sell_strategy_page_router,
     backtest_page_router,
     websocket_page_router,
@@ -82,11 +66,7 @@ __all__ = [
     "market_data_page_router",
     "order_page_router",
     "strategy_page_router",
-    "strategy_manage_page_router",
-    "strategy_operate_page_router",
-    "strategy_edit_page_router",
-    "strategy_symbol_states_page_router",
-    "strategy_signals_page_router",
+    "strategy_dashboard_page_router",
     "sell_strategy_page_router",
     "backtest_page_router",
     "websocket_page_router",

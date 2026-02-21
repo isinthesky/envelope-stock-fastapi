@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Strategy Signals Page Router - 전략 Signals/Statistics 페이지"""
-
+"""
+Strategy Dashboard Page Router - 전략 대시보드 (통합 페이지)
+"""
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -12,22 +13,17 @@ from src.settings.config import settings
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-router = APIRouter(
-    prefix="/mypage/strategy/signals",
-    tags=["MyPage-Strategy"],
-    include_in_schema=False,
-)
+router = APIRouter(prefix="/mypage/strategy", tags=["MyPage-Strategy"], include_in_schema=False)
 
 
-@router.get("", response_class=HTMLResponse)
-@router.get("/", response_class=HTMLResponse)
-async def strategy_signals_page(request: Request) -> HTMLResponse:
-    """전략 Signals/Statistics 페이지"""
+@router.get("/dashboard", response_class=HTMLResponse)
+async def strategy_dashboard_page(request: Request) -> HTMLResponse:
+    """전략 대시보드 페이지"""
     return templates.TemplateResponse(
-        "page/strategy_signals.html",
+        "page/strategy_dashboard.html",
         {
             "request": request,
-            "active_page": "strategy_signals",
+            "active_page": "strategy_dashboard",
             "static_version": settings.app_version,
         },
     )

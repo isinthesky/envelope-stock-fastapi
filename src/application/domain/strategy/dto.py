@@ -271,6 +271,31 @@ StrategyConfigUnion = Annotated[
 StrategyConfigDTO = BollingerStrategyConfigDTO
 
 
+class StrategyPresetDTO(BaseDTO):
+    """전략 프리셋 응답 DTO (config는 유저에게 노출하지 않음)"""
+
+    preset_id: str = Field(description="프리셋 ID")
+    name: str = Field(description="프리셋명")
+    description: str = Field(description="프리셋 설명")
+    strategy_type: str = Field(description="전략 유형")
+    tags: list[str] = Field(default_factory=list, description="태그 목록")
+    risk_level: str = Field(default="medium", description="위험도 (low/medium/high)")
+
+
+class StrategyPresetListDTO(BaseDTO):
+    """전략 프리셋 목록 응답 DTO"""
+
+    presets: list[StrategyPresetDTO] = Field(description="프리셋 목록")
+    total_count: int = Field(description="전체 프리셋 수")
+
+
+class PresetActivateRequestDTO(BaseDTO):
+    """프리셋 활성화 요청 DTO"""
+
+    symbols: list[str] | None = Field(default=None, description="대상 종목 리스트 (미지정 시 유니버스 전체)")
+    name_override: str | None = Field(default=None, description="전략명 오버라이드", max_length=100)
+
+
 class StrategyCreateRequestDTO(BaseDTO):
     """전략 생성 요청 DTO"""
 
