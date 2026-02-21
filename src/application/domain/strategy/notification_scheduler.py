@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from src.adapters.database.connection import get_async_session
 from src.adapters.external.telegram import get_telegram_notifier
 from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
+from src.application.domain.strategy.strategy_service import StrategyService
 from src.application.domain.strategy.sell_strategy_service import SellStrategyService
 from src.adapters.database.repositories.analysis_history_repository import (
     AnalysisHistoryRepository,
@@ -217,71 +218,44 @@ class NotificationScheduler:
         """
         매수 알림 Job (15:00)
 
-        골든크로스 스캔 → 재무 필터 → BUY_INTEREST/READY_TO_BUY/OPTIMAL_BUY 종목 Telegram 알림
+        기존: 골든크로스 스캔 + 재무 필터 후 BUY_INTEREST/READY_TO_BUY/OPTIMAL_BUY 종목 요약 전송
+
+        변경: `/api/v1/strategies/universe/golden-cross-recommendations` 와 동일한 로직으로
+             골든크로스 추천 요약(Top 종목 + Top 업종)을 생성해서 Telegram DM으로 전송
         """
         async with self._execution_lock:
             logger.info("[NotificationScheduler] Running buy notification job...")
 
             try:
-                async with get_async_session() as session:
-                    buy_service = BuyStrategyService(session=session)
+                service = StrategyService()
 
-                    # 1. 골든크로스 스캔 (매수 관심/준비/적기 필터링)
-                    scan_result = await buy_service.scan_golden_cross_candidates(
-                        market=None,
-                        stoch_threshold=30.0,
-                        gc_only=True,
-                    )
+                recommendations = await service.get_golden_cross_recommendations(
+                    market=None,
+                    stoch_threshold=30.0,
+                    gc_only=True,
+                    include_etf=True,
+                    limit=1000,
+                    max_concurrent=None,
+                    top_n=5,
+                    top_industries_n=3,
+                )
 
+                notifier = get_telegram_notifier()
+                sent = await notifier.send_golden_cross_recommendations_summary(
+                    recommendations.model_dump(mode="json")
+                )
+
+                if sent:
                     logger.info(
-                        f"[NotificationScheduler] Golden cross scan: {len(scan_result.stocks)} candidates"
+                        "[NotificationScheduler] Sent golden cross recommendations summary: "
+                        f"candidates={recommendations.buy_candidate_count}, "
+                        f"top_stocks={len(recommendations.top_stocks)}, "
+                        f"top_industries={len(recommendations.top_industries)}"
                     )
-
-                    # 2. 재무 필터 적용 (DART API)
-                    target_states = ["OPTIMAL_BUY", "BUY_INTEREST", "READY_TO_BUY"]
-                    filtered_result = await buy_service.apply_financial_filter(
-                        scan_result=scan_result,
-                        target_states=target_states,
-                        max_concurrent=3,
-                    )
-
+                else:
                     logger.info(
-                        f"[NotificationScheduler] After financial filter: {len(filtered_result.stocks)} stocks"
+                        "[NotificationScheduler] Telegram disabled or not configured, skipping DM"
                     )
-
-                    # 3. 대상 상태 필터링 및 변환
-                    target_states_set = set(target_states)
-                    buy_targets = [
-                        {
-                            "symbol": s.symbol,
-                            "name": s.name,
-                            "current_price": float(s.current_price),
-                            "ma_short": float(s.ma_short),
-                            "ma_long": float(s.ma_long),
-                            "stoch_k": s.stoch_k,
-                            "gc_state": s.gc_state,
-                        }
-                        for s in filtered_result.stocks
-                        if s.gc_state in target_states_set
-                    ]
-
-                    # 4. 상태별 정렬 (OPTIMAL_BUY 우선)
-                    state_order = {"OPTIMAL_BUY": 0, "BUY_INTEREST": 1, "READY_TO_BUY": 2}
-                    buy_targets.sort(key=lambda s: state_order.get(str(s.get("gc_state", "")), 99))
-
-                    # 5. 텔레그램 전송
-                    notifier = get_telegram_notifier()
-                    if buy_targets:
-                        await notifier.send_buy_signals_summary(buy_targets)
-                        logger.info(
-                            f"[NotificationScheduler] Sent buy notification for {len(buy_targets)} stocks"
-                        )
-                    else:
-                        # 결과가 없어도 알림 전송 (시스템 정상 동작 확인용)
-                        await notifier.send_no_buy_signals_alert(
-                            total_scanned=scan_result.total_scanned
-                        )
-                        logger.info("[NotificationScheduler] No buy target stocks found, sent empty alert")
 
             except Exception as e:
                 logger.error(f"[NotificationScheduler] Buy notification error: {e}")
