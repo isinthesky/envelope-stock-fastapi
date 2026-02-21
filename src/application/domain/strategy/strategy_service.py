@@ -40,6 +40,8 @@ from src.application.domain.strategy.dto import (
     AnalysisHistoryRefreshResultDTO,
     GoldenCrossConfigDTO,
     GoldenCrossScanListDTO,
+    GoldenCrossRecommendationDTO,
+    IndustrySummaryDTO,
     SELL_PHASE_INFO,
     SellSignalAnalysisDTO,
     SignalListDTO,
@@ -930,6 +932,70 @@ class StrategyService:
             include_etf=include_etf,
             limit=limit,
             max_concurrent=max_concurrent,
+        )
+
+    @transaction
+    async def get_golden_cross_recommendations(
+        self,
+        session: AsyncSession,
+        market: str | None = None,
+        stoch_threshold: float = 30.0,
+        gc_only: bool = True,
+        include_etf: bool = True,
+        limit: int = 1000,
+        max_concurrent: int | None = None,
+        top_n: int = 10,
+        top_industries_n: int = 3,
+    ) -> GoldenCrossRecommendationDTO:
+        """골든크로스 추천 요약 (Top 종목 + Top 업종)
+
+        - Top 종목: scan 결과 정렬 기준 그대로 상위 N개
+        - Top 업종: 매수 후보(OPTIMAL_BUY/READY_TO_BUY/BUY_INTEREST)에서 업종별 count 상위 N개
+        """
+        from collections import Counter
+
+        from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
+
+        buy_service = BuyStrategyService(session=session)
+        scan = await buy_service.scan_golden_cross_candidates(
+            market=market,
+            stoch_threshold=stoch_threshold,
+            gc_only=gc_only,
+            include_etf=include_etf,
+            limit=limit,
+            max_concurrent=max_concurrent,
+        )
+
+        top_stocks = scan.stocks[:top_n]
+
+        buy_states = {"OPTIMAL_BUY", "READY_TO_BUY", "BUY_INTEREST"}
+        buy_candidates = [s for s in scan.stocks if s.gc_state in buy_states]
+
+        counter: Counter[str] = Counter(
+            [s.industry_code for s in buy_candidates if s.industry_code]
+        )
+
+        # code -> name (이미 scan 단계에서 industry_name attach 됨)
+        code_to_name: dict[str, str | None] = {}
+        for s in buy_candidates:
+            if s.industry_code and s.industry_code not in code_to_name:
+                code_to_name[s.industry_code] = s.industry_name
+
+        top_industries: list[IndustrySummaryDTO] = []
+        for code, cnt in counter.most_common(top_industries_n):
+            top_industries.append(
+                IndustrySummaryDTO(
+                    industry_code=code,
+                    industry_name=code_to_name.get(code),
+                    count=cnt,
+                )
+            )
+
+        return GoldenCrossRecommendationDTO(
+            top_stocks=top_stocks,
+            top_industries=top_industries,
+            buy_candidate_count=len(buy_candidates),
+            scan_time=scan.scan_time,
         )
 
     @transaction

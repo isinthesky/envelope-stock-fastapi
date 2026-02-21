@@ -532,6 +532,10 @@ class GoldenCrossScanItemDTO(BaseDTO):
     market: str = Field(description="시장 구분")
     current_price: Decimal = Field(description="현재가")
 
+    # 업종(섹터) 정보
+    industry_code: str | None = Field(default=None, description="네이버 업종 코드 (industryCode)")
+    industry_name: str | None = Field(default=None, description="업종명 (industry_code 매핑 결과)")
+
     # 이동평균 (실시간 스캔용: MA55/MA165)
     ma_short: Decimal = Field(description="단기 MA (55일)")
     ma_long: Decimal = Field(description="장기 MA (165일)")
@@ -581,6 +585,27 @@ class GoldenCrossScanListDTO(BaseDTO):
     financial_error_count: int = Field(default=0, description="재무 필터 오류 종목 수 (조회 실패/데이터 없음)")
     turnaround_count: int = Field(default=0, description="턴어라운드(적자→흑자) 종목 수")
     financial_pending_count: int = Field(default=0, description="재무 필터 미조회 종목 수")
+
+
+# ==================== Golden Cross Recommendation DTOs ====================
+
+
+class IndustrySummaryDTO(BaseDTO):
+    """업종 집계 DTO"""
+
+    industry_code: str = Field(description="업종 코드")
+    industry_name: str | None = Field(default=None, description="업종명")
+    count: int = Field(description="해당 업종 종목 수")
+
+
+class GoldenCrossRecommendationDTO(BaseDTO):
+    """골든크로스 Top 추천 + Top 업종 요약"""
+
+    top_stocks: list[GoldenCrossScanItemDTO] = Field(description="Top 종목 (기본 10)")
+    top_industries: list[IndustrySummaryDTO] = Field(description="Top 업종 (기본 3)")
+
+    buy_candidate_count: int = Field(description="매수 후보 종목 수")
+    scan_time: datetime = Field(description="기준 스캔 시각")
 
 
 # ==================== MA5 Breakout Strategy DTOs ====================

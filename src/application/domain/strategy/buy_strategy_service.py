@@ -15,10 +15,12 @@ from datetime import datetime
 from decimal import Decimal
 
 import pandas as pd
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.connection import AsyncSessionLocal
 
+from src.adapters.database.models.naver_industry_code import NaverIndustryCodeModel
 from src.adapters.database.models.stock_universe import MarketType
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
@@ -271,6 +273,8 @@ class BuyStrategyService:
                                     name=stock.name,
                                     market=stock.market,
                                     current_price=Decimal(str(close)),
+                                    industry_code=stock.industry,
+                                    industry_name=None,
                                     ma_short=Decimal(str(round(ma_short, 2))),
                                     ma_long=Decimal(str(round(ma_long, 2))),
                                     ma_gap_ratio=round(ma_gap_ratio, 2),
@@ -339,7 +343,24 @@ class BuyStrategyService:
             )
         )
 
-        # 4. 통계 계산
+        # 4. 업종명 매핑 (industry_code -> industry_name)
+        # - 운영에서 industry는 네이버 industryCode(숫자 문자열)를 저장
+        industry_codes = {r.industry_code for r in results if r.industry_code}
+        if industry_codes:
+            try:
+                stmt = select(NaverIndustryCodeModel).where(
+                    NaverIndustryCodeModel.industry_code.in_(industry_codes)
+                )
+                mapping_rows = (await session.execute(stmt)).scalars().all()
+                code_to_name = {row.industry_code: row.industry_name for row in mapping_rows}
+                for r in results:
+                    if r.industry_code:
+                        r.industry_name = code_to_name.get(r.industry_code)
+            except Exception as e:
+                # 매핑 테이블 미생성/미마이그레이션 등의 상황에서도 스캔 자체는 깨지지 않게 한다.
+                logger.warning(f"[GC Scan] Failed to attach industry names: {e}")
+
+        # 5. 통계 계산
         gc_active_count = sum(1 for r in results if r.is_gc_active)
         pullback_waiting_count = sum(1 for r in results if r.gc_state == "WAITING_FOR_PULLBACK")
         buy_interest_count = sum(1 for r in results if r.gc_state == "BUY_INTEREST")
@@ -501,6 +522,8 @@ class BuyStrategyService:
                         name=name,
                         market=market,
                         current_price=Decimal(str(close)),
+                        industry_code=None,
+                        industry_name=None,
                         ma_short=Decimal(str(round(ma_short, 2))),
                         ma_long=Decimal(str(round(ma_long, 2))),
                         ma_gap_ratio=round(ma_gap_ratio, 2),

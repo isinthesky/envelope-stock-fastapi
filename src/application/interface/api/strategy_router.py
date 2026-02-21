@@ -31,6 +31,7 @@ from src.application.domain.strategy.dto import (
     AnalysisHistoryUpdateDTO,
     GoldenCrossConfigDTO,
     GoldenCrossScanListDTO,
+    GoldenCrossRecommendationDTO,
     MA5BreakoutScanListDTO,
     SellSignalAnalysisDTO,
     SignalListDTO,
@@ -171,6 +172,37 @@ async def scan_golden_cross(
         max_concurrent=max_concurrent,
     )
     return ResponseDTO.success_response(result, "Golden cross scan completed")
+
+
+@router.get(
+    "/universe/golden-cross-recommendations",
+    response_model=ResponseDTO[GoldenCrossRecommendationDTO],
+    status_code=status.HTTP_200_OK,
+    summary="골든크로스 추천 요약 (Top10 + Top 업종)",
+    description="골든크로스 스캔 결과를 기반으로 Top 종목 + Top 업종을 요약해서 반환",
+)
+async def golden_cross_recommendations(
+    service: StrategyServiceDep,
+    market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
+    stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
+    gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
+    include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
+    max_concurrent: int | None = Query(default=None, ge=1, le=50, description="동시 처리 수"),
+    top_n: int = Query(default=10, ge=1, le=50, description="Top 종목 개수"),
+    top_industries_n: int = Query(default=3, ge=1, le=20, description="Top 업종 개수"),
+) -> ResponseDTO[GoldenCrossRecommendationDTO]:
+    result = await service.get_golden_cross_recommendations(
+        market=market,
+        stoch_threshold=stoch_threshold,
+        gc_only=gc_only,
+        include_etf=include_etf,
+        limit=limit,
+        max_concurrent=max_concurrent,
+        top_n=top_n,
+        top_industries_n=top_industries_n,
+    )
+    return ResponseDTO.success_response(result, "Golden cross recommendations generated")
 
 
 @router.post(
