@@ -789,7 +789,7 @@ const displayGcScanResults = (data, options = { persist: true }) => {
 
   document.getElementById("gc_scan_container").style.display = "block";
   document.getElementById("universe_list_container").style.display = "none";
-  document.getElementById("stock_list_container").style.display = "none";
+  { const el = document.getElementById("stock_list_container"); if (el) el.style.display = "none"; }
   document.getElementById("stats_row").style.display = "flex";
 
   // 매수 관심/적기 종목만 필터링
@@ -950,7 +950,7 @@ const getGcStateLabel = (state) => {
 const displayUniverseStocks = (data) => {
   universeStocks = data.stocks || [];
   document.getElementById("universe_list_container").style.display = "block";
-  document.getElementById("stock_list_container").style.display = "none";
+  { const el = document.getElementById("stock_list_container"); if (el) el.style.display = "none"; }
   document.getElementById("gc_scan_container").style.display = "none";
   document.getElementById("stats_row").style.display = "flex";
 
@@ -1003,7 +1003,8 @@ const showUniverseTab = (filter) => {
 // Symbol States API 응답 처리 (전략 종목 상태)
 const displayStockList = (data) => {
   allStocks = data.states || [];
-  document.getElementById("stock_list_container").style.display = "block";
+  const stockListEl = document.getElementById("stock_list_container");
+  if (stockListEl) stockListEl.style.display = "block";
   document.getElementById("universe_list_container").style.display = "none";
   document.getElementById("gc_scan_container").style.display = "none";
   document.getElementById("stats_row").style.display = "flex";
@@ -1032,6 +1033,7 @@ const renderTable = (stocks) => {
     currentFilter === 'position' ? stocks.filter(s => s.state === 'IN_POSITION') : stocks;
 
   const tbody = document.getElementById("stock_table_body");
+  if (!tbody) return;
   tbody.innerHTML = filtered.map(stock => {
     const stateClass = getStateClass(stock.state);
     const stateLabel = getStateLabel(stock.state);
