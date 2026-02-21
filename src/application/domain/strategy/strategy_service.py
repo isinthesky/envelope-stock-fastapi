@@ -944,13 +944,13 @@ class StrategyService:
         include_etf: bool = True,
         limit: int = 1000,
         max_concurrent: int | None = None,
-        top_n: int = 10,
+        top_n: int = 5,
         top_industries_n: int = 3,
     ) -> GoldenCrossRecommendationDTO:
         """골든크로스 추천 요약 (Top 종목 + Top 업종)
 
-        - Top 종목: scan 결과 정렬 기준 그대로 상위 N개
-        - Top 업종: 매수 후보(OPTIMAL_BUY/READY_TO_BUY/BUY_INTEREST)에서 업종별 count 상위 N개
+        - Top 종목: OPTIMAL_BUY(매수 적기) 종목 중 screening_score 상위 N개
+        - Top 업종: OPTIMAL_BUY(매수 적기) 후보에서 업종별 count 상위 N개
         """
         from collections import Counter
 
@@ -966,18 +966,23 @@ class StrategyService:
             max_concurrent=max_concurrent,
         )
 
-        top_stocks = scan.stocks[:top_n]
-
-        buy_states = {"OPTIMAL_BUY", "READY_TO_BUY", "BUY_INTEREST"}
-        buy_candidates = [s for s in scan.stocks if s.gc_state in buy_states]
+        # OPTIMAL_BUY(매수 적기)만 추천 대상으로 사용
+        optimal_candidates = [s for s in scan.stocks if s.gc_state == "OPTIMAL_BUY"]
+        optimal_candidates.sort(
+            key=lambda s: (
+                -float(s.screening_score or 0),
+                s.symbol,
+            )
+        )
+        top_stocks = optimal_candidates[:top_n]
 
         counter: Counter[str] = Counter(
-            [s.industry_code for s in buy_candidates if s.industry_code]
+            [s.industry_code for s in optimal_candidates if s.industry_code]
         )
 
         # code -> name (이미 scan 단계에서 industry_name attach 됨)
         code_to_name: dict[str, str | None] = {}
-        for s in buy_candidates:
+        for s in optimal_candidates:
             if s.industry_code and s.industry_code not in code_to_name:
                 code_to_name[s.industry_code] = s.industry_name
 
@@ -994,7 +999,7 @@ class StrategyService:
         return GoldenCrossRecommendationDTO(
             top_stocks=top_stocks,
             top_industries=top_industries,
-            buy_candidate_count=len(buy_candidates),
+            buy_candidate_count=len(optimal_candidates),
             scan_time=scan.scan_time,
         )
 

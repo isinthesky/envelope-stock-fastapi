@@ -191,7 +191,7 @@ async def golden_cross_recommendations(
     include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
     limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
     max_concurrent: int | None = Query(default=None, ge=1, le=50, description="동시 처리 수"),
-    top_n: int = Query(default=10, ge=1, le=50, description="Top 종목 개수"),
+    top_n: int = Query(default=5, ge=1, le=50, description="Top 종목 개수"),
     top_industries_n: int = Query(default=3, ge=1, le=20, description="Top 업종 개수"),
 ) -> ResponseDTO[GoldenCrossRecommendationDTO]:
     result = await service.get_golden_cross_recommendations(
@@ -222,7 +222,7 @@ async def notify_golden_cross_recommendations(
     include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
     limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
     max_concurrent: int | None = Query(default=None, ge=1, le=50, description="동시 처리 수"),
-    top_n: int = Query(default=10, ge=1, le=50, description="Top 종목 개수"),
+    top_n: int = Query(default=5, ge=1, le=50, description="Top 종목 개수"),
     top_industries_n: int = Query(default=3, ge=1, le=20, description="Top 업종 개수"),
 ) -> ResponseDTO[GoldenCrossRecommendationDTO]:
     result = await service.get_golden_cross_recommendations(

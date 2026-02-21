@@ -235,7 +235,7 @@ class TelegramNotifier:
         ]
 
         if buy_candidate_count is not None:
-            lines.append(f"매수 후보: {buy_candidate_count}개")
+            lines.append(f"매수 적기 후보: {buy_candidate_count}개")
 
         if scan_time_str:
             lines.append(f"(scan_time: {scan_time_str})")
