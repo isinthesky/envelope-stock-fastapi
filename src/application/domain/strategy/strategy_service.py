@@ -190,9 +190,15 @@ class StrategyService:
         account_no = request.account_no or settings.current_kis_account_no
 
         # 전략명 중복 체크 (session을 메서드 파라미터로 전달)
-        existing = await self.strategy_repo.get_by_name(request.name, session=session)
+        existing = await self.strategy_repo.get_by_name(
+            request.name,
+            account_no=account_no,
+            session=session,
+        )
         if existing:
-            raise StrategyError(f"Strategy with name '{request.name}' already exists")
+            raise StrategyError(
+                f"Strategy with name '{request.name}' already exists for account '{account_no}'"
+            )
 
         # 종목 리스트 문자열 변환
         symbols_str = ",".join(request.symbols)
@@ -309,6 +315,15 @@ class StrategyService:
         # 수정할 필드 준비
         update_data = {}
         if request.name:
+            duplicate = await self.strategy_repo.get_by_name(
+                request.name,
+                account_no=strategy.account_no,
+                session=session,
+            )
+            if duplicate and duplicate.id != strategy_id:
+                raise StrategyError(
+                    f"Strategy with name '{request.name}' already exists for account '{strategy.account_no}'"
+                )
             update_data["name"] = request.name
         if request.description is not None:
             update_data["description"] = request.description
@@ -352,7 +367,7 @@ class StrategyService:
         if strategy.is_active:
             raise StrategyError("Cannot delete active strategy. Stop it first.")
 
-        await self.strategy_repo.delete_by_id(strategy_id, session=session)
+        await self.strategy_repo.soft_delete_by_id(strategy_id, session=session)
 
     # ==================== 전략 상태 관리 ====================
 
@@ -1127,7 +1142,10 @@ class StrategyService:
             sell_phase=dto.sell_phase,
             sell_reasons=sell_reasons_json,
             analyzed_at=datetime.now(),
+            entry_price=dto.entry_price,
+            note=dto.note,
             is_active=dto.is_active if dto.is_active is not None else True,
+            candle_count=dto.candle_count,
         )
 
         return self._history_to_dto(model)
@@ -1403,6 +1421,7 @@ class StrategyService:
             "entry_price": model.entry_price,
             "note": model.note,
             "is_active": model.is_active,
+            "candle_count": model.candle_count,
             "created_at": model.created_at,
             "updated_at": model.updated_at,
         }
