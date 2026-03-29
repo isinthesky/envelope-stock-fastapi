@@ -368,3 +368,69 @@ class MultiSymbolBacktestResultDTO(BaseDTO):
     total_count: int = Field(description="전체 종목 수")
     success_count: int = Field(description="성공 종목 수")
     failed_count: int = Field(description="실패 종목 수")
+
+
+class UniverseBacktestRequestDTO(BaseDTO):
+    """종목 유니버스 기반 골든크로스 백테스트 요청 DTO"""
+
+    start_date: datetime = Field(description="시작일")
+    end_date: datetime = Field(description="종료일")
+    market: str | None = Field(default=None, description="시장 필터 (KOSPI/KOSDAQ)")
+    eligible_only: bool = Field(default=True, description="유니버스 적격 종목만 대상")
+    limit: int = Field(default=20, description="백테스트 대상 최대 종목 수", ge=1, le=100)
+    strategy_type: str = Field(default="golden_cross", description="전략 유형")
+    strategy_params: dict | None = Field(default=None, description="골든크로스 전략 파라미터")
+    backtest_config: BacktestConfigDTO = Field(
+        default_factory=BacktestConfigDTO,
+        description="백테스팅 설정",
+    )
+
+    @field_validator("end_date")
+    @classmethod
+    def validate_universe_dates(cls, v: datetime, info) -> datetime:
+        start_date = info.data.get("start_date")
+        if start_date and v <= start_date:
+            raise ValueError("end_date must be after start_date")
+        return v
+
+
+class UniverseBacktestSymbolSummaryDTO(BaseDTO):
+    """유니버스 백테스트 종목별 요약 DTO"""
+
+    symbol: str = Field(description="종목코드")
+    total_return: float = Field(description="총 수익률 (%)")
+    win_rate: float = Field(description="승률 (%)")
+    total_trades: int = Field(description="총 거래 횟수")
+    mdd: float = Field(description="최대 낙폭 (%)")
+    avg_holding_days: float = Field(description="평균 보유 기간 (일)")
+
+
+class UniverseBacktestSummaryDTO(BaseDTO):
+    """유니버스 백테스트 집계 요약 DTO"""
+
+    requested_count: int = Field(description="요청 종목 수")
+    success_count: int = Field(description="성공 종목 수")
+    failed_count: int = Field(description="실패 종목 수")
+    average_return: float = Field(description="평균 수익률 (%)")
+    average_win_rate: float = Field(description="평균 승률 (%)")
+    average_mdd: float = Field(description="평균 MDD (%)")
+    average_holding_days: float = Field(description="평균 보유 기간 (일)")
+    profitable_symbols: int = Field(description="수익 종목 수")
+    profitable_ratio: float = Field(description="수익 종목 비율 (%)")
+    total_trades: int = Field(description="전체 거래 수")
+    best_symbols: list[UniverseBacktestSymbolSummaryDTO] = Field(default_factory=list)
+    worst_symbols: list[UniverseBacktestSymbolSummaryDTO] = Field(default_factory=list)
+
+
+class UniverseBacktestResultDTO(BaseDTO):
+    """종목 유니버스 기반 백테스트 결과 DTO"""
+
+    market: str | None = Field(default=None, description="시장 필터")
+    eligible_only: bool = Field(description="적격 종목 필터 여부")
+    symbols: list[str] = Field(description="실행 종목 목록")
+    start_date: datetime = Field(description="시작일")
+    end_date: datetime = Field(description="종료일")
+    strategy_type: str = Field(description="전략 유형")
+    config_summary: dict = Field(description="적용 전략/리스크 설정 요약")
+    summary: UniverseBacktestSummaryDTO = Field(description="집계 요약")
+    results: dict[str, BacktestResultDTO] = Field(description="종목별 상세 결과")

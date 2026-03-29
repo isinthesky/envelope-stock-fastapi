@@ -16,6 +16,9 @@ from src.application.domain.backtest.dto import (
     BacktestResultDTO,
     MultiSymbolBacktestRequestDTO,
     MultiSymbolBacktestResultDTO,
+    UniverseBacktestResultDTO,
+    UniverseBacktestSummaryDTO,
+    UniverseBacktestSymbolSummaryDTO,
 )
 from src.application.domain.backtest.engine import BacktestEngine
 from src.application.domain.market_data.service import MarketDataService
@@ -163,6 +166,86 @@ class BacktestService:
             total_count=len(request.symbols),
             success_count=success_count,
             failed_count=failed_count
+        )
+
+    def summarize_multi_symbol_results(
+        self,
+        multi_result: MultiSymbolBacktestResultDTO,
+    ) -> UniverseBacktestSummaryDTO:
+        """다중 종목 백테스트 결과를 sell 전략 페이지용 요약으로 집계"""
+        result_list = list(multi_result.results.values())
+        if not result_list:
+            return UniverseBacktestSummaryDTO(
+                requested_count=multi_result.total_count,
+                success_count=multi_result.success_count,
+                failed_count=multi_result.failed_count,
+                average_return=0.0,
+                average_win_rate=0.0,
+                average_mdd=0.0,
+                average_holding_days=0.0,
+                profitable_symbols=0,
+                profitable_ratio=0.0,
+                total_trades=0,
+                best_symbols=[],
+                worst_symbols=[],
+            )
+
+        symbol_summaries = [
+            UniverseBacktestSymbolSummaryDTO(
+                symbol=result.symbol,
+                total_return=result.total_return,
+                win_rate=result.win_rate,
+                total_trades=result.total_trades,
+                mdd=result.mdd,
+                avg_holding_days=result.avg_holding_days,
+            )
+            for result in result_list
+        ]
+
+        profitable_symbols = sum(1 for result in result_list if result.total_return > 0)
+        profitable_ratio = (profitable_symbols / len(result_list)) * 100 if result_list else 0.0
+
+        sorted_by_return = sorted(symbol_summaries, key=lambda item: item.total_return, reverse=True)
+
+        return UniverseBacktestSummaryDTO(
+            requested_count=multi_result.total_count,
+            success_count=multi_result.success_count,
+            failed_count=multi_result.failed_count,
+            average_return=round(sum(result.total_return for result in result_list) / len(result_list), 2),
+            average_win_rate=round(sum(result.win_rate for result in result_list) / len(result_list), 2),
+            average_mdd=round(sum(result.mdd for result in result_list) / len(result_list), 2),
+            average_holding_days=round(
+                sum(result.avg_holding_days for result in result_list) / len(result_list), 2
+            ),
+            profitable_symbols=profitable_symbols,
+            profitable_ratio=round(profitable_ratio, 2),
+            total_trades=sum(result.total_trades for result in result_list),
+            best_symbols=sorted_by_return[:5],
+            worst_symbols=list(reversed(sorted_by_return[-5:])),
+        )
+
+    def build_universe_backtest_result(
+        self,
+        *,
+        market: str | None,
+        eligible_only: bool,
+        symbols: list[str],
+        request: MultiSymbolBacktestRequestDTO,
+        multi_result: MultiSymbolBacktestResultDTO,
+        config_summary: dict,
+    ) -> UniverseBacktestResultDTO:
+        """유니버스 백테스트 결과 래핑"""
+        summary = self.summarize_multi_symbol_results(multi_result)
+        return UniverseBacktestResultDTO(
+            market=market,
+            eligible_only=eligible_only,
+            symbols=symbols,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            strategy_type=request.strategy_type,
+            config_summary=config_summary,
+            summary=summary,
+            results=multi_result.results,
         )
 
     async def validate_data_quality(

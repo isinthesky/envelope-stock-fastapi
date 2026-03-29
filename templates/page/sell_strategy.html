@@ -176,6 +176,19 @@
   border-radius: 12px;
   font-size: 14px;
 }
+.universe-backtest-section { margin-top: 24px; }
+.universe-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 16px; }
+.universe-summary-card { background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+.universe-summary-card .label { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+.universe-summary-card .value { font-size: 22px; font-weight: 700; color: #0f172a; }
+.universe-ranking { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+.universe-ranking .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; }
+.universe-ranking h4 { margin-bottom: 10px; }
+.universe-ranking ul { list-style: none; padding: 0; margin: 0; }
+.universe-ranking li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+.universe-ranking li:last-child { border-bottom: none; }
+.universe-positive { color: #16a34a; }
+.universe-negative { color: #dc2626; }
 {% endblock %}
 
 {% block content %}
@@ -231,6 +244,34 @@
   <div id="result_container">
     <div class="placeholder-message">
       결과를 불러오는 중...
+    </div>
+  </div>
+</section>
+
+<section class="universe-backtest-section">
+  <h2>유니버스 백테스트 (공격형 매도 v1)</h2>
+  <p>현재 종목 유니버스를 대상으로 골든크로스 진입 + 공격형 중단기 스윙 매도 규칙의 승률/수익률을 집계합니다.</p>
+  <div class="row">
+    <label>시장</label>
+    <select id="universe_market_filter" style="width: 120px;">
+      <option value="">전체</option>
+      <option value="KOSPI">KOSPI</option>
+      <option value="KOSDAQ">KOSDAQ</option>
+    </select>
+    <label style="margin-left: 12px;">종목 수</label>
+    <input id="universe_limit" type="number" value="20" min="1" max="100" style="width: 80px;" />
+    <label style="margin-left: 12px;"><input id="universe_eligible_only" type="checkbox" checked /> 적격 종목만</label>
+  </div>
+  <div class="row" style="margin-top: 8px;">
+    <label>시작일</label>
+    <input id="universe_start_date" type="date" value="2024-01-01" style="width: 150px;" />
+    <label style="margin-left: 12px;">종료일</label>
+    <input id="universe_end_date" type="date" value="2024-12-31" style="width: 150px;" />
+    <button style="margin-left: 12px;" onclick="runUniverseBacktest()">유니버스 백테스트 실행</button>
+  </div>
+  <div id="universe_backtest_container" class="result-card" style="margin-top: 16px;">
+    <div class="placeholder-message">
+      아직 유니버스 백테스트를 실행하지 않았습니다.
     </div>
   </div>
 </section>
@@ -1083,6 +1124,98 @@ const displayResult = (data) => {
   `;
 
   document.getElementById("result_container").innerHTML = html;
+};
+
+const renderUniverseBacktest = (data) => {
+  const container = document.getElementById("universe_backtest_container");
+  if (!container) return;
+
+  if (!data || !data.summary) {
+    container.innerHTML = `<div class="placeholder-message">유니버스 백테스트 결과가 없습니다.</div>`;
+    return;
+  }
+
+  const summary = data.summary;
+  const bestSymbols = (summary.best_symbols || []).map(item => `
+    <li>
+      <span>${item.symbol}</span>
+      <strong class="universe-positive">${Number(item.total_return).toFixed(2)}%</strong>
+    </li>
+  `).join('') || '<li><span>데이터 없음</span><span>-</span></li>';
+
+  const worstSymbols = (summary.worst_symbols || []).map(item => `
+    <li>
+      <span>${item.symbol}</span>
+      <strong class="universe-negative">${Number(item.total_return).toFixed(2)}%</strong>
+    </li>
+  `).join('') || '<li><span>데이터 없음</span><span>-</span></li>';
+
+  const config = data.config_summary || {};
+  container.innerHTML = `
+    <div class="result-header">
+      <h3>유니버스 백테스트 요약</h3>
+      <div style="font-size: 12px; color: #64748b;">
+        ${data.market || '전체'} · ${data.symbols.length}종목 · ${data.start_date?.slice(0,10)} ~ ${data.end_date?.slice(0,10)}
+      </div>
+    </div>
+    <div style="font-size: 13px; color: #475569; margin-bottom: 8px;">
+      전략: ${config.label || '공격형 중단기 스윙 매도 v1'}
+      (손절 ${formatPercent(Math.abs(config.stop_loss || 0))} / 익절 ${formatPercent(config.take_profit || 0)} / trailing ${formatPercent(config.trailing_stop || 0)})
+    </div>
+    <div class="universe-summary-grid">
+      <div class="universe-summary-card"><div class="label">평균 수익률</div><div class="value ${summary.average_return >= 0 ? 'universe-positive' : 'universe-negative'}">${Number(summary.average_return).toFixed(2)}%</div></div>
+      <div class="universe-summary-card"><div class="label">평균 승률</div><div class="value">${Number(summary.average_win_rate).toFixed(2)}%</div></div>
+      <div class="universe-summary-card"><div class="label">수익 종목 비율</div><div class="value">${Number(summary.profitable_ratio).toFixed(2)}%</div></div>
+      <div class="universe-summary-card"><div class="label">평균 MDD</div><div class="value">${Number(summary.average_mdd).toFixed(2)}%</div></div>
+      <div class="universe-summary-card"><div class="label">평균 보유일</div><div class="value">${Number(summary.average_holding_days).toFixed(1)}일</div></div>
+      <div class="universe-summary-card"><div class="label">총 거래 수</div><div class="value">${formatNumber(summary.total_trades)}</div></div>
+    </div>
+    <div class="universe-ranking">
+      <div class="panel">
+        <h4>상위 수익 종목</h4>
+        <ul>${bestSymbols}</ul>
+      </div>
+      <div class="panel">
+        <h4>하위 수익 종목</h4>
+        <ul>${worstSymbols}</ul>
+      </div>
+    </div>
+  `;
+};
+
+const runUniverseBacktest = async () => {
+  const container = document.getElementById("universe_backtest_container");
+  const market = document.getElementById("universe_market_filter")?.value || null;
+  const limit = parseInt(document.getElementById("universe_limit")?.value || '20', 10);
+  const eligibleOnly = !!document.getElementById("universe_eligible_only")?.checked;
+  const startDate = document.getElementById("universe_start_date")?.value;
+  const endDate = document.getElementById("universe_end_date")?.value;
+
+  if (!startDate || !endDate) {
+    alert('백테스트 기간을 입력해주세요.');
+    return;
+  }
+
+  container.innerHTML = `<div class="placeholder-message">유니버스 백테스트 실행 중...</div>`;
+
+  try {
+    const response = await fetch('/api/v1/backtest/run-universe-golden-cross', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        market: market || null,
+        eligible_only: eligibleOnly,
+        limit,
+        start_date: `${startDate}T00:00:00`,
+        end_date: `${endDate}T00:00:00`
+      })
+    });
+    const result = await response.json();
+    renderUniverseBacktest(result);
+  } catch (e) {
+    console.error('Failed to run universe backtest:', e);
+    container.innerHTML = `<div class="placeholder-message" style="color:#dc2626;">유니버스 백테스트 실행 실패</div>`;
+  }
 };
 
 const renderHistoryTable = () => {

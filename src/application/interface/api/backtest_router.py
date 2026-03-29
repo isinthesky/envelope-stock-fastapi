@@ -13,9 +13,13 @@ from src.application.domain.backtest.dto import (
     BacktestResultDTO,
     MultiSymbolBacktestRequestDTO,
     MultiSymbolBacktestResultDTO,
+    UniverseBacktestRequestDTO,
+    UniverseBacktestResultDTO,
 )
 from src.application.domain.backtest.service import BacktestService
 from src.application.domain.market_data.service import MarketDataService
+from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
+from src.application.domain.strategy.dto import StrategyConfigDTO
 
 router = APIRouter(prefix="/api/v1/backtest", tags=["Backtest"])
 
@@ -76,6 +80,125 @@ async def run_multi_symbol_backtest(
     """
     result = await service.run_multi_symbol_backtest(request)
     return result
+
+
+@router.post("/run-universe-golden-cross", response_model=UniverseBacktestResultDTO)
+async def run_universe_golden_cross_backtest(
+    request: UniverseBacktestRequestDTO,
+    session: DatabaseSession,
+    service: BacktestService = Depends(get_backtest_service),
+):
+    """종목 유니버스 기반 골든크로스 + 공격형 매도 백테스트 요약 실행"""
+    strategy_params = {
+        "short_period": 55,
+        "long_period": 165,
+        "stoch_k_period": 14,
+        "stoch_d_period": 3,
+        "stoch_oversold": 30.0,
+        "stoch_overbought": 70.0,
+        "require_k_above_d_for_buy": False,
+        "require_k_below_d_for_sell": False,
+    }
+    if request.strategy_params:
+        strategy_params.update(request.strategy_params)
+
+    buy_service = BuyStrategyService(session=session)
+    scan = await buy_service.scan_golden_cross_candidates(
+        market=request.market,
+        stoch_threshold=float(strategy_params.get("stoch_oversold", 30.0)),
+        gc_only=False,
+        include_etf=False,
+        limit=max(request.limit * 5, request.limit),
+    )
+
+    preferred_states = ["OPTIMAL_BUY", "READY_TO_BUY", "BUY_INTEREST", "WAITING_FOR_PULLBACK"]
+    selected_scan_items = [item for state in preferred_states for item in scan.stocks if item.gc_state == state]
+    if request.eligible_only:
+        selected_scan_items = [item for item in selected_scan_items if item.screening_score is not None]
+
+    symbols = []
+    seen_symbols = set()
+    for item in selected_scan_items:
+        if item.symbol in seen_symbols:
+            continue
+        seen_symbols.add(item.symbol)
+        symbols.append(item.symbol)
+        if len(symbols) >= request.limit:
+            break
+    if not symbols:
+        return UniverseBacktestResultDTO(
+            market=request.market,
+            eligible_only=request.eligible_only,
+            symbols=[],
+            start_date=request.start_date,
+            end_date=request.end_date,
+            strategy_type=request.strategy_type,
+            config_summary={
+                "label": "공격형 중단기 스윙 매도 v1",
+                "stop_loss": -0.05,
+                "take_profit": 0.10,
+                "trailing_stop": 0.07,
+                "max_hold_days": 60,
+            },
+            summary=service.summarize_multi_symbol_results(
+                MultiSymbolBacktestResultDTO(results={}, total_count=0, success_count=0, failed_count=0)
+            ),
+            results={},
+        )
+
+    strategy_config = StrategyConfigDTO()
+    strategy_config.risk_management.use_stop_loss = True
+    strategy_config.risk_management.stop_loss_ratio = -0.05
+    strategy_config.risk_management.use_take_profit = True
+    strategy_config.risk_management.take_profit_ratio = 0.10
+    strategy_config.risk_management.use_trailing_stop = True
+    strategy_config.risk_management.trailing_stop_ratio = 0.07
+    strategy_config.risk_management.use_atr_stop_loss = False
+    strategy_config.risk_management.use_atr_trailing_stop = False
+
+    strategy_params = {
+        "short_period": 55,
+        "long_period": 165,
+        "stoch_k_period": 14,
+        "stoch_d_period": 3,
+        "stoch_oversold": 30.0,
+        "stoch_overbought": 70.0,
+        "require_k_above_d_for_buy": False,
+        "require_k_below_d_for_sell": False,
+    }
+    if request.strategy_params:
+        strategy_params.update(request.strategy_params)
+
+    multi_request = MultiSymbolBacktestRequestDTO(
+        symbols=symbols,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        strategy_type=request.strategy_type,
+        strategy_params=strategy_params,
+        strategy_config=strategy_config,
+        backtest_config=request.backtest_config,
+    )
+    multi_result = await service.run_multi_symbol_backtest(multi_request)
+
+    config_summary = {
+        "label": "공격형 중단기 스윙 매도 v1",
+        "universe_count": len(symbols),
+        "stop_loss": strategy_config.risk_management.stop_loss_ratio,
+        "take_profit": strategy_config.risk_management.take_profit_ratio,
+        "trailing_stop": strategy_config.risk_management.trailing_stop_ratio,
+        "max_hold_days": 60,
+        "entry_strategy": "golden_cross",
+        "entry_params": strategy_params,
+    }
+
+    return service.build_universe_backtest_result(
+        market=request.market,
+        eligible_only=request.eligible_only,
+        symbols=symbols,
+        request=multi_request,
+        multi_result=multi_result,
+        config_summary=config_summary,
+    )
 
 
 @router.post("/validate-data")
