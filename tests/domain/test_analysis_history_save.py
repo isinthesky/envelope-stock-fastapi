@@ -71,3 +71,41 @@ async def test_save_analysis_history_persists_entry_price_note_and_candle_count(
     assert result.entry_price == Decimal("70000")
     assert result.note == "regression"
     assert result.candle_count == 300
+
+
+def test_history_to_dto_includes_candle_count_without_sell_result() -> None:
+    service = StrategyService()
+    now = datetime.now(timezone.utc)
+    model = SimpleNamespace(
+        id=1,
+        analysis_type="sell",
+        symbol="005930",
+        name="삼성전자",
+        current_price=Decimal("65000"),
+        ma_short=Decimal("64000"),
+        ma_long=Decimal("66000"),
+        ma_gap_ratio=Decimal("-3.03"),
+        stoch_k=Decimal("82.1"),
+        stoch_d=Decimal("79.5"),
+        gc_state=None,
+        is_gc_active=None,
+        rsi=Decimal("71.2"),
+        is_death_cross=True,
+        is_stoch_overbought=True,
+        is_rsi_overbought=True,
+        sell_phase="PHASE_4",
+        sell_reasons='["데드크로스 발생"]',
+        analyzed_at=now,
+        entry_price=Decimal("70000"),
+        note="dto regression",
+        is_active=True,
+        candle_count=300,
+        created_at=now,
+        updated_at=now,
+    )
+
+    result = service._history_to_dto(model)
+
+    assert result.candle_count == 300
+    assert result.entry_price == Decimal("70000")
+    assert result.note == "dto regression"
