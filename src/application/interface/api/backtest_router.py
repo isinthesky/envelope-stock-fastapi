@@ -43,9 +43,9 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
         "stoch_overbought": 70.0,
         "require_k_above_d_for_buy": False,
         "require_k_below_d_for_sell": False,
-        "buy_recovery_threshold": 35.0,
-        "min_pullback_bars": 2,
-        "min_reentry_cooldown_bars": 5,
+        "buy_recovery_threshold": 45.0,
+        "min_pullback_bars": 4,
+        "min_reentry_cooldown_bars": 10,
         "disable_stoch_overbought_sell": True,
         "breakeven_activation": 0.06,
         "partial_take_profit_1": 0.10,
@@ -86,7 +86,7 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
             start_date=request.start_date,
             end_date=request.end_date,
             strategy_type=request.strategy_type,
-            config_summary={"label": "공격형 중단기 스윙 매도 v2", "comparison_results": []},
+            config_summary={"label": "공격형 중단기 스윙 매도 v3", "comparison_results": []},
             summary=service.summarize_multi_symbol_results(MultiSymbolBacktestResultDTO(results={}, total_count=0, success_count=0, failed_count=0)),
             results={},
         )
@@ -140,7 +140,7 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
     assert final_multi_result is not None and final_request is not None
 
     config_summary = {
-        "label": "공격형 중단기 스윙 매도 v2",
+        "label": "공격형 중단기 스윙 매도 v3",
         "universe_count": len(symbols),
         "stop_loss": -0.05,
         "breakeven_activation": base_strategy_params["breakeven_activation"],

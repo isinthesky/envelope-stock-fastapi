@@ -1166,7 +1166,7 @@ const renderUniverseBacktest = (data) => {
       </div>
     </div>
     <div style="font-size: 13px; color: #475569; margin-bottom: 8px;">
-      전략: ${config.label || '공격형 중단기 스윙 매도 v2'}
+      전략: ${config.label || '공격형 중단기 스윙 매도 v3'}
       (손절 ${formatPercent(Math.abs(config.stop_loss || 0))} / 본전보호 ${formatPercent(config.breakeven_activation || 0)} / 1차익절 ${formatPercent(config.partial_take_profit_1 || 0)} / 2차익절 ${formatPercent(config.partial_take_profit_2 || 0)} / trailing ${formatPercent(config.trailing_stop || 0)})
     </div>
     <div class="universe-summary-grid">
