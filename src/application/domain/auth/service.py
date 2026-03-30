@@ -97,12 +97,14 @@ class AuthService:
         if token_info is None:
             raise InvalidTokenError()
 
-        remaining_seconds = int((token_info.expires_at - datetime.now()).total_seconds())
+        remaining_seconds = token_info.remaining_seconds
+        if remaining_seconds is None:
+            remaining_seconds = int((token_info.expires_at - datetime.now()).total_seconds())
 
         return TokenStatusDTO(
             is_valid=token_info.is_valid,
             expires_at=token_info.expires_at,
-            remaining_seconds=max(0, remaining_seconds),
+            remaining_seconds=max(0, int(remaining_seconds)),
             environment=settings.trading_environment,
         )
 

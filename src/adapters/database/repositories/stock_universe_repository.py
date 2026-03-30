@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Sequence
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.stock_universe import MarketType, StockUniverseModel
@@ -362,14 +362,29 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
         session: AsyncSession | None = None,
     ) -> dict:
         """유니버스 통계"""
-        total = await self.count(session=session)
-        active = await self.count(session=session, is_active=True)
-        eligible = len(await self.get_eligible_stocks(limit=10000, session=session))
-        excluded = await self.count(session=session, is_excluded=True)
+        db = self._get_session(session)
+
+        total = await self.count(session=db)
+        active = await self.count(session=db, is_active=True)
+        excluded = await self.count(session=db, is_excluded=True)
+
+        # 기존 구현은 get_eligible_stocks(limit=10000)를 호출해 전체 행을 로드한 뒤 len()을 계산했음.
+        # 통계 API에서는 행 로드가 불필요하므로 COUNT(*)로 대체 (성능/메모리 개선, 의미 동일).
+        eligible_condition = (
+            (self.model.is_active == True)
+            & (self.model.is_tradable == True)
+            & (self.model.is_excluded == False)
+            & (self.model.passed_market_cap == True)
+            & (self.model.passed_volume == True)
+        )
+        eligible_stmt = select(func.count()).select_from(self.model).where(
+            eligible_condition
+        )
+        eligible = await db.scalar(eligible_stmt)
 
         return {
             "total_stocks": total,
             "active_stocks": active,
-            "eligible_stocks": eligible,
+            "eligible_stocks": int(eligible or 0),
             "excluded_stocks": excluded,
         }

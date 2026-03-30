@@ -8,7 +8,7 @@ Background Tasks - 백그라운드 작업 관리
 import asyncio
 from datetime import datetime
 
-from src.adapters.external.kis_api.auth import get_kis_auth
+from src.adapters.external.kis_api.auth import format_token_expires_in, get_kis_auth
 from src.settings.config import settings
 
 
@@ -61,15 +61,18 @@ class TokenRefreshTask:
                 if token_info:
                     remaining = token_info.remaining_seconds
                     hours_remaining = remaining / 3600
+                    should_refresh = token_info.is_expired or hours_remaining < 1.0
 
                     # 만료 1시간 전이면 갱신
-                    if hours_remaining < 1.0 and hours_remaining > 0:
+                    if should_refresh:
+                        minutes_remaining = max(int(hours_remaining * 60), 0)
                         print(
-                            f"🔄 Token will expire in {int(hours_remaining * 60)} minutes. Refreshing..."
+                            f"🔄 Token will expire in {minutes_remaining} minutes. Refreshing..."
                         )
                         await self.kis_auth.refresh_token()
+                        refreshed_expires_in = format_token_expires_in(self.kis_auth.token_info)
                         print(
-                            f"✅ Token refreshed successfully (expires in {self.kis_auth.token_info.remaining_seconds}s)"
+                            f"✅ Token refreshed successfully (expires in {refreshed_expires_in})"
                         )
                     else:
                         print(
@@ -79,8 +82,9 @@ class TokenRefreshTask:
                     # 토큰이 없으면 발급
                     print("⚠️  No token found. Requesting new token...")
                     await self.kis_auth.get_access_token(force_refresh=True)
+                    issued_expires_in = format_token_expires_in(self.kis_auth.token_info)
                     print(
-                        f"✅ Token issued successfully (expires in {self.kis_auth.token_info.remaining_seconds}s)"
+                        f"✅ Token issued successfully (expires in {issued_expires_in})"
                     )
 
             except Exception as e:

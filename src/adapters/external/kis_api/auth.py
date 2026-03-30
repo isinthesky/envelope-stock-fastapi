@@ -42,6 +42,23 @@ class TokenInfo:
         return max(0, int(delta.total_seconds()))
 
 
+def format_token_expires_in(token_info: TokenInfo | None) -> str:
+    """토큰 만료까지 남은 시간을 로그 출력용 문자열로 포맷."""
+    if token_info is None:
+        return "unknown"
+
+    remaining_seconds = getattr(token_info, "remaining_seconds", None)
+    if remaining_seconds is None:
+        return "unknown"
+
+    try:
+        remaining = int(remaining_seconds)
+    except (TypeError, ValueError):
+        return "unknown"
+
+    return f"{max(0, remaining)}s"
+
+
 class KISAuth:
     """
     KIS API 인증 관리 클래스

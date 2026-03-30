@@ -273,7 +273,7 @@ class BuyStrategyService:
                                     name=stock.name,
                                     market=stock.market,
                                     current_price=Decimal(str(close)),
-                                    industry_code=stock.industry,
+                                    industry_code=getattr(stock, "industry", None),
                                     industry_name=None,
                                     ma_short=Decimal(str(round(ma_short, 2))),
                                     ma_long=Decimal(str(round(ma_long, 2))),
