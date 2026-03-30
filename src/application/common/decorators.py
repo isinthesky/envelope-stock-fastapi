@@ -44,21 +44,19 @@ def transaction(func: Callable[P, T]) -> Callable[P, T]:
 
     @functools.wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        # 이미 session이 전달된 내부 호출은 세션 소유권이 호출자에게 있다.
+        if len(args) > 1 and isinstance(args[1], AsyncSession):
+            return await func(*args, **kwargs)
+
+        # 외부 호출만 트랜잭션 경계를 소유한다.
         async with AsyncSessionLocal() as session:
             try:
-                # Service 메서드의 첫 번째 인자를 session으로 교체
+                # Service 메서드의 첫 번째 인자를 session으로 주입
                 # 일반적으로 self, session, ... 형태
-                if len(args) > 1 and isinstance(args[1], AsyncSession):
-                    # 이미 session이 전달된 경우 (내부 호출)
-                    result = await func(*args, **kwargs)
-                else:
-                    # 새로운 session 주입 (외부 호출)
-                    new_args = (args[0], session) + args[1:]
-                    result = await func(*new_args, **kwargs)
-
+                new_args = (args[0], session) + args[1:]
+                result = await func(*new_args, **kwargs)
                 await session.commit()
                 return result
-
             except Exception as e:
                 await session.rollback()
                 logger.error(f"Transaction failed in {func.__name__}: {e}")
