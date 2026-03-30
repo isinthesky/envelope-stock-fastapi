@@ -25,6 +25,7 @@ venv/
 env/
 ENV/
 .venv
+.venv.remote*
 
 # IDE
 .vscode/
@@ -83,6 +84,11 @@ token_*
 # Temp files
 *.tmp
 *.bak
+*.bak-*
+*.orig
+*.rej
+_patches/
+.omx/
 *.swp
 *~
 
