@@ -10,51 +10,26 @@ from decimal import Decimal
 
 import pandas as pd
 
-from src.application.common.indicators import TechnicalIndicators
 from src.application.common.performance_metrics import PerformanceMetrics
-from src.application.domain.backtest.dto import (
-    BacktestConfigDTO,
-    BacktestResultDTO,
-    DailyStatsDTO,
-    TradeDTO,
-)
+from src.application.domain.backtest.dto import BacktestConfigDTO, BacktestResultDTO, DailyStatsDTO, TradeDTO
 from src.application.domain.backtest.order_manager import BacktestOrderManager
-from src.application.domain.backtest.position_manager import PositionManager
-from src.application.domain.backtest.signal_generators import (
-    BaseSignalGenerator,
-    create_signal_generator,
-)
+from src.application.domain.backtest.position_manager import Position, PositionManager
+from src.application.domain.backtest.signal_generators import BaseSignalGenerator, create_signal_generator
 from src.application.domain.strategy.dto import StrategyConfigDTO
 
 
 class BacktestEngine:
     """백테스팅 엔진"""
 
-    def __init__(
-        self,
-        symbol: str,
-        strategy_config: StrategyConfigDTO,
-        backtest_config: BacktestConfigDTO,
-        strategy_type: str = "mean_reversion",
-        strategy_params: dict | None = None,
-    ):
-        """
-        Args:
-            symbol: 종목코드
-            strategy_config: 전략 설정
-            backtest_config: 백테스팅 설정
-            strategy_type: 전략 유형 ("golden_cross", "mean_reversion" 등)
-            strategy_params: 전략별 추가 파라미터
-        """
+    def __init__(self, symbol: str, strategy_config: StrategyConfigDTO, backtest_config: BacktestConfigDTO, strategy_type: str = "mean_reversion", strategy_params: dict | None = None):
         self.symbol = symbol
         self.strategy_config = strategy_config
         self.backtest_config = backtest_config
         self.strategy_type = strategy_type
+        self.strategy_params = strategy_params or {}
 
-        # 시그널 생성기 초기화
-        params = strategy_params or {}
+        params = self.strategy_params
         if strategy_type == "golden_cross":
-            # 골든크로스 전략 파라미터
             self.signal_generator: BaseSignalGenerator = create_signal_generator(
                 strategy_type="golden_cross",
                 short_period=params.get("short_period", 55),
@@ -65,9 +40,12 @@ class BacktestEngine:
                 stoch_overbought=params.get("stoch_overbought", 70.0),
                 require_k_above_d_for_buy=params.get("require_k_above_d_for_buy", False),
                 require_k_below_d_for_sell=params.get("require_k_below_d_for_sell", False),
+                buy_recovery_threshold=params.get("buy_recovery_threshold", params.get("stoch_oversold", 30.0) + 5.0),
+                min_pullback_bars=params.get("min_pullback_bars", 2),
+                min_reentry_cooldown_bars=params.get("min_reentry_cooldown_bars", 5),
+                disable_stoch_overbought_sell=params.get("disable_stoch_overbought_sell", True),
             )
         elif strategy_type == "ma5_breakout":
-            # MA5 엔벨로프 상단 돌파 전략
             self.signal_generator = create_signal_generator(
                 strategy_type="ma5_breakout",
                 short_ma_period=params.get("short_ma_period", 5),
@@ -80,7 +58,6 @@ class BacktestEngine:
                 use_volume_filter=params.get("use_volume_filter", True),
             )
         else:
-            # 볼린저밴드 + 엔벨로프 전략 (기존 방식)
             self.signal_generator = create_signal_generator(
                 strategy_type="mean_reversion",
                 bb_period=strategy_config.bollinger_band.period,
@@ -89,109 +66,46 @@ class BacktestEngine:
                 env_percentage=strategy_config.envelope.percentage,
             )
 
-        # 관리자 초기화
         self.order_manager = BacktestOrderManager(backtest_config)
         self.position_manager = PositionManager()
-
-        # 상태 관리
         self.cash = backtest_config.initial_capital
         self.initial_capital = backtest_config.initial_capital
-
-        # 기록
         self.trades: list[TradeDTO] = []
-        self.completed_trades: list[dict] = []  # 성과 분석용
+        self.completed_trades: list[dict] = []
         self.daily_stats: list[DailyStatsDTO] = []
         self.equity_curve: list[Decimal] = []
-
-        # 가격 히스토리 (지표 계산용)
         self.price_history: list[float] = []
-
-        # OHLCV 히스토리 (ATR 계산용)
         self.high_history: list[float] = []
         self.low_history: list[float] = []
         self.close_history: list[float] = []
+        self.last_exit_date: datetime | None = None
 
-    async def run(
-        self,
-        data: pd.DataFrame,
-        start_date: datetime,
-        end_date: datetime
-    ) -> BacktestResultDTO:
-        """
-        백테스팅 실행
-
-        Args:
-            data: OHLCV 데이터
-            start_date: 시작일
-            end_date: 종료일
-
-        Returns:
-            BacktestResultDTO: 백테스팅 결과
-        """
-        # 초기화
+    async def run(self, data: pd.DataFrame, start_date: datetime, end_date: datetime) -> BacktestResultDTO:
         self._reset()
-
-        # 일별 처리
-        for idx, row in data.iterrows():
+        for _, row in data.iterrows():
             current_date = row["timestamp"]
             current_price = Decimal(str(row["close"]))
-
-            # 가격 히스토리 업데이트
             self.price_history.append(row["close"])
-
-            # OHLCV 히스토리 업데이트 (ATR 계산용)
             self.high_history.append(float(row.get("high", row["close"])))
             self.low_history.append(float(row.get("low", row["close"])))
             self.close_history.append(float(row["close"]))
-
-            # 일별 처리
             await self._process_day(current_date, current_price, row)
+        return self._generate_result(start_date, end_date)
 
-        # 결과 생성
-        result = self._generate_result(start_date, end_date)
-
-        return result
-
-    async def _process_day(
-        self,
-        date: datetime,
-        current_price: Decimal,
-        row: pd.Series
-    ) -> None:
-        """
-        일별 처리 로직
-
-        Args:
-            date: 현재 날짜
-            current_price: 현재가
-            row: OHLCV 데이터 행
-        """
-        # 1. 손절/익절 체크 (장 시작 시)
+    async def _process_day(self, date: datetime, current_price: Decimal, row: pd.Series) -> None:
         await self._check_risk_management(date, current_price)
-
-        # 2. 시그널 생성 (거래량 데이터 추출)
         volume = float(row.get("volume", 0)) if "volume" in row else None
         signal = self._generate_signal(current_price, volume=volume)
 
-        # 3. 주문 실행
         if signal == "buy" and not self.position_manager.has_position(self.symbol):
-            # 매수
             await self._execute_buy(date, current_price)
-
         elif signal == "sell" and self.position_manager.has_position(self.symbol):
-            # 매도
-            await self._execute_sell(date, current_price, exit_reason="signal")
+            await self._execute_sell_all(date, current_price, exit_reason="signal")
 
-        # 4. 포지션 평가액 업데이트
-        position_value = self.position_manager.update_positions({
-            self.symbol: current_price
-        })
-
-        # 5. 일별 통계 기록
+        position_value = self.position_manager.update_positions({self.symbol: current_price})
         self._update_daily_stats(date, position_value)
 
     def _reset(self) -> None:
-        """상태 초기화"""
         self.cash = self.backtest_config.initial_capital
         self.trades.clear()
         self.completed_trades.clear()
@@ -202,331 +116,151 @@ class BacktestEngine:
         self.low_history.clear()
         self.close_history.clear()
         self.position_manager.clear_all_positions()
-
-        # 시그널 생성기 상태 초기화
+        self.last_exit_date = None
         if hasattr(self.signal_generator, "reset"):
             self.signal_generator.reset()
 
     def _calculate_current_atr(self) -> float | None:
-        """현재 ATR 계산"""
         from src.application.common.indicators import TechnicalIndicators
-
         atr_period = self.strategy_config.risk_management.atr_period
-        return TechnicalIndicators.calculate_atr(
-            self.high_history,
-            self.low_history,
-            self.close_history,
-            period=atr_period
-        )
+        return TechnicalIndicators.calculate_atr(self.high_history, self.low_history, self.close_history, period=atr_period)
 
     def _generate_signal(self, current_price: Decimal, volume: float | None = None) -> str:
-        """
-        매매 시그널 생성 (시그널 생성기에 위임)
-
-        Args:
-            current_price: 현재가
-            volume: 거래량 (MA5 Breakout 전략용)
-
-        Returns:
-            str: "buy" (매수), "sell" (매도), "hold" (보유)
-        """
-        # MA5 Breakout 전략은 거래량 데이터 사용
         if self.strategy_type == "ma5_breakout" and volume is not None:
-            return self.signal_generator.generate_signal(
-                price_history=self.price_history,
-                current_price=current_price,
-                volume=volume,
-            )
-        return self.signal_generator.generate_signal(
-            price_history=self.price_history,
-            current_price=current_price,
-        )
+            return self.signal_generator.generate_signal(price_history=self.price_history, current_price=current_price, volume=volume)
+        return self.signal_generator.generate_signal(price_history=self.price_history, current_price=current_price)
 
     async def _execute_buy(self, date: datetime, price: Decimal) -> None:
-        """
-        매수 실행
-
-        Args:
-            date: 거래일
-            price: 매수 가격
-        """
-        # 포지션 크기 계산
-        quantity = self.order_manager.calculate_position_size(
-            available_cash=self.cash,
-            allocation_ratio=self.strategy_config.position.allocation_ratio,
-            current_price=price
-        )
-
-        if quantity == 0:
+        quantity = self.order_manager.calculate_position_size(self.cash, self.strategy_config.position.allocation_ratio, price)
+        if quantity == 0 or not self.order_manager.can_afford(self.cash, price, quantity):
             return
 
-        # 매수 가능 여부 확인
-        if not self.order_manager.can_afford(self.cash, price, quantity):
-            return
-
-        # 주문 실행
-        trade, total_cost = self.order_manager.execute_buy_order(
-            symbol=self.symbol,
-            price=price,
-            quantity=quantity,
-            date=date
-        )
-
-        # 현금 차감
-        self.cash -= total_cost
-
-        # ATR 계산 (ATR 기반 손절 사용 시)
-        entry_atr = None
+        lot_plan = self._build_entry_lot_plan(quantity)
         risk_config = self.strategy_config.risk_management
-        if risk_config.use_atr_stop_loss or risk_config.use_atr_trailing_stop:
-            entry_atr = self._calculate_current_atr()
+        entry_atr = self._calculate_current_atr() if (risk_config.use_atr_stop_loss or risk_config.use_atr_trailing_stop) else None
 
-        # 포지션 오픈
-        self.position_manager.open_position(
-            symbol=self.symbol,
-            quantity=quantity,
-            entry_price=trade.entry_price,
-            entry_date=date,
-            trade_id=trade.trade_id,
-            entry_atr=entry_atr,
-        )
+        for lot_quantity in lot_plan:
+            trade, total_cost = self.order_manager.execute_buy_order(symbol=self.symbol, price=price, quantity=lot_quantity, date=date)
+            if self.cash < total_cost:
+                continue
+            self.cash -= total_cost
+            self.position_manager.open_position(self.symbol, lot_quantity, trade.entry_price, date, trade.trade_id, entry_atr=entry_atr)
+            self.trades.append(trade)
 
-        # 거래 기록
-        self.trades.append(trade)
+    def _build_entry_lot_plan(self, quantity: int) -> list[int]:
+        if quantity <= 0:
+            return []
+        ratios = self.strategy_params.get("entry_lot_ratios", [0.5, 0.3, 0.2])
+        lots: list[int] = []
+        allocated = 0
+        for idx, ratio in enumerate(ratios):
+            if idx == len(ratios) - 1:
+                lot_qty = quantity - allocated
+            else:
+                lot_qty = int(quantity * ratio)
+                allocated += lot_qty
+            if lot_qty > 0:
+                lots.append(lot_qty)
+        if not lots:
+            lots.append(quantity)
+        return lots
 
-    async def _execute_sell(
-        self,
-        date: datetime,
-        price: Decimal,
-        exit_reason: str = "signal"
-    ) -> None:
-        """
-        매도 실행
+    async def _execute_sell_all(self, date: datetime, price: Decimal, exit_reason: str = "signal") -> None:
+        for position in list(self.position_manager.get_positions(self.symbol)):
+            await self._close_position_lot(position, date, price, exit_reason)
 
-        Args:
-            date: 거래일
-            price: 매도 가격
-            exit_reason: 청산 이유
-        """
-        position = self.position_manager.get_position(self.symbol)
-        if not position:
-            return
-
-        # 기존 매수 거래 찾기
-        buy_trade = next(
-            (t for t in self.trades if t.trade_id == position.trade_id),
-            None
-        )
+    async def _close_position_lot(self, position: Position, date: datetime, price: Decimal, exit_reason: str) -> None:
+        buy_trade = next((t for t in self.trades if t.trade_id == position.trade_id), None)
         if not buy_trade:
             return
-
-        # 주문 실행
-        completed_trade, net_proceeds = self.order_manager.execute_sell_order(
-            trade=buy_trade,
-            price=price,
-            date=date,
-            exit_reason=exit_reason
-        )
-
-        # 현금 증가
+        completed_trade, net_proceeds = self.order_manager.execute_sell_order(trade=buy_trade, price=price, date=date, exit_reason=exit_reason)
         self.cash += net_proceeds
-
-        # 포지션 청산
-        self.position_manager.close_position(self.symbol)
-
-        # 거래 기록 업데이트
+        self.position_manager.close_lot(self.symbol, position.trade_id)
         for idx, trade in enumerate(self.trades):
             if trade.trade_id == completed_trade.trade_id:
                 self.trades[idx] = completed_trade
                 break
-
-        # 완료된 거래 추가 (성과 분석용)
-        self.completed_trades.append({
-            "profit_rate": completed_trade.profit_rate,
-            "holding_days": completed_trade.holding_days
-        })
+        self.completed_trades.append({"profit_rate": completed_trade.profit_rate, "holding_days": completed_trade.holding_days})
+        self.last_exit_date = date
 
     async def _check_risk_management(self, date: datetime, current_price: Decimal) -> None:
-        """
-        리스크 관리 체크 (손절/익절/트레일링스톱)
-
-        Args:
-            date: 현재 날짜
-            current_price: 현재가
-        """
         if not self.position_manager.has_position(self.symbol):
             return
-
         risk_config = self.strategy_config.risk_management
+        partial_1 = self.strategy_params.get("partial_take_profit_1", 0.10)
+        partial_2 = self.strategy_params.get("partial_take_profit_2", 0.16)
+        breakeven_activation = self.strategy_params.get("breakeven_activation", 0.06)
+        max_hold_days = self.strategy_params.get("max_hold_days", 60)
 
-        # 손절 체크
-        if risk_config.use_stop_loss and risk_config.stop_loss_ratio is not None:
-            if self.position_manager.check_stop_loss(
-                self.symbol, current_price, risk_config.stop_loss_ratio
-            ):
-                await self._execute_sell(date, current_price, exit_reason="stop_loss")
-                return
-
-        # 익절 체크
-        if risk_config.use_take_profit and risk_config.take_profit_ratio is not None:
-            if self.position_manager.check_take_profit(
-                self.symbol, current_price, risk_config.take_profit_ratio
-            ):
-                await self._execute_sell(date, current_price, exit_reason="take_profit")
-                return
-
-        # Trailing Stop 체크
-        if risk_config.use_trailing_stop and risk_config.trailing_stop_ratio is not None:
-            if self.position_manager.check_trailing_stop(
-                self.symbol, current_price, risk_config.trailing_stop_ratio
-            ):
-                await self._execute_sell(date, current_price, exit_reason="trailing_stop")
-                return
-
-        # ATR 기반 손절 체크
-        if risk_config.use_atr_stop_loss:
-            if self.position_manager.check_atr_stop_loss(
-                self.symbol, current_price, risk_config.atr_stop_loss_multiplier
-            ):
-                await self._execute_sell(date, current_price, exit_reason="stop_loss")
-                return
-
-        # ATR 기반 트레일링 스톱 체크
         if risk_config.use_atr_trailing_stop:
-            # 현재 ATR 업데이트
             current_atr = self._calculate_current_atr()
             if current_atr:
                 self.position_manager.update_position_atr(self.symbol, current_atr)
-            if self.position_manager.check_atr_trailing_stop(
-                self.symbol, current_price, risk_config.atr_trailing_multiplier
-            ):
-                await self._execute_sell(date, current_price, exit_reason="trailing_stop")
-                return
+
+        for position in list(self.position_manager.get_positions(self.symbol)):
+            profit_ratio = position.get_unrealized_profit_rate(current_price)
+            if profit_ratio >= breakeven_activation:
+                position.breakeven_armed = True
+
+            if not position.partial_take_profit_1_taken and profit_ratio >= partial_1:
+                position.partial_take_profit_1_taken = True
+                await self._close_position_lot(position, date, current_price, "partial_take_profit_1")
+                continue
+            if not position.partial_take_profit_2_taken and profit_ratio >= partial_2:
+                position.partial_take_profit_2_taken = True
+                await self._close_position_lot(position, date, current_price, "partial_take_profit_2")
+                continue
+            if self.position_manager.check_breakeven(position, current_price):
+                await self._close_position_lot(position, date, current_price, "breakeven")
+                continue
+            if risk_config.use_stop_loss and risk_config.stop_loss_ratio is not None and self.position_manager.check_stop_loss(position, current_price, risk_config.stop_loss_ratio):
+                await self._close_position_lot(position, date, current_price, "stop_loss")
+                continue
+            if risk_config.use_trailing_stop and risk_config.trailing_stop_ratio is not None and self.position_manager.check_trailing_stop(position, current_price, risk_config.trailing_stop_ratio):
+                await self._close_position_lot(position, date, current_price, "trailing_stop")
+                continue
+            if risk_config.use_take_profit and risk_config.take_profit_ratio is not None and self.position_manager.check_take_profit(position, current_price, risk_config.take_profit_ratio):
+                await self._close_position_lot(position, date, current_price, "take_profit")
+                continue
+            if risk_config.use_atr_stop_loss and self.position_manager.check_atr_stop_loss(position, current_price, risk_config.atr_stop_loss_multiplier):
+                await self._close_position_lot(position, date, current_price, "stop_loss")
+                continue
+            if risk_config.use_atr_trailing_stop and self.position_manager.check_atr_trailing_stop(position, current_price, risk_config.atr_trailing_multiplier):
+                await self._close_position_lot(position, date, current_price, "trailing_stop")
+                continue
+            if self.position_manager.check_max_hold_days(position, date, max_hold_days):
+                await self._close_position_lot(position, date, current_price, "max_hold")
 
     def _update_daily_stats(self, date: datetime, position_value: Decimal) -> None:
-        """
-        일별 통계 업데이트
-
-        Args:
-            date: 날짜
-            position_value: 포지션 평가액
-        """
-        # 총 자산
         equity = self.cash + position_value
         self.equity_curve.append(equity)
-
-        # 수익률 계산
         daily_return = 0.0
         if len(self.equity_curve) > 1:
             prev_equity = self.equity_curve[-2]
             daily_return = float((equity - prev_equity) / prev_equity * 100) if prev_equity > 0 else 0.0
-
         cumulative_return = float((equity - self.initial_capital) / self.initial_capital * 100)
+        equity_array = [float(e) for e in self.equity_curve]
+        cummax = max(equity_array) if equity_array else 0.0
+        drawdown = float((equity - Decimal(str(cummax))) / Decimal(str(cummax)) * 100) if cummax > 0 else 0.0
+        self.daily_stats.append(DailyStatsDTO(date=date, equity=equity, cash=self.cash, position_value=position_value, daily_return=daily_return, cumulative_return=cumulative_return, drawdown=drawdown))
 
-        # 낙폭 계산
-        if len(self.equity_curve) > 0:
-            equity_array = [float(e) for e in self.equity_curve]
-            cummax = max(equity_array)
-            drawdown = float((equity - Decimal(str(cummax))) / Decimal(str(cummax)) * 100) if cummax > 0 else 0.0
-        else:
-            drawdown = 0.0
-
-        # 일별 통계 기록
-        stats = DailyStatsDTO(
-            date=date,
-            equity=equity,
-            cash=self.cash,
-            position_value=position_value,
-            daily_return=daily_return,
-            cumulative_return=cumulative_return,
-            drawdown=drawdown
-        )
-
-        self.daily_stats.append(stats)
-
-    def _generate_result(
-        self,
-        start_date: datetime,
-        end_date: datetime
-    ) -> BacktestResultDTO:
-        """
-        백테스팅 결과 생성
-
-        Args:
-            start_date: 시작일
-            end_date: 종료일
-
-        Returns:
-            BacktestResultDTO: 백테스팅 결과
-        """
+    def _generate_result(self, start_date: datetime, end_date: datetime) -> BacktestResultDTO:
         final_capital = self.equity_curve[-1] if self.equity_curve else self.initial_capital
-
-        # 수익 지표
-        total_return = PerformanceMetrics.calculate_total_return(
-            self.initial_capital, final_capital
-        )
-        annualized_return = PerformanceMetrics.calculate_annualized_return(
-            self.initial_capital, final_capital, start_date, end_date
-        )
+        total_return = PerformanceMetrics.calculate_total_return(self.initial_capital, final_capital)
+        annualized_return = PerformanceMetrics.calculate_annualized_return(self.initial_capital, final_capital, start_date, end_date)
         years = (end_date - start_date).days / 365
-        cagr = PerformanceMetrics.calculate_cagr(
-            self.initial_capital, final_capital, years
-        )
-
-        # 리스크 지표
+        cagr = PerformanceMetrics.calculate_cagr(self.initial_capital, final_capital, years)
         mdd_info = PerformanceMetrics.calculate_mdd(self.equity_curve)
-
-        # DataFrame 생성 (변동성 계산용)
-        equity_df = pd.DataFrame({
-            "timestamp": [s.date for s in self.daily_stats],
-            "equity": [float(s.equity) for s in self.daily_stats]
-        })
-
+        equity_df = pd.DataFrame({"timestamp": [s.date for s in self.daily_stats], "equity": [float(s.equity) for s in self.daily_stats]})
         volatility = PerformanceMetrics.calculate_volatility(equity_df)
         sharpe = PerformanceMetrics.calculate_sharpe_ratio(annualized_return, volatility)
         sortino = PerformanceMetrics.calculate_sortino_ratio(equity_df, annualized_return)
         calmar = PerformanceMetrics.calculate_calmar_ratio(annualized_return, mdd_info["mdd"])
         var_95 = PerformanceMetrics.calculate_var(equity_df)
-
-        # 거래 통계
         trade_stats = PerformanceMetrics.calculate_trade_count(self.completed_trades)
         win_rate = PerformanceMetrics.calculate_win_rate(self.completed_trades)
         profit_factor = PerformanceMetrics.calculate_profit_factor(self.completed_trades)
         avg_stats = PerformanceMetrics.calculate_avg_profit_loss(self.completed_trades)
         holding_stats = PerformanceMetrics.calculate_avg_holding_period(self.completed_trades)
         streak_stats = PerformanceMetrics.calculate_consecutive_wins_losses(self.completed_trades)
-
-        return BacktestResultDTO(
-            # 기본 정보
-            symbol=self.symbol,
-            start_date=start_date,
-            end_date=end_date,
-            initial_capital=self.initial_capital,
-            final_capital=final_capital,
-            # 수익 지표
-            total_return=total_return,
-            annualized_return=annualized_return,
-            cagr=cagr,
-            # 리스크 지표
-            mdd=mdd_info["mdd"],
-            volatility=volatility,
-            sharpe_ratio=sharpe,
-            sortino_ratio=sortino,
-            calmar_ratio=calmar,
-            var_95=var_95,
-            # 거래 통계
-            total_trades=trade_stats["total"],
-            winning_trades=trade_stats["wins"],
-            losing_trades=trade_stats["losses"],
-            win_rate=win_rate,
-            profit_factor=profit_factor,
-            avg_win=avg_stats["avg_win"],
-            avg_loss=avg_stats["avg_loss"],
-            avg_win_loss_ratio=avg_stats["avg_win_loss_ratio"],
-            avg_holding_days=holding_stats["avg_days"],
-            max_consecutive_wins=streak_stats["max_consecutive_wins"],
-            max_consecutive_losses=streak_stats["max_consecutive_losses"],
-            # 상세 데이터
-            trades=self.trades,
-            daily_stats=self.daily_stats
-        )
+        return BacktestResultDTO(symbol=self.symbol, start_date=start_date, end_date=end_date, initial_capital=self.initial_capital, final_capital=final_capital, total_return=total_return, annualized_return=annualized_return, cagr=cagr, mdd=mdd_info["mdd"], volatility=volatility, sharpe_ratio=sharpe, sortino_ratio=sortino, calmar_ratio=calmar, var_95=var_95, total_trades=trade_stats["total"], winning_trades=trade_stats["wins"], losing_trades=trade_stats["losses"], win_rate=win_rate, profit_factor=profit_factor, avg_win=avg_stats["avg_win"], avg_loss=avg_stats["avg_loss"], avg_win_loss_ratio=avg_stats["avg_win_loss_ratio"], avg_holding_days=holding_stats["avg_days"], max_consecutive_wins=streak_stats["max_consecutive_wins"], max_consecutive_losses=streak_stats["max_consecutive_losses"], trades=self.trades, daily_stats=self.daily_stats)

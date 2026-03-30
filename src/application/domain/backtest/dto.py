@@ -176,7 +176,7 @@ class TradeDTO(BaseDTO):
     exit_reason: str | None = Field(
         default=None,
         description="청산 이유",
-        pattern="^(signal|stop_loss|take_profit|trailing_stop)$"
+        pattern="^(signal|stop_loss|take_profit|trailing_stop|breakeven|max_hold|partial_take_profit_1|partial_take_profit_2)$"
     )
 
 

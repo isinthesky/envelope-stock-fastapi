@@ -1151,6 +1151,13 @@ const renderUniverseBacktest = (data) => {
   `).join('') || '<li><span>데이터 없음</span><span>-</span></li>';
 
   const config = data.config_summary || {};
+  const comparisonRows = (config.comparison_results || []).map(item => `
+    <li>
+      <span>${item.label}</span>
+      <strong>${Number(item.average_return).toFixed(2)}% / ${Number(item.average_win_rate).toFixed(2)}% / ${Number(item.average_holding_days).toFixed(1)}일</strong>
+    </li>
+  `).join('');
+
   container.innerHTML = `
     <div class="result-header">
       <h3>유니버스 백테스트 요약</h3>
@@ -1159,8 +1166,8 @@ const renderUniverseBacktest = (data) => {
       </div>
     </div>
     <div style="font-size: 13px; color: #475569; margin-bottom: 8px;">
-      전략: ${config.label || '공격형 중단기 스윙 매도 v1'}
-      (손절 ${formatPercent(Math.abs(config.stop_loss || 0))} / 익절 ${formatPercent(config.take_profit || 0)} / trailing ${formatPercent(config.trailing_stop || 0)})
+      전략: ${config.label || '공격형 중단기 스윙 매도 v2'}
+      (손절 ${formatPercent(Math.abs(config.stop_loss || 0))} / 본전보호 ${formatPercent(config.breakeven_activation || 0)} / 1차익절 ${formatPercent(config.partial_take_profit_1 || 0)} / 2차익절 ${formatPercent(config.partial_take_profit_2 || 0)} / trailing ${formatPercent(config.trailing_stop || 0)})
     </div>
     <div class="universe-summary-grid">
       <div class="universe-summary-card"><div class="label">평균 수익률</div><div class="value ${summary.average_return >= 0 ? 'universe-positive' : 'universe-negative'}">${Number(summary.average_return).toFixed(2)}%</div></div>
@@ -1180,6 +1187,13 @@ const renderUniverseBacktest = (data) => {
         <ul>${worstSymbols}</ul>
       </div>
     </div>
+    ${comparisonRows ? `
+    <div class="panel" style="margin-top:16px; background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:16px;">
+      <h4>비교군 요약 (평균수익률 / 평균승률 / 평균보유일)</h4>
+      <ul style="list-style:none; padding:0; margin:0;">
+        ${comparisonRows}
+      </ul>
+    </div>` : ''}
   `;
 };
 
