@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     from src.adapters.cache.redis_client import get_redis_client
     from src.adapters.database.connection import close_db, engine
-    from src.adapters.external.kis_api.auth import get_kis_auth
+    from src.adapters.external.kis_api.auth import format_token_expires_in, get_kis_auth
     from src.adapters.external.kis_api.client import get_kis_client
 
     # Startup
@@ -68,8 +68,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             from src.application.common.background_tasks import get_token_refresh_task
 
             kis_auth = get_kis_auth()
-            token = await kis_auth.get_access_token()
-            print(f"✅ KIS API token issued (expires in {kis_auth.token_info.remaining_seconds}s)")
+            await kis_auth.get_access_token()
+            expires_in = format_token_expires_in(kis_auth.token_info)
+            print(f"✅ KIS API token issued (expires in {expires_in})")
 
             # 토큰 자동 갱신 백그라운드 태스크 시작
             token_refresh_task = get_token_refresh_task()
@@ -279,7 +280,10 @@ from src.application.interface.api.market_data_router import router as market_da
 # from src.application.interface.api.ohlcv_router import router as ohlcv_router  # TODO: apscheduler 의존성 필요
 from src.application.interface.api.order_router import router as order_router
 from src.application.interface.api.screener_router import router as screener_router
-from src.application.interface.api.strategy_router import router as strategy_router
+from src.application.interface.api.strategy_router import (
+    router as strategy_router,
+    admin_router as strategy_admin_router,
+)
 from src.application.interface.api.websocket_router import router as websocket_router
 from src.application.interface.page import page_routers
 
@@ -288,6 +292,15 @@ app.include_router(market_data_router, prefix="/api/v1/market", tags=["MarketDat
 app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
 app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
 app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
+
+# 전략 생성/수정/삭제 같은 관리자 전용 라우트는 기본 비활성(완전 비노출)
+if settings.enable_admin_strategy_routes:
+    app.include_router(
+        strategy_admin_router,
+        prefix="/api/v1/strategies",
+        tags=["Strategy(Admin)"],
+    )
+
 # app.include_router(ohlcv_router, prefix="/api/v1/ohlcv", tags=["OHLCV Cache"])  # TODO: apscheduler 의존성 필요
 app.include_router(screener_router)  # 내부 prefix: /api/v1/screener
 app.include_router(backtest_router)  # 내부 prefix: /api/v1/backtest

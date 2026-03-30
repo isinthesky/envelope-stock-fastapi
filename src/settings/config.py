@@ -217,6 +217,11 @@ class Settings(BaseSettings):
         description="관리자 API 허용 IP 목록 (CIDR 표기 지원)",
     )
 
+    enable_admin_strategy_routes: bool = Field(
+        default=False,
+        description="전략 생성/수정/삭제 같은 관리자 전용 라우트를 API에 마운트할지 여부(기본: 비활성).",
+    )
+
     # ==================== WebSocket 설정 ====================
     ws_max_connections: int = Field(default=100, ge=1, description="WebSocket 최대 연결 수")
     ws_ping_interval: int = Field(default=20, ge=1, description="WebSocket Ping 간격 (초)")
