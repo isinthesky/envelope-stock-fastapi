@@ -189,6 +189,26 @@
 .universe-ranking li:last-child { border-bottom: none; }
 .universe-positive { color: #16a34a; }
 .universe-negative { color: #dc2626; }
+.cash-plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.cash-plan-card { background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+.cash-plan-card .label { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+.cash-plan-card .value { font-size: 22px; font-weight: 700; color: #0f172a; }
+.cash-plan-summary { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.cash-plan-summary ul { list-style: none; padding: 0; margin: 12px 0 0 0; }
+.cash-plan-summary li { padding: 6px 0; border-bottom: 1px solid #fed7aa; font-size: 13px; color: #7c2d12; }
+.cash-plan-summary li:last-child { border-bottom: none; }
+.cash-plan-actions { display: grid; gap: 12px; }
+.cash-plan-action { background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+.cash-plan-action-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.cash-plan-action-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cash-plan-profit { font-size: 11px; padding: 4px 8px; border-radius: 999px; font-weight: 600; }
+.cash-plan-profit.positive { background: #dcfce7; color: #166534; }
+.cash-plan-profit.negative { background: #fecaca; color: #991b1b; }
+.cash-plan-note { margin-top: 8px; font-size: 12px; color: #475569; }
+.cash-plan-reasons { margin-top: 10px; font-size: 12px; color: #7c2d12; }
+.cash-plan-reasons ul { list-style: none; padding: 0; margin: 8px 0 0 0; }
+.cash-plan-reasons li { padding: 4px 0; border-bottom: 1px solid #e2e8f0; }
+.cash-plan-reasons li:last-child { border-bottom: none; }
 {% endblock %}
 
 {% block content %}
@@ -244,6 +264,28 @@
   <div id="result_container">
     <div class="placeholder-message">
       결과를 불러오는 중...
+    </div>
+  </div>
+</section>
+
+<section class="history-section">
+  <div class="history-header">
+    <h2>포트폴리오 현금화 계획</h2>
+    <div class="history-actions">
+      <button class="btn-refresh" onclick="loadPortfolioCashPlan()">현금화 계획 갱신</button>
+    </div>
+  </div>
+  <p>활성 추적 중인 매도 종목을 기준으로 목표 현금 비중을 만들기 위한 우선 정리 순서를 보여줍니다.</p>
+  <div class="row" style="margin-top: 8px;">
+    <label>목표 현금 비중</label>
+    <input id="cash_plan_target_ratio" type="number" value="30" min="0" max="100" step="5" style="width: 80px;" />
+    <label style="margin-left: 12px;">현재 현금 비중</label>
+    <input id="cash_plan_current_ratio" type="number" placeholder="예: 10" min="0" max="100" step="1" style="width: 80px;" />
+    <span style="font-size: 11px; color: #64748b; margin-left: 8px;">비워두면 목표 기준 요약만 표시합니다.</span>
+  </div>
+  <div id="cash_plan_container" class="result-card" style="margin-top: 16px;">
+    <div class="placeholder-message">
+      아직 현금화 계획을 불러오지 않았습니다.
     </div>
   </div>
 </section>
@@ -344,6 +386,7 @@
 let analysisHistory = [];
 let selectedHistoryId = null;
 let analysisInProgress = false;
+let cashPlanInProgress = false;
 
 const SELL_LAST_ANALYSIS_KEY = 'sellStrategy.lastAnalysis';
 const SELL_LAST_REFRESH_KEY = 'sellStrategy.lastRefresh';
@@ -537,6 +580,29 @@ const normalizeSellReasons = (item) => {
   return reasons;
 };
 
+const getStageDisplayName = (stage) => {
+  const stageNames = {
+    HOLD: '보유 유지',
+    REDUCE_1: '1차 비중 축소',
+    REDUCE_2: '2차 비중 축소',
+    EXIT_ALL: '전량 청산'
+  };
+  return stageNames[stage] || stage || '보유 유지';
+};
+
+const resolveDisplayStage = (item) => {
+  if (item?.final_stage) return item.final_stage;
+  if (item?.sell_stage) return item.sell_stage;
+
+  const phaseToStage = {
+    PHASE_2: 'REDUCE_1',
+    PHASE_3: 'REDUCE_1',
+    PHASE_4: 'REDUCE_2',
+    PHASE_5: 'EXIT_ALL'
+  };
+  return phaseToStage[item?.sell_phase] || 'HOLD';
+};
+
 // Phase 이름에 번호 추가
 const getPhaseDisplayName = (phase, phaseName) => {
   const phaseNumbers = {
@@ -558,6 +624,7 @@ const loadHistory = async () => {
     if (data.success && data.data) {
       analysisHistory = data.data.items;
       renderHistoryTable();
+      loadPortfolioCashPlan();
 
       // DB 히스토리와 localStorage 캐시 비교하여 최신 결과 표시
       const latest = analysisHistory[0];
@@ -581,6 +648,142 @@ const loadHistory = async () => {
     console.error('Failed to load history:', e);
     document.getElementById("history_body").innerHTML =
       '<tr><td colspan="10" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
+  }
+};
+
+const renderPortfolioCashPlan = (data) => {
+  const container = document.getElementById("cash_plan_container");
+  if (!container) return;
+
+  if (!data) {
+    container.innerHTML = `<div class="placeholder-message">현금화 계획 데이터가 없습니다.</div>`;
+    return;
+  }
+
+  const topActions = (data.actions || []).slice(0, 5);
+  const displayGap = data.cash_gap_ratio !== null && data.cash_gap_ratio !== undefined
+    ? data.cash_gap_ratio
+    : (data.current_cash_ratio !== null && data.current_cash_ratio !== undefined
+      ? (data.target_cash_ratio - data.current_cash_ratio)
+      : null);
+  const winnerCount = (data.actions || []).filter(action => (action.profit_ratio || 0) > 0).length;
+  const immediateCount = (data.actions || []).filter(action => action.sell_stage === 'EXIT_ALL').length;
+
+  const actionHtml = topActions.length > 0
+    ? topActions.map(action => {
+        const stage = action.sell_stage || 'HOLD';
+        const stageClass = `stage-${stage}`;
+        const profitClass = (action.profit_ratio || 0) >= 0 ? 'positive' : 'negative';
+        const profitText = action.profit_ratio !== null && action.profit_ratio !== undefined
+          ? `<span class="cash-plan-profit ${profitClass}">${formatPercent(action.profit_ratio)}</span>`
+          : '';
+        const ratioText = `${Math.round((action.suggested_sell_ratio || 0) * 100)}%`;
+        const reasons = (action.reasons || []).slice(0, 3).map(reason => `<li>${reason}</li>`).join('');
+
+        return `
+          <div class="cash-plan-action">
+            <div class="cash-plan-action-header">
+              <div>
+                <strong>${action.priority}. ${action.symbol}${action.name ? ` ${action.name}` : ''}</strong>
+                <div style="font-size: 12px; color: #64748b; margin-top: 4px;">${action.action}</div>
+              </div>
+              <div class="cash-plan-action-meta">
+                ${profitText}
+                <span class="stage-badge ${stageClass}" style="font-size: 11px; padding: 4px 8px;">${getStageDisplayName(stage)}</span>
+                <span class="recommendation-badge recommendation-CONSIDER_SELL" style="font-size: 11px; padding: 4px 8px;">권장 ${ratioText}</span>
+              </div>
+            </div>
+            ${action.note ? `<div class="cash-plan-note">${action.note}</div>` : ''}
+            ${reasons ? `<div class="cash-plan-reasons"><ul>${reasons}</ul></div>` : ''}
+          </div>
+        `;
+      }).join('')
+    : `<div class="placeholder-message">우선 정리할 종목이 없습니다.</div>`;
+
+  container.innerHTML = `
+    <div class="result-header">
+      <h3>포트폴리오 현금화 요약</h3>
+      <div style="font-size: 12px; color: #64748b;">${formatDateTime(data.analyzed_at)}</div>
+    </div>
+    <div class="cash-plan-grid">
+      <div class="cash-plan-card">
+        <div class="label">목표 / 현재 현금</div>
+        <div class="value" style="font-size: 18px;">${formatPercent(data.target_cash_ratio)} / ${data.current_cash_ratio !== null && data.current_cash_ratio !== undefined ? formatPercent(data.current_cash_ratio) : '-'}</div>
+      </div>
+      <div class="cash-plan-card">
+        <div class="label">현금 격차</div>
+        <div class="value" style="font-size: 18px; ${displayGap !== null && displayGap > 0 ? 'color: #dc2626;' : 'color: #166534;'}">${displayGap !== null ? formatPercent(displayGap) : '-'}</div>
+      </div>
+      <div class="cash-plan-card">
+        <div class="label">위험 점수 / 과열도</div>
+        <div class="value" style="font-size: 18px;">${Number(data.market_risk_score || 0).toFixed(1)} / ${data.market_heat_level}</div>
+      </div>
+      <div class="cash-plan-card">
+        <div class="label">활성 종목 / 수익 종목</div>
+        <div class="value" style="font-size: 18px;">${data.active_sell_count} / ${winnerCount}</div>
+      </div>
+      <div class="cash-plan-card">
+        <div class="label">즉시 정리 후보</div>
+        <div class="value" style="font-size: 18px;">${immediateCount}</div>
+      </div>
+    </div>
+    <div class="cash-plan-summary">
+      <strong>${data.portfolio_action}</strong>
+      <ul>
+        ${(data.summary || []).map(line => `<li>${line}</li>`).join('')}
+      </ul>
+    </div>
+    <div class="cash-plan-actions">
+      ${actionHtml}
+    </div>
+  `;
+};
+
+const loadPortfolioCashPlan = async () => {
+  if (cashPlanInProgress) return;
+
+  const targetRaw = document.getElementById("cash_plan_target_ratio")?.value || '30';
+  const currentRaw = document.getElementById("cash_plan_current_ratio")?.value || '';
+  const targetRatio = Number(targetRaw) / 100;
+  const currentRatio = currentRaw === '' ? null : Number(currentRaw) / 100;
+
+  if (Number.isNaN(targetRatio) || targetRatio < 0 || targetRatio > 1) {
+    alert('목표 현금 비중은 0~100 사이여야 합니다.');
+    return;
+  }
+  if (currentRatio !== null && (Number.isNaN(currentRatio) || currentRatio < 0 || currentRatio > 1)) {
+    alert('현재 현금 비중은 0~100 사이여야 합니다.');
+    return;
+  }
+
+  cashPlanInProgress = true;
+  const container = document.getElementById("cash_plan_container");
+  if (container) {
+    container.innerHTML = `<div class="placeholder-message">현금화 계획 계산 중...</div>`;
+  }
+
+  let url = `/api/v1/strategies/portfolio-cash-plan?target_cash_ratio=${targetRatio.toFixed(4)}`;
+  if (currentRatio !== null) {
+    url += `&current_cash_ratio=${currentRatio.toFixed(4)}`;
+  }
+
+  try {
+    const response = await fetch(url);
+    const result = await response.json();
+    if (result.success && result.data) {
+      renderPortfolioCashPlan(result.data);
+    } else {
+      if (container) {
+        container.innerHTML = `<div class="placeholder-message" style="color:#dc2626;">현금화 계획 조회 실패</div>`;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load portfolio cash plan:', e);
+    if (container) {
+      container.innerHTML = `<div class="placeholder-message" style="color:#dc2626;">현금화 계획 조회 실패</div>`;
+    }
+  } finally {
+    cashPlanInProgress = false;
   }
 };
 
@@ -686,9 +889,9 @@ const saveToHistory = async (data) => {
       sell_phase: data.sell_phase,
       sell_reasons: data.sell_reasons,
       // 비중축소 관련 신규 필드
-      sell_stage: data.sell_stage,
-      sell_ratio_min: data.sell_ratio_min,
-      sell_ratio_max: data.sell_ratio_max,
+      sell_stage: data.final_stage || data.sell_stage,
+      sell_ratio_min: data.final_ratio_min ?? data.sell_ratio_min,
+      sell_ratio_max: data.final_ratio_max ?? data.sell_ratio_max,
       // 거래량 관련 신규 필드
       volume_ratio: data.volume_ratio,
       is_volume_spike: data.is_volume_spike,
@@ -711,8 +914,15 @@ const saveToHistory = async (data) => {
     const result = await response.json();
     if (result.success && result.data) {
       // 새 항목을 목록 맨 앞에 추가
-      analysisHistory.unshift(result.data);
+      analysisHistory.unshift({
+        ...result.data,
+        sell_stage: payload.sell_stage,
+        sell_stage_name: getStageDisplayName(payload.sell_stage),
+        sell_ratio_min: payload.sell_ratio_min,
+        sell_ratio_max: payload.sell_ratio_max
+      });
       renderHistoryTable();
+      loadPortfolioCashPlan();
     }
   } catch (e) {
     console.error('Failed to save history:', e);
@@ -732,6 +942,7 @@ const deleteHistory = async (id, event) => {
     if (response.ok) {
       analysisHistory = analysisHistory.filter(h => h.id !== id);
       renderHistoryTable();
+      loadPortfolioCashPlan();
       if (selectedHistoryId === id) {
         document.getElementById("result_section").style.display = "none";
         selectedHistoryId = null;
@@ -762,6 +973,7 @@ const toggleActive = async (id, event) => {
       if (idx >= 0) {
         analysisHistory[idx] = result.data;
         renderHistoryTable();
+        loadPortfolioCashPlan();
       }
     }
   } catch (e) {
@@ -845,6 +1057,7 @@ const refreshHistory = async (forceRefresh = false) => {
       };
       saveLastRefresh(refreshData);
       updateLastRefreshLabel(refreshData, false);
+      loadPortfolioCashPlan();
 
       alert(`${updatedCount}개 종목 갱신 완료`);
     } else {
@@ -885,8 +1098,9 @@ const showHistoryDetail = (id) => {
 const displayResult = (data) => {
   document.getElementById("result_section").style.display = "block";
 
+  const displayStage = resolveDisplayStage(data);
   const phaseClass = `phase-${data.sell_phase || 'NONE'}`;
-  const stageClass = `stage-${data.sell_stage || 'HOLD'}`;
+  const stageClass = `stage-${displayStage}`;
 
   const stochStatus = data.is_stoch_overbought ? 'status-danger' : 'status-safe';
   const rsiStatus = data.is_rsi_overbought ? 'status-danger' : 'status-safe';
@@ -898,7 +1112,7 @@ const displayResult = (data) => {
   // Stage 인디케이터 생성
   const stages = ['HOLD', 'REDUCE_1', 'REDUCE_2', 'EXIT_ALL'];
   const stageNames = ['보유 유지', '1차 축소 (20~30%)', '2차 축소 (30~40%)', '전량 청산 (100%)'];
-  const currentStage = data.sell_stage || 'HOLD';
+  const currentStage = displayStage;
   const stageIdx = stages.indexOf(currentStage);
 
   const stageIndicatorHtml = stages.map((s, i) => {
@@ -1034,13 +1248,15 @@ const displayResult = (data) => {
 
   // 매도 비율 정보
   let sellRatioHtml = '';
-  if (data.sell_stage && data.sell_stage !== 'HOLD') {
-    const ratioMin = data.sell_ratio_min !== undefined ? (data.sell_ratio_min * 100).toFixed(0) : '0';
-    const ratioMax = data.sell_ratio_max !== undefined ? (data.sell_ratio_max * 100).toFixed(0) : '0';
+  const ratioMinValue = data.final_ratio_min ?? data.sell_ratio_min;
+  const ratioMaxValue = data.final_ratio_max ?? data.sell_ratio_max;
+  if (currentStage && currentStage !== 'HOLD') {
+    const ratioMin = ratioMinValue !== undefined ? (ratioMinValue * 100).toFixed(0) : '0';
+    const ratioMax = ratioMaxValue !== undefined ? (ratioMaxValue * 100).toFixed(0) : '0';
     sellRatioHtml = `
       <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px;">
         <strong style="color: #991b1b;">💡 권장 매도 비율: ${ratioMin}% ~ ${ratioMax}%</strong>
-        ${data.holding_quantity ? `<span style="color: #7c2d12; margin-left: 12px;">→ 보유 ${data.holding_quantity}주 중 ${Math.floor(data.holding_quantity * data.sell_ratio_min)}~${Math.floor(data.holding_quantity * data.sell_ratio_max)}주 매도 권장</span>` : ''}
+        ${data.holding_quantity ? `<span style="color: #7c2d12; margin-left: 12px;">→ 보유 ${data.holding_quantity}주 중 ${Math.floor(data.holding_quantity * ratioMinValue)}~${Math.floor(data.holding_quantity * ratioMaxValue)}주 매도 권장</span>` : ''}
       </div>
     `;
   }
@@ -1050,7 +1266,7 @@ const displayResult = (data) => {
       <div class="result-header">
         <h3>${data.symbol} ${data.name || ''}</h3>
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-          <span class="stage-badge ${stageClass}">${data.sell_stage_name || currentStage}</span>
+          <span class="stage-badge ${stageClass}">${getStageDisplayName(currentStage)}</span>
           <span class="phase-badge ${phaseClass}">${getPhaseDisplayName(data.sell_phase, data.sell_phase_name)}</span>
         </div>
       </div>
@@ -1241,16 +1457,15 @@ const renderHistoryTable = () => {
   }
 
   tbody.innerHTML = analysisHistory.map(item => {
-    const stageClass = `stage-${item.sell_stage || 'HOLD'}`;
+    const displayStage = resolveDisplayStage(item);
+    const stageClass = `stage-${displayStage}`;
     const activeIcon = item.is_active ? '●' : '○';
     const activeClass = item.is_active ? 'active' : 'inactive';
     const selectedClass = item.id === selectedHistoryId ? 'selected' : '';
 
     const entryPriceBadge = item.entry_price ? `<span class="entry-price-badge">진입가: ${formatNumber(item.entry_price)}</span>` : '';
 
-    // Stage 표시명
-    const stageNames = { 'HOLD': '보유', 'REDUCE_1': '1차축소', 'REDUCE_2': '2차축소', 'EXIT_ALL': '전량청산' };
-    const stageName = stageNames[item.sell_stage] || item.sell_stage_name || '-';
+    const stageName = getStageDisplayName(displayStage).replace(' 비중 축소', '').replace('보유 유지', '보유');
 
     // ADX 표시
     const adxDisplay = item.adx !== null && item.adx !== undefined ? Number(item.adx).toFixed(1) : '-';
@@ -1305,6 +1520,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   loadHistory();
+  loadPortfolioCashPlan();
 });
 
 // Enter 키로 분석 실행
@@ -1364,6 +1580,7 @@ const saveHistoryEdit = async () => {
       if (idx >= 0) {
         analysisHistory[idx] = result.data;
         renderHistoryTable();
+        loadPortfolioCashPlan();
       }
       closeEditModal();
       alert('수정되었습니다.');
