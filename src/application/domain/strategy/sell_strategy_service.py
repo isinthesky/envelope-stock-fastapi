@@ -66,10 +66,75 @@ class SellStrategyService:
             self._data_loader = OHLCVDataLoader(self.session)
         return self._data_loader
 
+    async def _get_symbol_hints(
+        self,
+        symbol: str,
+        name: str | None = None,
+        market: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        """유니버스에서 종목명/시장 힌트를 보강한다."""
+        if self.session is None or (name and market):
+            return name, market
+
+        try:
+            from src.adapters.database.repositories.stock_universe_repository import (
+                StockUniverseRepository,
+            )
+
+            stock = await StockUniverseRepository(self.session).get_by_symbol(
+                symbol, session=self.session
+            )
+            if stock:
+                return name or stock.name, market or stock.market
+        except Exception:
+            logger.debug(
+                "[Sell Signal] failed to resolve symbol hints for %s",
+                symbol,
+                exc_info=True,
+            )
+
+        return name, market
+
     @staticmethod
     def _is_nan(value: float | None) -> bool:
         """float NaN 여부 확인"""
         return value is not None and math.isnan(value)
+
+    @staticmethod
+    def infer_instrument_profile(
+        symbol: str,
+        name: str | None = None,
+        market: str | None = None,
+    ) -> dict[str, bool]:
+        """심볼/종목명/시장 힌트만으로 ETF 계열 여부를 보수적으로 추정한다."""
+        _ = symbol
+        normalized_name = (name or "").upper().replace(" ", "")
+        normalized_market = (market or "").upper()
+
+        leveraged_keywords = (
+            "레버리지",
+            "2X",
+            "3X",
+            "2배",
+            "3배",
+            "인버스",
+            "INVERSE",
+        )
+        etf_keywords = ("ETF", "ETN")
+
+        is_leveraged_etf_like = any(
+            keyword in normalized_name for keyword in leveraged_keywords
+        )
+        is_etf_like = (
+            normalized_market == "ETF"
+            or any(keyword in normalized_name for keyword in etf_keywords)
+            or is_leveraged_etf_like
+        )
+
+        return {
+            "is_etf_like": is_etf_like,
+            "is_leveraged_etf_like": is_leveraged_etf_like,
+        }
 
     def _check_stoch_dead_cross(
         self,
@@ -274,6 +339,8 @@ class SellStrategyService:
         force_refresh: bool = False,
         use_scoring: bool = True,
         merge_strategy: str = "conservative",
+        name: str | None = None,
+        market: str | None = None,
     ) -> SellSignalAnalysisDTO:
         """
         매도 시그널 분석
@@ -298,6 +365,7 @@ class SellStrategyService:
             SellSignalAnalysisDTO: 매도 시그널 분석 결과
         """
         analyzed_at = datetime.now()
+        name, market = await self._get_symbol_hints(symbol=symbol, name=name, market=market)
 
         # 1. OHLCV 데이터 로딩
         data_loader = self._get_data_loader()
@@ -428,9 +496,15 @@ class SellStrategyService:
             minus_di=adx_indicators.get("minus_di"),
             is_volume_sell_signal=volume_indicators.get("is_volume_sell_signal", False),
             is_volume_spike=volume_indicators.get("is_volume_spike", False),
+            is_volume_peak=volume_indicators.get("is_volume_peak", False),
+            is_stoch_dead_cross=is_stoch_dead_cross,
+            is_52week_high=is_52week_high,
+            high_52week_ratio=high_52week_ratio,
             profit_ratio=profit_ratio,
             dynamic_stoch_threshold=dynamic_stoch,
             dynamic_rsi_threshold=dynamic_rsi,
+            name=name,
+            market=market,
         )
 
         sell_score_result = self.calculate_sell_score(
@@ -477,6 +551,7 @@ class SellStrategyService:
             adx_indicators.get("is_strong_uptrend", False)
             and not is_death_cross
             and not volume_indicators.get("is_volume_sell_signal", False)
+            and sell_stage == SellStageEnum.HOLD
         )
 
         # 8. 매도 근거 수집
@@ -513,12 +588,13 @@ class SellStrategyService:
         logger.info(
             f"[Sell Signal] {symbol}: phase={sell_phase.value}, stage={sell_stage.value}, "
             f"phase_name={phase_info['name']}, profit_ratio={profit_ratio}, "
-            f"adx={adx_indicators.get('adx')}, volume_spike={volume_indicators.get('is_volume_spike')}"
+            f"adx={adx_indicators.get('adx')}, "
+            f"volume_spike={volume_indicators.get('is_volume_spike')}"
         )
 
         return SellSignalAnalysisDTO(
             symbol=symbol,
-            name=None,
+            name=name,
             current_price=Decimal(str(close)),
             analyzed_at=analyzed_at,
             ma_short=Decimal(str(round(ma_short, 2))),
@@ -858,6 +934,126 @@ class SellStrategyService:
             SellStageEnum.EXIT_ALL,
         ]
         return max(rule_stage, score_stage, key=lambda s: stage_order.index(s))
+
+    def _collect_sharp_top_signals(
+        self,
+        stoch_k: float,
+        rsi: float,
+        dynamic_stoch_threshold: float,
+        dynamic_rsi_threshold: float,
+        is_stoch_dead_cross: bool,
+        is_volume_spike: bool,
+        is_volume_sell_signal: bool,
+        is_volume_peak: bool,
+        is_52week_high: bool,
+        high_52week_ratio: float | None,
+        ma_gap_ratio: float,
+    ) -> tuple[int, list[str]]:
+        """sharp v1 조기 축소용 상단/과열 신호를 모은다."""
+        signals: list[str] = []
+
+        if stoch_k >= max(dynamic_stoch_threshold, 75.0):
+            signals.append(f"Stoch 과열 ({stoch_k:.1f})")
+        if rsi >= max(dynamic_rsi_threshold, 70.0):
+            signals.append(f"RSI 과열 ({rsi:.1f})")
+        if is_stoch_dead_cross and stoch_k >= max(dynamic_stoch_threshold - 5.0, 68.0):
+            signals.append("Stoch 데드크로스")
+        if is_volume_sell_signal:
+            signals.append("거래량 매도 신호")
+        elif is_volume_peak:
+            signals.append("거래량 피크 경고")
+        elif is_volume_spike:
+            signals.append("거래량 급증")
+        if is_52week_high or (high_52week_ratio is not None and high_52week_ratio >= 0.98):
+            signals.append("신고가권/고점권")
+        if ma_gap_ratio >= 12.0:
+            signals.append(f"장기 이격 과대 ({ma_gap_ratio:.1f}%)")
+
+        return len(signals), signals
+
+    def _determine_sharp_profit_protection_stage(
+        self,
+        *,
+        profit_ratio: float | None,
+        stoch_k: float,
+        rsi: float,
+        dynamic_stoch_threshold: float,
+        dynamic_rsi_threshold: float,
+        is_stoch_dead_cross: bool,
+        is_volume_spike: bool,
+        is_volume_sell_signal: bool,
+        is_volume_peak: bool,
+        is_52week_high: bool,
+        high_52week_ratio: float | None,
+        ma_gap_ratio: float,
+        name: str | None,
+        market: str | None,
+    ) -> tuple[SellStageEnum | None, list[str]]:
+        """수익 종목은 sharp v1 기준으로 더 빠르게 축소한다."""
+        if profit_ratio is None or profit_ratio <= 0:
+            return None, []
+
+        instrument_profile = self.infer_instrument_profile("", name=name, market=market)
+        signal_count, top_signals = self._collect_sharp_top_signals(
+            stoch_k=stoch_k,
+            rsi=rsi,
+            dynamic_stoch_threshold=dynamic_stoch_threshold,
+            dynamic_rsi_threshold=dynamic_rsi_threshold,
+            is_stoch_dead_cross=is_stoch_dead_cross,
+            is_volume_spike=is_volume_spike,
+            is_volume_sell_signal=is_volume_sell_signal,
+            is_volume_peak=is_volume_peak,
+            is_52week_high=is_52week_high,
+            high_52week_ratio=high_52week_ratio,
+            ma_gap_ratio=ma_gap_ratio,
+        )
+        if signal_count < 2:
+            return None, []
+
+        is_etf_like = instrument_profile["is_etf_like"]
+        is_leveraged_etf_like = instrument_profile["is_leveraged_etf_like"]
+        early_profit_threshold = 0.08
+        strong_profit_threshold = 0.15
+        reduce_1_signal_threshold = 3
+        reduce_2_signal_threshold = 4
+
+        if is_etf_like:
+            early_profit_threshold = 0.06
+            strong_profit_threshold = 0.12
+            reduce_1_signal_threshold = 2
+            reduce_2_signal_threshold = 3
+        if is_leveraged_etf_like:
+            early_profit_threshold = 0.04
+            strong_profit_threshold = 0.10
+            reduce_1_signal_threshold = 2
+            reduce_2_signal_threshold = 3
+
+        reasons: list[str] = []
+        if profit_ratio >= strong_profit_threshold and signal_count >= reduce_2_signal_threshold:
+            reasons.append(
+                f"[sharp v1] 수익 보호 강화: 상단 경고 {signal_count}개 정렬 "
+                f"(수익률 {profit_ratio * 100:.1f}%)"
+            )
+            if is_etf_like:
+                reasons.append(
+                    "[sharp v1] ETF/레버리지 계열은 이익 보호 기준을 더 엄격하게 적용"
+                )
+            reasons.extend(top_signals[:4])
+            return SellStageEnum.REDUCE_2, reasons
+
+        if profit_ratio >= early_profit_threshold and signal_count >= reduce_1_signal_threshold:
+            reasons.append(
+                f"[sharp v1] 수익 구간 선제 축소: 상단 경고 {signal_count}개 정렬 "
+                f"(수익률 {profit_ratio * 100:.1f}%)"
+            )
+            if is_etf_like:
+                reasons.append(
+                    "[sharp v1] ETF/레버리지 계열은 수익 종목 우선 현금화 대상"
+                )
+            reasons.extend(top_signals[:4])
+            return SellStageEnum.REDUCE_1, reasons
+
+        return None, []
 
     def _get_dynamic_thresholds(self, profit_ratio: float) -> tuple[float, float]:
         """
@@ -1206,8 +1402,14 @@ class SellStrategyService:
         is_volume_sell_signal: bool,
         profit_ratio: float | None,
         is_volume_spike: bool = False,
+        is_volume_peak: bool = False,
+        is_stoch_dead_cross: bool = False,
+        is_52week_high: bool = False,
+        high_52week_ratio: float | None = None,
         dynamic_stoch_threshold: float = 70.0,
         dynamic_rsi_threshold: float = 70.0,
+        name: str | None = None,
+        market: str | None = None,
     ) -> tuple[SellStageEnum, list[str]]:
         """
         비중축소 Stage 결정 (기존 Phase와 별도)
@@ -1216,11 +1418,12 @@ class SellStrategyService:
         1. 긴급 손절 (profit_ratio <= -7%) → EXIT_ALL
         2. 전량 청산 (데드크로스 + 거래량 급증) → EXIT_ALL
         3. 추세 붕괴 (데드크로스 + 극심한 과열) → EXIT_ALL
-        4. ADX 추세 유지 필터 (강한 상승 추세) → HOLD
-        5. ADX 약화 + 거래량 급증 → REDUCE_2
-        6. 2차 축소 (데드크로스 + 과열) → REDUCE_2
-        7. 1차 축소 (ADX 약화 또는 과열 초기 / 거래량 경고) → REDUCE_1
-        8. 보유 유지 → HOLD
+        4. sharp v1 수익 보호 (다중 상단 경고 정렬) → REDUCE
+        5. ADX 추세 유지 필터 (강한 상승 추세) → HOLD
+        6. ADX 약화 + 거래량 급증 → REDUCE_2
+        7. 2차 축소 (데드크로스 + 과열) → REDUCE_2
+        8. 1차 축소 (ADX 약화 또는 과열 초기 / 거래량 경고) → REDUCE_1
+        9. 보유 유지 → HOLD
 
         Returns:
             tuple[SellStageEnum, list[str]]: (stage, reasons)
@@ -1241,30 +1444,57 @@ class SellStrategyService:
             reasons.append("데드크로스 + 극심한 과열 (Stoch>80, RSI>75)")
             return SellStageEnum.EXIT_ALL, reasons
 
-        # === 4순위: ADX 추세 유지 필터 ===
+        # === 4순위: sharp v1 수익 보호 ===
+        sharp_stage, sharp_reasons = self._determine_sharp_profit_protection_stage(
+            profit_ratio=profit_ratio,
+            stoch_k=stoch_k,
+            rsi=rsi,
+            dynamic_stoch_threshold=dynamic_stoch_threshold,
+            dynamic_rsi_threshold=dynamic_rsi_threshold,
+            is_stoch_dead_cross=is_stoch_dead_cross,
+            is_volume_spike=is_volume_spike,
+            is_volume_sell_signal=is_volume_sell_signal,
+            is_volume_peak=is_volume_peak,
+            is_52week_high=is_52week_high,
+            high_52week_ratio=high_52week_ratio,
+            ma_gap_ratio=ma_gap_ratio,
+            name=name,
+            market=market,
+        )
+        if sharp_stage is not None:
+            reasons.extend(sharp_reasons)
+            return sharp_stage, reasons
+
+        # === 5순위: ADX 추세 유지 필터 ===
         # (손절/전량청산 이후에만 적용)
         is_strong_uptrend = False
         if adx is not None and plus_di is not None and minus_di is not None:
             is_strong_uptrend = adx > 25 and plus_di > minus_di
             if is_strong_uptrend and not is_death_cross and not is_volume_sell_signal:
-                reasons.append(f"강한 상승 추세 유지 (ADX={adx:.1f}, +DI={plus_di:.1f} > -DI={minus_di:.1f})")
+                reasons.append(
+                    f"강한 상승 추세 유지 "
+                    f"(ADX={adx:.1f}, +DI={plus_di:.1f} > -DI={minus_di:.1f})"
+                )
                 return SellStageEnum.HOLD, reasons
 
-        # === 5순위: ADX 약화 대응 ===
+        # === 6순위: ADX 약화 대응 ===
         if adx is not None and adx < 15 and is_volume_spike:
             reasons.append(f"ADX 매우 약화 + 거래량 급증 (ADX={adx:.1f})")
             return SellStageEnum.REDUCE_2, reasons
 
-        # === 6순위: 2차 비중 축소 (30~40%) ===
+        # === 7순위: 2차 비중 축소 (30~40%) ===
         if is_death_cross and (stoch_k > dynamic_stoch_threshold or rsi > dynamic_rsi_threshold):
-            reasons.append(f"데드크로스 + 과열 (Stoch>{dynamic_stoch_threshold:.0f} OR RSI>{dynamic_rsi_threshold:.0f})")
+            reasons.append(
+                f"데드크로스 + 과열 "
+                f"(Stoch>{dynamic_stoch_threshold:.0f} OR RSI>{dynamic_rsi_threshold:.0f})"
+            )
             return SellStageEnum.REDUCE_2, reasons
 
         if is_volume_sell_signal and ma_gap_ratio < 3:
             reasons.append("거래량 급증 하락 + MA 갭 축소 (<3%)")
             return SellStageEnum.REDUCE_2, reasons
 
-        # === 7순위: 1차 비중 축소 (20~30%) ===
+        # === 8순위: 1차 비중 축소 (20~30%) ===
         if adx is not None and adx < 20 and stoch_k > 85:
             reasons.append(f"ADX 약화 + Stoch 과열 (ADX={adx:.1f}, K={stoch_k:.1f})")
             return SellStageEnum.REDUCE_1, reasons
@@ -1281,7 +1511,7 @@ class SellStrategyService:
             reasons.append("거래량 급증 하락 감지")
             return SellStageEnum.REDUCE_1, reasons
 
-        # === 8순위: 보유 유지 ===
+        # === 9순위: 보유 유지 ===
         # 기존 Phase에서 매핑 (호환성)
         default_stage = PHASE_TO_STAGE_MAP.get(sell_phase, SellStageEnum.HOLD)
         if default_stage != SellStageEnum.HOLD:

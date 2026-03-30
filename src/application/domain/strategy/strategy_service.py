@@ -47,6 +47,7 @@ from src.application.domain.strategy.dto import (
     IndustrySummaryDTO,
     PresetActivateRequestDTO,
     SELL_PHASE_INFO,
+    SELL_STAGE_INFO,
     SellSignalAnalysisDTO,
     SignalListDTO,
     SignalStatisticsDTO,
@@ -1260,11 +1261,17 @@ class StrategyService:
         current_cash_ratio: float | None = None,
     ) -> PortfolioCashPlanDTO:
         """활성 매도 분석 이력 기준 사전 현금화 계획 생성"""
+        from src.application.domain.strategy.sell_strategy_service import SellStrategyService
+
         scored_actions: list[PortfolioCashActionDTO] = []
         total_score = 0.0
+        winner_priority_count = 0
 
         for item in histories:
             sell_stage = getattr(item, "sell_stage", None) or "HOLD"
+            final_stage = getattr(item, "final_stage", None) or sell_stage
+            if hasattr(final_stage, "value"):
+                final_stage = final_stage.value
             sell_reasons = getattr(item, "sell_reasons", None) or []
             if isinstance(sell_reasons, str):
                 try:
@@ -1273,6 +1280,12 @@ class StrategyService:
                     sell_reasons = [sell_reasons]
 
             volume_ratio = float(getattr(item, "volume_ratio", 0.0) or 0.0)
+            market = getattr(item, "market", None)
+            instrument_profile = SellStrategyService.infer_instrument_profile(
+                getattr(item, "symbol", ""),
+                name=getattr(item, "name", None),
+                market=market,
+            )
             profit_ratio = None
             entry_price = getattr(item, "entry_price", None)
             current_price = getattr(item, "current_price", None)
@@ -1284,11 +1297,11 @@ class StrategyService:
 
             score = 0.0
             reasons = list(sell_reasons)
-            if sell_stage == "REDUCE_1":
+            if final_stage == "REDUCE_1":
                 score += 35
-            elif sell_stage == "REDUCE_2":
+            elif final_stage == "REDUCE_2":
                 score += 60
-            elif sell_stage == "EXIT_ALL":
+            elif final_stage == "EXIT_ALL":
                 score += 90
 
             if getattr(item, "is_death_cross", False):
@@ -1303,19 +1316,54 @@ class StrategyService:
             if getattr(item, "overbought_sell_blocked", False):
                 score -= 10
                 reasons.append("강한 상승 추세로 과매수 매도 차단")
-            if profit_ratio is not None and profit_ratio >= 0.10:
-                score += 10
+            if profit_ratio is not None and profit_ratio >= 0.15:
+                score += 25
+                reasons.append("수익 보호 우선 현금화 구간 (+15%)")
+            elif profit_ratio is not None and profit_ratio >= 0.08:
+                score += 18
                 reasons.append("수익 구간에서 선제 현금화 유리")
+            elif profit_ratio is not None and profit_ratio > 0:
+                score += 8
+                reasons.append("소폭 수익 구간")
             if profit_ratio is not None and profit_ratio <= -0.05:
                 score += 10
                 reasons.append("손실 확대 전 리스크 축소 필요")
+            if (
+                profit_ratio is not None
+                and profit_ratio > 0
+                and final_stage in {"REDUCE_1", "REDUCE_2", "EXIT_ALL"}
+            ):
+                winner_priority_count += 1
+                score += 15
+                reasons.append("현금 확보는 수익 종목 우선")
+            if instrument_profile["is_etf_like"] and final_stage in {"REDUCE_1", "REDUCE_2"}:
+                score += 8
+                reasons.append("ETF/레버리지 계열은 회전이 빨라 선제 축소")
 
             suggested_ratio = {
                 "HOLD": 0.0,
                 "REDUCE_1": 0.25,
                 "REDUCE_2": 0.50,
                 "EXIT_ALL": 1.0,
-            }.get(sell_stage, 0.0)
+            }.get(final_stage, 0.0)
+            if profit_ratio is not None and profit_ratio >= 0.08 and final_stage == "REDUCE_1":
+                suggested_ratio = max(suggested_ratio, 0.30)
+            if profit_ratio is not None and profit_ratio >= 0.12 and final_stage == "REDUCE_2":
+                suggested_ratio = max(suggested_ratio, 0.60)
+            if (
+                instrument_profile["is_etf_like"]
+                and profit_ratio is not None
+                and profit_ratio > 0
+                and final_stage == "REDUCE_1"
+            ):
+                suggested_ratio = max(suggested_ratio, 0.35)
+            if (
+                instrument_profile["is_leveraged_etf_like"]
+                and profit_ratio is not None
+                and profit_ratio > 0
+                and final_stage == "REDUCE_2"
+            ):
+                suggested_ratio = max(suggested_ratio, 0.70)
             if score >= 90 and suggested_ratio < 1.0:
                 suggested_ratio = max(suggested_ratio, 0.70)
             elif score >= 60 and suggested_ratio < 0.50:
@@ -1332,8 +1380,20 @@ class StrategyService:
             note = None
             if profit_ratio is not None and profit_ratio >= 0.15:
                 note = "수익 종목은 고점 경고 시 현금 창출원으로 우선 활용"
+            elif profit_ratio is not None and profit_ratio >= 0.08:
+                note = "수익 보호 단계: 현금이 필요하면 먼저 줄일 후보"
             elif profit_ratio is not None and profit_ratio <= -0.08:
                 note = "기존 손실 보전 기대보다 자본 보전 우선"
+            elif (
+                instrument_profile["is_leveraged_etf_like"]
+                and final_stage in {"REDUCE_1", "REDUCE_2"}
+            ):
+                note = "레버리지/인버스 계열은 일반 종목보다 더 빠르게 이익 보호"
+            elif (
+                instrument_profile["is_etf_like"]
+                and final_stage in {"REDUCE_1", "REDUCE_2"}
+            ):
+                note = "ETF 계열은 수익 구간에서 선제 현금화 기준을 강화"
 
             scored_actions.append(
                 PortfolioCashActionDTO(
@@ -1341,9 +1401,10 @@ class StrategyService:
                     name=getattr(item, "name", None),
                     priority=0,
                     action=action,
-                    sell_stage=sell_stage,
+                    sell_stage=final_stage,
                     suggested_sell_ratio=round(suggested_ratio, 2),
                     urgency_score=round(score, 2),
+                    profit_ratio=round(profit_ratio, 4) if profit_ratio is not None else None,
                     reasons=list(dict.fromkeys(reasons))[:6],
                     note=note,
                 )
@@ -1356,6 +1417,7 @@ class StrategyService:
 
         active_count = len(scored_actions)
         avg_score = round(total_score / active_count, 2) if active_count else 0.0
+        cash_gap_ratio = None
         if avg_score >= 70:
             heat_level = "HIGH"
             portfolio_action = "신규 진입 중단 + 상위 위험 종목 중심 현금화"
@@ -1372,20 +1434,30 @@ class StrategyService:
             f"목표 현금 비중은 {target_cash_ratio * 100:.0f}%",
         ]
         if current_cash_ratio is not None:
-            gap = target_cash_ratio - current_cash_ratio
-            if gap > 0:
-                summary.append(f"현재 현금 비중이 목표보다 {gap * 100:.1f}%p 낮아 선제 현금화 필요")
+            cash_gap_ratio = round(target_cash_ratio - current_cash_ratio, 4)
+            if cash_gap_ratio > 0:
+                summary.append(
+                    f"현재 현금 비중이 목표보다 {cash_gap_ratio * 100:.1f}%p 낮아 선제 현금화 필요"
+                )
             else:
                 summary.append("현재 현금 비중은 목표 이상으로 방어 가능")
+        if winner_priority_count > 0:
+            summary.append(
+                f"현금 확보는 수익 구간 종목 {winner_priority_count}개를 "
+                f"우선 활용하도록 정렬"
+            )
         if scored_actions:
             top = scored_actions[0]
-            summary.append(f"최우선 정리 후보는 {top.symbol}{' ' + top.name if top.name else ''}")
+            summary.append(
+                f"최우선 정리 후보는 {top.symbol}{' ' + top.name if top.name else ''}"
+            )
 
         return PortfolioCashPlanDTO(
             analyzed_at=datetime.now(),
             active_sell_count=active_count,
             target_cash_ratio=target_cash_ratio,
             current_cash_ratio=current_cash_ratio,
+            cash_gap_ratio=cash_gap_ratio,
             market_heat_level=heat_level,
             market_risk_score=avg_score,
             portfolio_action=portfolio_action,
@@ -1402,30 +1474,47 @@ class StrategyService:
     ) -> PortfolioCashPlanDTO:
         """활성 매도 분석 이력 기반 포트폴리오 사전 현금화 계획"""
         history_repo = self._get_analysis_repo(session)
-        histories = list(await history_repo.get_by_type("sell", is_active=True, limit=200, offset=0, session=session))
+        histories = list(
+            await history_repo.get_by_type(
+                "sell", is_active=True, limit=200, offset=0, session=session
+            )
+        )
         enriched_histories = []
 
         from src.application.domain.strategy.sell_strategy_service import SellStrategyService
 
         sell_service = SellStrategyService(session)
+        universe_repo = StockUniverseRepository(session)
         for model in histories:
+            universe_stock = await universe_repo.get_by_symbol(model.symbol, session=session)
+            resolved_name = model.name or (universe_stock.name if universe_stock else None)
+            resolved_market = universe_stock.market if universe_stock else None
             try:
                 live = await sell_service.analyze_sell_signal(
                     symbol=model.symbol,
                     entry_price=float(model.entry_price) if model.entry_price is not None else None,
                     force_refresh=True,
+                    name=resolved_name,
+                    market=resolved_market,
                 )
                 enriched_histories.append(
                     SimpleNamespace(
                         symbol=live.symbol,
-                        name=live.name or model.name,
-                        sell_stage=live.sell_stage,
+                        name=live.name or resolved_name,
+                        market=resolved_market,
+                        sell_stage=(
+                            live.final_stage.value
+                            if hasattr(live.final_stage, "value")
+                            else live.final_stage or live.sell_stage
+                        ),
+                        final_stage=live.final_stage,
                         sell_reasons=live.sell_stage_reasons or live.sell_reasons,
                         entry_price=live.entry_price,
                         current_price=live.current_price,
                         is_death_cross=live.is_death_cross,
                         is_volume_sell_signal=live.is_volume_sell_signal,
                         is_volume_spike=live.is_volume_spike,
+                        is_volume_peak=live.is_volume_peak,
                         overbought_sell_blocked=live.overbought_sell_blocked,
                         volume_ratio=live.volume_ratio,
                     )
@@ -1434,7 +1523,8 @@ class StrategyService:
                 enriched_histories.append(
                     SimpleNamespace(
                         symbol=model.symbol,
-                        name=model.name,
+                        name=resolved_name,
+                        market=resolved_market,
                         sell_stage="HOLD",
                         sell_reasons=json.loads(model.sell_reasons) if model.sell_reasons else [],
                         entry_price=model.entry_price,
@@ -1442,6 +1532,7 @@ class StrategyService:
                         is_death_cross=model.is_death_cross,
                         is_volume_sell_signal=False,
                         is_volume_spike=False,
+                        is_volume_peak=False,
                         overbought_sell_blocked=False,
                         volume_ratio=None,
                     )
@@ -1631,12 +1722,18 @@ class StrategyService:
 
         # sell_result가 있으면 실시간 지표 추가 (DB에 없는 필드들)
         if sell_result is not None:
+            stage_value = (
+                sell_result.final_stage.value
+                if hasattr(sell_result.final_stage, "value")
+                else sell_result.final_stage or sell_result.sell_stage
+            )
+            stage_info = SELL_STAGE_INFO.get(stage_value, SELL_STAGE_INFO["HOLD"])
             dto_kwargs.update({
                 # 비중축소 분석
-                "sell_stage": sell_result.sell_stage,
-                "sell_stage_name": sell_result.sell_stage_name,
-                "sell_ratio_min": sell_result.sell_ratio_min,
-                "sell_ratio_max": sell_result.sell_ratio_max,
+                "sell_stage": stage_value,
+                "sell_stage_name": stage_info["name"],
+                "sell_ratio_min": sell_result.final_ratio_min or sell_result.sell_ratio_min,
+                "sell_ratio_max": sell_result.final_ratio_max or sell_result.sell_ratio_max,
                 # 거래량 분석
                 "volume_ratio": sell_result.volume_ratio,
                 "is_volume_spike": sell_result.is_volume_spike,
