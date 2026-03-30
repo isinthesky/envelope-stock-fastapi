@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+RUN pip install --no-cache-dir uv
 
 # Copy dependency files and README
 COPY pyproject.toml uv.lock* README.md ./
@@ -30,6 +30,7 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY src ./src
 COPY templates ./templates
+COPY static ./static
 
 # Install project
 RUN uv sync --frozen --no-dev

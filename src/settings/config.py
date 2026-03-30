@@ -105,6 +105,21 @@ class Settings(BaseSettings):
     kis_api_rate_window_seconds: int = Field(default=1, ge=1, description="Rate Limit 윈도우 (초)")
     kis_api_retry_count: int = Field(default=3, ge=0, description="API 호출 실패 시 재시도 횟수")
     kis_api_timeout: int = Field(default=10, ge=1, description="API 호출 타임아웃 (초)")
+    scan_concurrency_limit: int = Field(
+        default=5, ge=1, description="스캔 동시 처리 수 (골든크로스/MA5)"
+    )
+
+    # ==================== Universe Refresh (Ops Safety) ====================
+    universe_refresh_timeout_seconds: int = Field(
+        default=300, ge=30, description="유니버스 갱신 전체 타임아웃 (초)"
+    )
+    universe_refresh_warn_budget: int = Field(
+        default=50, ge=0, description="유니버스 갱신 경고 로그 최대 출력 수 (카테고리별)"
+    )
+    universe_refresh_error_list_limit: int = Field(
+        default=50, ge=0, description="유니버스 갱신 응답 errors 리스트 최대 길이"
+    )
+
     kis_api_backoff_sequence: list[int] = Field(
         default_factory=lambda: [5, 10, 20],
         description="429/5xx 연속 발생 시 대기 시간 시퀀스 (초)",
@@ -196,6 +211,17 @@ class Settings(BaseSettings):
         default=5, ge=1, description="대시보드 새로고침 간격 (초)"
     )
 
+    # ==================== 관리자 접근 제어 ====================
+    admin_allowed_ips: list[str] = Field(
+        default=["127.0.0.1", "::1", "172.17.0.1", "192.168.0.0/16", "10.0.0.0/8"],
+        description="관리자 API 허용 IP 목록 (CIDR 표기 지원)",
+    )
+
+    enable_admin_strategy_routes: bool = Field(
+        default=False,
+        description="전략 생성/수정/삭제 같은 관리자 전용 라우트를 API에 마운트할지 여부(기본: 비활성).",
+    )
+
     # ==================== WebSocket 설정 ====================
     ws_max_connections: int = Field(default=100, ge=1, description="WebSocket 최대 연결 수")
     ws_ping_interval: int = Field(default=20, ge=1, description="WebSocket Ping 간격 (초)")
@@ -209,6 +235,16 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", description="Telegram Bot Token")
     telegram_chat_id: str = Field(default="", description="Telegram Chat ID")
     telegram_enabled: bool = Field(default=False, description="Telegram 알림 활성화")
+
+    # ==================== DART API 설정 ====================
+    dart_open_api_key: str = Field(default="", description="DART Open API 키")
+    dart_api_base_url: str = Field(
+        default="https://opendart.fss.or.kr", description="DART API Base URL"
+    )
+    dart_api_rate_limit: int = Field(
+        default=10000, ge=1, description="DART API 일일 호출 제한"
+    )
+    dart_api_timeout: int = Field(default=30, ge=1, description="DART API 타임아웃 (초)")
 
     # ==================== Computed Properties ====================
 

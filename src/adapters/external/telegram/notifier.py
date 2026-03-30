@@ -137,7 +137,7 @@ class TelegramNotifier:
         state_label = {
             "OPTIMAL_BUY": "매수 적기",
             "BUY_INTEREST": "매수 관심",
-            "READY_TO_BUY": "매수 준비",
+            "READY_TO_BUY": "매수 관심",
         }.get(gc_state, gc_state)
 
         message = f"""🟢 <b>{state_label} 종목 알림</b>
@@ -174,7 +174,7 @@ class TelegramNotifier:
         lines = [
             "🟢 <b>매수 신호 종목 알림</b>",
             f"📅 {now}",
-            f"총 {len(stocks)}개 종목 (매수 적기 {optimal_count}, 매수 관심 {interest_count}, 매수 준비 {ready_count})",
+            f"총 {len(stocks)}개 종목 (매수 적기 {optimal_count}, 매수 관심 {interest_count + ready_count})",
             "",
         ]
 
@@ -182,7 +182,7 @@ class TelegramNotifier:
             state_label = {
                 "OPTIMAL_BUY": "매수 적기",
                 "BUY_INTEREST": "매수 관심",
-                "READY_TO_BUY": "매수 준비",
+                "READY_TO_BUY": "매수 관심",
             }.get(stock.get("gc_state"), stock.get("gc_state", "-"))
             lines.append(
                 f"• <b>{stock['name']}</b> ({stock['symbol']})\n"
@@ -191,6 +191,81 @@ class TelegramNotifier:
 
         if len(stocks) > 10:
             lines.append(f"\n... 외 {len(stocks) - 10}개")
+
+        message = "\n".join(lines)
+        return await self.send_message(message)
+
+
+    async def send_golden_cross_recommendations_summary(
+        self,
+        recommendations: dict,
+    ) -> bool:
+        """골든크로스 추천 요약(Top 종목 + Top 업종) 알림 전송
+
+        Args:
+            recommendations: GoldenCrossRecommendationDTO를 dict로 dump한 값
+              - top_stocks: list
+              - top_industries: list
+              - buy_candidate_count: int
+              - scan_time: str|datetime
+        """
+        if not recommendations:
+            return False
+
+        top_stocks = recommendations.get("top_stocks") or []
+        top_industries = recommendations.get("top_industries") or []
+        buy_candidate_count = recommendations.get("buy_candidate_count")
+        scan_time = recommendations.get("scan_time")
+
+        # scan_time 표기 정리
+        scan_time_str = ""
+        try:
+            if hasattr(scan_time, "strftime"):
+                scan_time_str = scan_time.strftime("%Y-%m-%d %H:%M")
+            elif isinstance(scan_time, str) and scan_time:
+                scan_time_str = scan_time.replace("T", " ")[:16]
+        except Exception:
+            scan_time_str = ""
+
+        now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+
+        lines: list[str] = [
+            "🧭 <b>골든크로스 추천 요약</b>",
+            f"📅 {now}",
+        ]
+
+        if buy_candidate_count is not None:
+            lines.append(f"매수 적기 후보: {buy_candidate_count}개")
+
+        if scan_time_str:
+            lines.append(f"(scan_time: {scan_time_str})")
+
+        lines.append("")
+
+        if top_industries:
+            lines.append("🏷️ <b>Top 업종</b>")
+            for ind in top_industries:
+                code = ind.get("industry_code")
+                name = ind.get("industry_name") or "(unknown)"
+                cnt = ind.get("count")
+                if code is not None and cnt is not None:
+                    lines.append(f"• {name} ({code}) : {cnt}")
+                else:
+                    lines.append(f"• {name}")
+            lines.append("")
+
+        if top_stocks:
+            lines.append("📌 <b>Top 종목</b>")
+            for s in top_stocks[:10]:
+                symbol = s.get("symbol")
+                name = s.get("name")
+                gc_state = s.get("gc_state")
+                ind_name = s.get("industry_name")
+                ind_part = f" | 업종: {ind_name}" if ind_name else ""
+                lines.append(f"• <b>{name}</b> ({symbol})\n  상태: {gc_state}{ind_part}")
+
+            if len(top_stocks) > 10:
+                lines.append(f"\n... 외 {len(top_stocks) - 10}개")
 
         message = "\n".join(lines)
         return await self.send_message(message)
@@ -266,6 +341,27 @@ class TelegramNotifier:
 
 <b>매도 근거:</b>
 {reasons_text}"""
+
+        return await self.send_message(message)
+
+    async def send_no_sell_signals_alert(self, total_tracked: int = 0) -> bool:
+        """
+        매도 권장 종목 없음 알림 전송
+
+        Args:
+            total_tracked: 추적 중인 총 종목 수
+        """
+        now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+
+        message = f"""⚪ <b>매도 권장 종목 알림</b>
+
+📅 {now}
+
+오늘은 매도 권장 종목이 없습니다.
+(총 {total_tracked}개 종목 추적 중)
+
+PHASE_4(매도 권장) 또는 PHASE_5(강력 매도) 단계에
+해당하는 종목이 없습니다."""
 
         return await self.send_message(message)
 

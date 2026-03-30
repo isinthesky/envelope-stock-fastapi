@@ -5,6 +5,7 @@ MarketData Service - 시세 데이터 조회 서비스
 
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 
 from src.adapters.cache.redis_client import RedisClient
@@ -21,6 +22,8 @@ from src.application.domain.market_data.dto import (
 from src.settings.config import settings
 
 logger = logging.getLogger(__name__)
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 class MarketDataService:
@@ -283,7 +286,13 @@ class MarketDataService:
 
                 return chart_response
 
-            resolved_end = end_date or datetime.now()
+            def _to_kst_yyyymmdd(dt: datetime) -> str:
+                """KIS는 KST 날짜(YYYYMMDD)로 조회하므로, 입력 datetime을 KST 기준 날짜 문자열로 정규화한다."""
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(KST)
+                return dt.strftime("%Y%m%d")
+
+            resolved_end = end_date or datetime.now(KST)
             resolved_start = start_date or (resolved_end - timedelta(days=90))
 
             if resolved_start > resolved_end:
@@ -292,8 +301,8 @@ class MarketDataService:
             params = {
                 "FID_COND_MRKT_DIV_CODE": "J",
                 "FID_INPUT_ISCD": symbol,
-                "FID_INPUT_DATE_1": resolved_start.strftime("%Y%m%d"),
-                "FID_INPUT_DATE_2": resolved_end.strftime("%Y%m%d"),
+                "FID_INPUT_DATE_1": _to_kst_yyyymmdd(resolved_start),
+                "FID_INPUT_DATE_2": _to_kst_yyyymmdd(resolved_end),
                 "FID_PERIOD_DIV_CODE": interval_map[interval],
                 "FID_ORG_ADJ_PRC": "0",
             }

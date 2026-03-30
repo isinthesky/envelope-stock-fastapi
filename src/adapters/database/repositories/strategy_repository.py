@@ -38,11 +38,41 @@ class StrategyRepository(
 
     # ==================== 전략 조회 (도메인 특화) ====================
 
+    async def get_by_id(
+        self,
+        id: int,
+        session: AsyncSession | None = None,
+        include_deleted: bool = False,
+    ) -> StrategyModel | None:
+        """ID로 전략 조회 (기본: soft deleted 제외)"""
+        if include_deleted:
+            return await super().get_by_id(id=id, session=session)
+
+        db = self._get_session(session)
+        stmt = select(self.model).where(
+            self.model.id == id,
+            self.model.deleted_at.is_(None),
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_by_name(
-        self, name: str, session: AsyncSession | None = None
+        self,
+        name: str,
+        account_no: str | None = None,
+        session: AsyncSession | None = None,
     ) -> StrategyModel | None:
         """전략명으로 조회"""
-        return await self.get_one(session=session, name=name)
+        db = self._get_session(session)
+        stmt = select(self.model).where(
+            self.model.name == name,
+            self.model.deleted_at.is_(None),
+        )
+        if account_no:
+            stmt = stmt.where(self.model.account_no == account_no)
+
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_by_account(
         self,
@@ -52,9 +82,18 @@ class StrategyRepository(
         session: AsyncSession | None = None,
     ) -> Sequence[StrategyModel]:
         """계좌번호로 전략 목록 조회"""
-        return await self.get_many(
-            limit=limit, offset=offset, session=session, account_no=account_no
+        db = self._get_session(session)
+        stmt = (
+            select(self.model)
+            .where(
+                self.model.account_no == account_no,
+                self.model.deleted_at.is_(None),
+            )
+            .limit(limit)
+            .offset(offset)
         )
+        result = await db.execute(stmt)
+        return result.scalars().all()
 
     async def get_by_status(
         self,
@@ -64,9 +103,18 @@ class StrategyRepository(
         session: AsyncSession | None = None,
     ) -> Sequence[StrategyModel]:
         """상태별 전략 목록 조회"""
-        return await self.get_many(
-            limit=limit, offset=offset, session=session, status=status.value
+        db = self._get_session(session)
+        stmt = (
+            select(self.model)
+            .where(
+                self.model.status == status.value,
+                self.model.deleted_at.is_(None),
+            )
+            .limit(limit)
+            .offset(offset)
         )
+        result = await db.execute(stmt)
+        return result.scalars().all()
 
     async def get_active_strategies(
         self,
@@ -75,7 +123,10 @@ class StrategyRepository(
         session: AsyncSession | None = None,
     ) -> Sequence[StrategyModel]:
         """활성 전략 조회"""
-        stmt = select(self.model).where(self.model.status == StrategyStatus.ACTIVE.value)
+        stmt = select(self.model).where(
+            self.model.status == StrategyStatus.ACTIVE.value,
+            self.model.deleted_at.is_(None),
+        )
         if account_no:
             stmt = stmt.where(self.model.account_no == account_no)
         stmt = stmt.limit(limit)
@@ -166,4 +217,14 @@ class StrategyRepository(
             successful_executions=successful_executions,
             failed_executions=failed_executions,
             last_executed_at=datetime.now(),
+        )
+
+    async def soft_delete_by_id(
+        self, strategy_id: int, session: AsyncSession | None = None
+    ) -> StrategyModel | None:
+        """전략 소프트 삭제 (deleted_at 설정)"""
+        return await self.update_by_id(
+            strategy_id,
+            session=session,
+            deleted_at=datetime.now(),
         )

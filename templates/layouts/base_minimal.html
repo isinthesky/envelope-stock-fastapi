@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Stock API{% endblock %}</title>
+    <link rel="stylesheet" href="/static/styles/mypage.css" />
+  <style>
+    {% block extra_styles %}{% endblock %}
+  </style>
+</head>
+<body class="sidebar-hidden">
+  <button class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="false">Show menu</button>
+  <div class="sidebar-backdrop" data-sidebar-backdrop="1"></div>
+  <div class="layout">
+    <nav class="sidebar" id="sidebar">
+      <h2><a href="/mypage/">Stock API</a></h2>
+      <ul>
+        <li><a href="/mypage/" class="{% if active_page == index %}active{% endif %}">Dashboard</a></li>
+        <li><a href="/mypage/auth/" class="{% if active_page == auth %}active{% endif %}">Auth</a></li>
+        <li><a href="/mypage/account/" class="{% if active_page == account %}active{% endif %}">Account</a></li>
+        <li><a href="/mypage/market-data/" class="{% if active_page == market_data %}active{% endif %}">Market Data</a></li>
+        <li><a href="/mypage/order/" class="{% if active_page == order %}active{% endif %}">Order</a></li>
+        <li class="section-title">Data</li>
+        <li><a href="/mypage/ohlcv/" class="{% if active_page == ohlcv %}active{% endif %}">OHLCV Cache</a></li>
+        <li class="section-title">Strategy</li>
+        <li><a href="/mypage/strategy/" class="{% if active_page == strategy %}active{% endif %}">Scan (Buy)</a></li>
+        <li><a href="/mypage/strategy/dashboard" class="{% if active_page == strategy_dashboard %}active{% endif %}">My Strategies</a></li>
+        <li><a href="/mypage/sell-strategy/" class="{% if active_page == sell_strategy %}active{% endif %}">Sell Strategy</a></li>
+        <li><a href="/mypage/backtest/" class="{% if active_page == backtest %}active{% endif %}">Backtest</a></li>
+        <li><a href="/mypage/websocket/" class="{% if active_page == websocket %}active{% endif %}">WebSocket</a></li>
+        <li class="section-title">Admin</li>
+        <li><a href="/mypage/access-logs/" class="{% if active_page == access_logs %}active{% endif %}">Access Logs</a></li>
+      </ul>
+    </nav>
+    <main class="content">
+      <div class="content-inner">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+  <script>
+    const SIDEBAR_STORAGE_KEY = "sidebarHidden";
+    const parseJson = (text) => {
+      try { return JSON.parse(text); } catch (e) { return text; }
+    };
+
+    async function request(method, url, body, outputId) {
+      const opts = { method, headers: { "Content-Type": "application/json" } };
+      if (body && (method === "POST" || method === "PATCH" || method === "DELETE")) {
+        opts.body = JSON.stringify(body);
+      }
+      try {
+        const res = await fetch(url, opts);
+        const raw = await res.text();
+        const data = parseJson(raw);
+        if (outputId) {
+          document.getElementById(outputId).textContent = JSON.stringify(data, null, 2);
+        }
+        return data;
+      } catch (e) {
+        if (outputId) {
+          document.getElementById(outputId).textContent = Error:  + e.message;
+        }
+        throw e;
+      }
+    }
+
+    const getJson = (url, outputId) => request("GET", url, null, outputId);
+    const postJson = (url, body, outputId) => request("POST", url, body, outputId);
+    const patchJson = (url, body, outputId) => request("PATCH", url, body, outputId);
+    const deleteJson = (url, outputId) => request("DELETE", url, null, outputId);
+
+    const sidebarToggle = document.querySelector(".sidebar-toggle");
+    const sidebarBackdrop = document.querySelector("[data-sidebar-backdrop]");
+    const isMobile = () => window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+
+    const setSidebarHidden = (hidden) => {
+      document.body.classList.toggle("sidebar-hidden", hidden);
+      if (sidebarToggle) {
+        sidebarToggle.setAttribute("aria-expanded", (!hidden).toString());
+        sidebarToggle.textContent = hidden ? "Show menu" : "Hide menu";
+      }
+    };
+
+    const loadSidebarPreference = () => {
+      try {
+        const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+        if (stored === null) {
+          // base_minimal: default hidden (both desktop+mobile)
+          setSidebarHidden(true);
+          return;
+        }
+        setSidebarHidden(stored === "true");
+      } catch (e) {
+        setSidebarHidden(true);
+      }
+    };
+
+    const saveSidebarPreference = (hidden) => {
+      try {
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, hidden ? "true" : "false");
+      } catch (e) {
+        return;
+      }
+    };
+
+    if (sidebarToggle) {
+      sidebarToggle.addEventListener("click", () => {
+        const isHidden = document.body.classList.contains("sidebar-hidden");
+        const nextHidden = !isHidden;
+        setSidebarHidden(nextHidden);
+        saveSidebarPreference(nextHidden);
+      });
+    }
+
+
+
+    if (sidebarBackdrop) {
+      sidebarBackdrop.addEventListener("click", () => {
+        setSidebarHidden(true);
+        saveSidebarPreference(true);
+      });
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        const isHidden = document.body.classList.contains("sidebar-hidden");
+        if (!isHidden) {
+          setSidebarHidden(true);
+          saveSidebarPreference(true);
+        }
+      }
+    });
+
+    loadSidebarPreference();
+
+    {% block extra_scripts %}{% endblock %}
+  </script>
+</body>
+</html>

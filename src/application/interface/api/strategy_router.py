@@ -11,11 +11,15 @@ NOTE: 라우터 순서 중요!
 - 서비스 메서드는 @transaction 데코레이터가 session을 자동 주입
 """
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Query, status
+
+from src.application.common.exceptions import ServiceUnavailableError
+
+from src.adapters.external.telegram import get_telegram_notifier
 
 from src.application.common.dependencies import (
+    AdminAccessDep,
     BuyStrategyServiceDep,
-    DatabaseSession,
     MarketDataServiceDep,
     StrategyServiceDep,
     StrategySymbolStateRepositoryDep,
@@ -30,10 +34,16 @@ from src.application.domain.strategy.dto import (
     AnalysisHistoryUpdateDTO,
     GoldenCrossConfigDTO,
     GoldenCrossScanListDTO,
+    GoldenCrossRecommendationDTO,
+    MA5BreakoutScanListDTO,
+    PortfolioCashPlanDTO,
+    PresetActivateRequestDTO,
     SellSignalAnalysisDTO,
     SignalListDTO,
     SignalStatisticsDTO,
     StockUniverseListDTO,
+    StrategyPresetListDTO,
+    UniverseRefreshResultDTO,
     StrategyCreateRequestDTO,
     StrategyDetailResponseDTO,
     StrategyExecuteRequestDTO,
@@ -44,23 +54,27 @@ from src.application.domain.strategy.dto import (
 )
 
 router = APIRouter()
+admin_router = APIRouter()
 
 
 # ==================== 정적 경로 (동적 경로보다 먼저 정의) ====================
 
 
-@router.post(
+@admin_router.post(
     "",
     response_model=ResponseDTO[StrategyDetailResponseDTO],
     status_code=status.HTTP_201_CREATED,
     summary="전략 생성",
     description="새로운 자동매매 전략 생성",
+    include_in_schema=False,  # 완전 비노출(문서/Swagger 숨김)
 )
 async def create_strategy(
     request: StrategyCreateRequestDTO,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 생성 - @transaction이 세션을 관리"""
+    _ = admin_access
     strategy_data = await service.create_strategy(request)
     return ResponseDTO.success_response(strategy_data, "Strategy created successfully")
 
@@ -96,15 +110,16 @@ async def get_universe(
     service: StrategyServiceDep,
     market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ)"),
     eligible_only: bool = Query(default=True, description="스크리닝 통과 종목만"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="(eligible_only=true일 때) 최대 조회 개수"),
 ) -> ResponseDTO[StockUniverseListDTO]:
     """종목 유니버스 조회 - @transaction이 세션을 관리"""
-    universe = await service.get_stock_universe(market, eligible_only)
+    universe = await service.get_stock_universe(market, eligible_only, limit=limit)
     return ResponseDTO.success_response(universe, "Universe retrieved successfully")
 
 
 @router.post(
     "/universe/refresh",
-    response_model=ResponseDTO[dict],
+    response_model=ResponseDTO[UniverseRefreshResultDTO],
     status_code=status.HTTP_200_OK,
     summary="유니버스 갱신",
     description="종목 유니버스 데이터 갱신",
@@ -112,16 +127,17 @@ async def get_universe(
 async def refresh_universe(
     service: StrategyServiceDep,
     market_data_service: MarketDataServiceDep,
-) -> ResponseDTO[dict]:
+) -> ResponseDTO[UniverseRefreshResultDTO]:
     """유니버스 갱신 - @transaction이 세션을 관리"""
     if not market_data_service.has_valid_credentials():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="KIS API credentials not configured",
-        )
+        raise ServiceUnavailableError("KIS API credentials not configured")
 
     result = await service.refresh_universe()
-    return ResponseDTO.success_response(result, "Universe refresh completed")
+    dto = UniverseRefreshResultDTO(**result)
+    # ResponseDTO.success는 작업 결과(dto.success)와 일치시키는 것이 운영/클라이언트 측에서 혼동이 적음
+    message = "Universe refresh completed" if dto.success else (dto.message or "Universe refresh failed")
+    error = None if dto.success else {"timed_out": dto.timed_out, "message": dto.message}
+    return ResponseDTO(success=dto.success, message=message, data=dto, error=error)
 
 
 @router.get(
@@ -137,6 +153,10 @@ async def scan_golden_cross(
     stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
     gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
     include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
+    max_concurrent: int | None = Query(
+        default=None, ge=1, le=50, description="동시 처리 수 (미지정 시 설정값 사용)"
+    ),
 ) -> ResponseDTO[GoldenCrossScanListDTO]:
     """
     골든크로스 종목 스캔 - @transaction이 세션을 관리
@@ -158,8 +178,84 @@ async def scan_golden_cross(
         stoch_threshold=stoch_threshold,
         gc_only=gc_only,
         include_etf=include_etf,
+        limit=limit,
+        max_concurrent=max_concurrent,
     )
     return ResponseDTO.success_response(result, "Golden cross scan completed")
+
+
+@router.get(
+    "/universe/golden-cross-recommendations",
+    response_model=ResponseDTO[GoldenCrossRecommendationDTO],
+    status_code=status.HTTP_200_OK,
+    summary="골든크로스 추천 요약 (Top10 + Top 업종)",
+    description="골든크로스 스캔 결과를 기반으로 Top 종목 + Top 업종을 요약해서 반환",
+)
+async def golden_cross_recommendations(
+    service: StrategyServiceDep,
+    market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
+    stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
+    gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
+    include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
+    max_concurrent: int | None = Query(default=None, ge=1, le=50, description="동시 처리 수"),
+    top_n: int = Query(default=5, ge=1, le=50, description="Top 종목 개수"),
+    top_industries_n: int = Query(default=3, ge=1, le=20, description="Top 업종 개수"),
+) -> ResponseDTO[GoldenCrossRecommendationDTO]:
+    result = await service.get_golden_cross_recommendations(
+        market=market,
+        stoch_threshold=stoch_threshold,
+        gc_only=gc_only,
+        include_etf=include_etf,
+        limit=limit,
+        max_concurrent=max_concurrent,
+        top_n=top_n,
+        top_industries_n=top_industries_n,
+    )
+    return ResponseDTO.success_response(result, "Golden cross recommendations generated")
+
+
+@router.post(
+    "/universe/golden-cross-recommendations/notify",
+    response_model=ResponseDTO[GoldenCrossRecommendationDTO],
+    status_code=status.HTTP_200_OK,
+    summary="골든크로스 추천 요약을 Telegram DM으로 전송",
+    description="골든크로스 추천 요약(Top10 + Top 업종)을 생성하고, 설정된 Telegram Chat ID로 DM 전송",
+)
+async def notify_golden_cross_recommendations(
+    service: StrategyServiceDep,
+    market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
+    stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
+    gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
+    include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
+    max_concurrent: int | None = Query(default=None, ge=1, le=50, description="동시 처리 수"),
+    top_n: int = Query(default=5, ge=1, le=50, description="Top 종목 개수"),
+    top_industries_n: int = Query(default=3, ge=1, le=20, description="Top 업종 개수"),
+) -> ResponseDTO[GoldenCrossRecommendationDTO]:
+    result = await service.get_golden_cross_recommendations(
+        market=market,
+        stoch_threshold=stoch_threshold,
+        gc_only=gc_only,
+        include_etf=include_etf,
+        limit=limit,
+        max_concurrent=max_concurrent,
+        top_n=top_n,
+        top_industries_n=top_industries_n,
+    )
+
+    notifier = get_telegram_notifier()
+    sent = await notifier.send_golden_cross_recommendations_summary(
+        result.model_dump(mode="json")
+    )
+
+    msg = "Golden cross recommendations generated"
+    if sent:
+        msg += " and sent to Telegram"
+    else:
+        msg += " (telegram disabled or not configured)"
+
+    return ResponseDTO.success_response(result, msg)
 
 
 @router.post(
@@ -194,6 +290,129 @@ async def scan_golden_cross_symbols(
         gc_only=gc_only,
     )
     return ResponseDTO.success_response(result, "Golden cross scan completed")
+
+
+@router.get(
+    "/universe/ma5-breakout-scan",
+    response_model=ResponseDTO[MA5BreakoutScanListDTO],
+    status_code=status.HTTP_200_OK,
+    summary="MA5 돌파 종목 스캔",
+    description="MA5가 MA300의 0.7% 상단을 돌파한 종목 필터링",
+)
+async def scan_ma5_breakout(
+    buy_service: BuyStrategyServiceDep,
+    market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
+    short_period: int = Query(default=5, ge=3, le=20, description="단기 MA 기간"),
+    long_period: int = Query(default=300, ge=100, le=500, description="장기 MA 기간"),
+    envelope_pct: float = Query(default=0.7, ge=0.1, le=3.0, description="엔벨로프 %"),
+    use_volume_filter: bool = Query(default=True, description="거래량 필터 사용"),
+    include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
+    max_concurrent: int | None = Query(
+        default=None, ge=1, le=50, description="동시 처리 수 (미지정 시 설정값 사용)"
+    ),
+) -> ResponseDTO[MA5BreakoutScanListDTO]:
+    """
+    MA5 돌파 종목 스캔 - @transaction이 세션을 관리
+
+    매수 조건:
+    - MA5 > MA300 × (1 + envelope_pct/100)
+    - 현재가 > MA300 상단
+    - 거래량 ≥ 20일 평균 (선택)
+
+    상태:
+    - BREAKOUT: 오늘 돌파 (이전에 상단 아래 → 현재 상단 위)
+    - ABOVE: 이미 상단 위에서 거래 중
+    - BELOW: 상단 아래
+    """
+    result = await buy_service.scan_ma5_breakout_candidates(
+        market=market,
+        short_period=short_period,
+        long_period=long_period,
+        envelope_pct=envelope_pct,
+        use_volume_filter=use_volume_filter,
+        include_etf=include_etf,
+        limit=limit,
+        max_concurrent=max_concurrent,
+    )
+    return ResponseDTO.success_response(result, "MA5 breakout scan completed")
+
+
+@router.post(
+    "/universe/ma5-breakout-scan-symbols",
+    response_model=ResponseDTO[MA5BreakoutScanListDTO],
+    status_code=status.HTTP_200_OK,
+    summary="특정 종목 MA5 돌파 스캔",
+    description="지정한 종목 목록에 대해 MA5 돌파 스캔",
+)
+async def scan_ma5_breakout_symbols(
+    symbols: list[dict],
+    buy_service: BuyStrategyServiceDep,
+    short_period: int = Query(default=5, ge=3, le=20, description="단기 MA 기간"),
+    long_period: int = Query(default=300, ge=100, le=500, description="장기 MA 기간"),
+    envelope_pct: float = Query(default=0.7, ge=0.1, le=3.0, description="엔벨로프 %"),
+    use_volume_filter: bool = Query(default=True, description="거래량 필터 사용"),
+) -> ResponseDTO[MA5BreakoutScanListDTO]:
+    """
+    특정 종목 목록에 대해 MA5 돌파 스캔 - @transaction이 세션을 관리
+
+    Request Body:
+    ```json
+    [
+        {"symbol": "005930", "name": "삼성전자", "market": "KOSPI"},
+        {"symbol": "000660", "name": "SK하이닉스", "market": "KOSPI"}
+    ]
+    ```
+    """
+    result = await buy_service.scan_ma5_breakout_symbols(
+        symbols=symbols,
+        short_period=short_period,
+        long_period=long_period,
+        envelope_pct=envelope_pct,
+        use_volume_filter=use_volume_filter,
+    )
+    return ResponseDTO.success_response(result, "MA5 breakout scan completed")
+
+
+@router.post(
+    "/universe/financial-filter",
+    response_model=ResponseDTO[GoldenCrossScanListDTO],
+    status_code=status.HTTP_200_OK,
+    summary="재무 필터 적용 (2차 필터)",
+    description="골든크로스 스캔 결과에 DART 재무제표 기반 필터 적용",
+)
+async def apply_financial_filter(
+    scan_result: GoldenCrossScanListDTO,
+    buy_service: BuyStrategyServiceDep,
+    target_states: list[str] | None = Query(
+        default=None,
+        description="필터 적용 대상 상태 (기본: OPTIMAL_BUY, BUY_INTEREST, READY_TO_BUY)"
+    ),
+) -> ResponseDTO[GoldenCrossScanListDTO]:
+    """
+    재무 필터 적용 (2차 필터) - DART API 기반
+
+    골든크로스 스캔 결과에 대해 재무제표 데이터를 조회하여 필터링합니다.
+
+    필터 조건:
+    - 매출 YoY ≥ 0% (구조적 성장/유지)
+    - 영업이익 2년 연속 흑자 (턴어라운드 제외)
+    - 적자→흑자 전환은 TURNAROUND로 별도 분류
+
+    결과 상태:
+    - PASS: 재무 필터 통과
+    - FAIL: 재무 필터 미통과
+    - TURNAROUND: 적자→흑자 전환 (별도 버킷)
+    - PENDING: 필터 대상 아님
+    - ERROR: 데이터 조회 실패
+
+    주의: DART API 일일 호출 한도(10,000건)가 있으므로 과도한 요청 주의
+    """
+    result = await buy_service.apply_financial_filter(
+        scan_result=scan_result,
+        target_states=target_states,
+    )
+    return ResponseDTO.success_response(result, "Financial filter applied")
 
 
 @router.get(
@@ -362,6 +581,25 @@ async def refresh_analysis_history(
     return ResponseDTO.success_response(result, "Analysis history refresh completed")
 
 
+@router.get(
+    "/portfolio-cash-plan",
+    response_model=ResponseDTO[PortfolioCashPlanDTO],
+    status_code=status.HTTP_200_OK,
+    summary="포트폴리오 사전 현금화 계획",
+    description="활성 매도 분석 이력을 바탕으로 고점 경고 시 선제 현금화 계획을 생성",
+)
+async def get_portfolio_cash_plan(
+    service: StrategyServiceDep,
+    target_cash_ratio: float = Query(default=0.30, ge=0.0, le=1.0, description="목표 현금 비중"),
+    current_cash_ratio: float | None = Query(default=None, ge=0.0, le=1.0, description="현재 현금 비중"),
+) -> ResponseDTO[PortfolioCashPlanDTO]:
+    result = await service.get_portfolio_cash_plan(
+        target_cash_ratio=target_cash_ratio,
+        current_cash_ratio=current_cash_ratio,
+    )
+    return ResponseDTO.success_response(result, "Portfolio cash plan generated")
+
+
 @router.patch(
     "/analysis-history/{history_id}/active",
     response_model=ResponseDTO[AnalysisHistoryDTO],
@@ -414,6 +652,42 @@ async def delete_analysis_history(
     await service.delete_analysis_history(history_id)
 
 
+# ==================== Preset Endpoints (정적 경로) ====================
+
+
+@router.get(
+    "/presets",
+    response_model=ResponseDTO[StrategyPresetListDTO],
+    status_code=status.HTTP_200_OK,
+    summary="전략 프리셋 목록 조회",
+    description="사전 정의된 전략 프리셋 목록 반환",
+)
+async def get_presets(
+    service: StrategyServiceDep,
+) -> ResponseDTO[StrategyPresetListDTO]:
+    """프리셋 목록 조회 (DB 불필요)"""
+    preset_list = service.get_preset_list()
+    return ResponseDTO.success_response(preset_list, "Presets retrieved successfully")
+
+
+@router.post(
+    "/presets/{preset_id}/activate",
+    response_model=ResponseDTO[StrategyDetailResponseDTO],
+    status_code=status.HTTP_201_CREATED,
+    summary="프리셋으로 전략 생성",
+    description="프리셋을 선택하여 전략을 생성. 심볼과 이름만 지정하면 됩니다.",
+)
+async def activate_preset(
+    preset_id: str,
+    service: StrategyServiceDep,
+    request: PresetActivateRequestDTO | None = None,
+) -> ResponseDTO[StrategyDetailResponseDTO]:
+    """프리셋 활성화 - 기존 create_strategy 재사용"""
+    req = request or PresetActivateRequestDTO()
+    strategy_data = await service.activate_preset(preset_id, req)
+    return ResponseDTO.success_response(strategy_data, "Strategy created from preset successfully")
+
+
 # ==================== Scheduler Status (정적 경로) ====================
 
 
@@ -452,34 +726,40 @@ async def get_strategy(
     return ResponseDTO.success_response(strategy_data, "Strategy retrieved successfully")
 
 
-@router.patch(
+@admin_router.patch(
     "/{strategy_id}",
     response_model=ResponseDTO[StrategyDetailResponseDTO],
     status_code=status.HTTP_200_OK,
     summary="전략 수정",
     description="전략 정보 수정",
+    include_in_schema=False,  # 완전 비노출(문서/Swagger 숨김)
 )
 async def update_strategy(
     strategy_id: int,
     request: StrategyUpdateRequestDTO,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 수정 - @transaction이 세션을 관리"""
+    _ = admin_access
     strategy_data = await service.update_strategy(strategy_id, request)
     return ResponseDTO.success_response(strategy_data, "Strategy updated successfully")
 
 
-@router.delete(
+@admin_router.delete(
     "/{strategy_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="전략 삭제",
     description="전략 삭제 (Soft Delete)",
+    include_in_schema=False,  # 완전 비노출(문서/Swagger 숨김)
 )
 async def delete_strategy(
     strategy_id: int,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep,
 ) -> None:
     """전략 삭제 - @transaction이 세션을 관리"""
+    _ = admin_access
     await service.delete_strategy(strategy_id)
 
 

@@ -1,0 +1,261 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Access Logs - Stock API Admin{% endblock %}
+
+{% block extra_styles %}
+/* Table Styles */
+.log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.log-table th, .log-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+.log-table th { background: #f8fafc; color: #475569; font-weight: 600; position: sticky; top: 0; }
+.log-table tr:hover { background: #f8fafc; }
+
+/* Stats Cards */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.stat-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 16px; border-radius: 8px; }
+.stat-card.visitors { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
+.stat-card.requests { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+.stat-card h3 { font-size: 12px; opacity: 0.9; margin-bottom: 4px; }
+.stat-card .value { font-size: 28px; font-weight: 700; }
+
+/* Table Container */
+.table-container { max-height: 400px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 6px; }
+
+/* Status Badge */
+.status-badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.status-2xx { background: #dcfce7; color: #166534; }
+.status-3xx { background: #fef9c3; color: #854d0e; }
+.status-4xx { background: #fee2e2; color: #991b1b; }
+.status-5xx { background: #fecaca; color: #7f1d1d; }
+
+/* Chart */
+.chart-container { height: 200px; background: #f8fafc; border-radius: 6px; padding: 16px; }
+
+/* Tabs */
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tab { padding: 8px 16px; background: #e2e8f0; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.tab.active { background: #3b82f6; color: white; }
+{% endblock %}
+
+{% block content %}
+<h1>접근 로그</h1>
+<p>외부 페이지 접근 기록을 조회합니다.</p>
+
+<!-- Stats Section -->
+<section>
+  <h2>통계 요약</h2>
+  <div class="row">
+    <label>기간</label>
+    <select id="stats_hours">
+      <option value="1">최근 1시간</option>
+      <option value="6">최근 6시간</option>
+      <option value="24" selected>최근 24시간</option>
+      <option value="48">최근 48시간</option>
+      <option value="168">최근 7일</option>
+    </select>
+    <button onclick="loadStats()">조회</button>
+  </div>
+
+  <div class="stats-grid" id="stats_cards">
+    <div class="stat-card visitors">
+      <h3>고유 방문자</h3>
+      <div class="value" id="stat_visitors">-</div>
+    </div>
+    <div class="stat-card requests">
+      <h3>총 요청</h3>
+      <div class="value" id="stat_requests">-</div>
+    </div>
+  </div>
+</section>
+
+<!-- Logs Section -->
+<section>
+  <h2>접근 로그</h2>
+  <div class="row">
+    <label>경로 필터</label>
+    <input id="path_filter" placeholder="/page/..." />
+    <label>IP 필터</label>
+    <input id="ip_filter" placeholder="1.2.3.4" />
+    <label>개수</label>
+    <select id="log_limit">
+      <option value="50">50개</option>
+      <option value="100" selected>100개</option>
+      <option value="200">200개</option>
+      <option value="500">500개</option>
+    </select>
+    <button onclick="loadLogs()">조회</button>
+  </div>
+
+  <div class="table-container">
+    <table class="log-table" id="log_table">
+      <thead>
+        <tr>
+          <th>시간</th>
+          <th>Method</th>
+          <th>경로</th>
+          <th>IP</th>
+          <th>상태</th>
+          <th>응답시간</th>
+          <th>Referer</th>
+        </tr>
+      </thead>
+      <tbody id="log_tbody">
+        <tr><td colspan="7" style="text-align:center;color:#64748b;">조회 버튼을 클릭하세요</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Path Stats Section -->
+<section>
+  <h2>경로별 통계</h2>
+  <div class="table-container">
+    <table class="log-table">
+      <thead>
+        <tr>
+          <th>경로</th>
+          <th>접근 수</th>
+        </tr>
+      </thead>
+      <tbody id="path_stats_tbody">
+        <tr><td colspan="2" style="text-align:center;color:#64748b;">통계 조회 후 표시됩니다</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- IP Stats Section -->
+<section>
+  <h2>IP별 통계</h2>
+  <div class="table-container">
+    <table class="log-table">
+      <thead>
+        <tr>
+          <th>IP 주소</th>
+          <th>접근 수</th>
+        </tr>
+      </thead>
+      <tbody id="ip_stats_tbody">
+        <tr><td colspan="2" style="text-align:center;color:#64748b;">통계 조회 후 표시됩니다</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Cleanup Section -->
+<section>
+  <h2>로그 정리</h2>
+  <div class="row">
+    <label>보관 기간</label>
+    <select id="cleanup_days">
+      <option value="7">7일</option>
+      <option value="14">14일</option>
+      <option value="30" selected>30일</option>
+      <option value="60">60일</option>
+      <option value="90">90일</option>
+    </select>
+    <button class="secondary" onclick="cleanupLogs()">오래된 로그 삭제</button>
+  </div>
+  <pre id="cleanup_output" style="display:none;"></pre>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+// 통계 로드
+async function loadStats() {
+  const hours = document.getElementById('stats_hours').value;
+  const data = await getJson(`/api/v1/access-logs/stats?hours=${hours}`, null);
+
+  if (data.success) {
+    document.getElementById('stat_visitors').textContent = data.data.unique_visitors.toLocaleString();
+    document.getElementById('stat_requests').textContent = data.data.total_requests.toLocaleString();
+
+    // 경로별 통계
+    const pathTbody = document.getElementById('path_stats_tbody');
+    if (data.data.path_stats && data.data.path_stats.length > 0) {
+      pathTbody.innerHTML = data.data.path_stats.map(s =>
+        `<tr><td>${escapeHtml(s.path)}</td><td>${s.count.toLocaleString()}</td></tr>`
+      ).join('');
+    } else {
+      pathTbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:#64748b;">데이터 없음</td></tr>';
+    }
+
+    // IP별 통계
+    const ipTbody = document.getElementById('ip_stats_tbody');
+    if (data.data.ip_stats && data.data.ip_stats.length > 0) {
+      ipTbody.innerHTML = data.data.ip_stats.map(s =>
+        `<tr><td>${escapeHtml(s.ip)}</td><td>${s.count.toLocaleString()}</td></tr>`
+      ).join('');
+    } else {
+      ipTbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:#64748b;">데이터 없음</td></tr>';
+    }
+  }
+}
+
+// 로그 로드
+async function loadLogs() {
+  const limit = document.getElementById('log_limit').value;
+  const pathFilter = document.getElementById('path_filter').value;
+  const ipFilter = document.getElementById('ip_filter').value;
+
+  let url = `/api/v1/access-logs?limit=${limit}`;
+  if (pathFilter) url += `&path_filter=${encodeURIComponent(pathFilter)}`;
+  if (ipFilter) url += `&ip_filter=${encodeURIComponent(ipFilter)}`;
+
+  const data = await getJson(url, null);
+
+  const tbody = document.getElementById('log_tbody');
+  if (data.success && data.data.items.length > 0) {
+    tbody.innerHTML = data.data.items.map(log => {
+      const statusClass = getStatusClass(log.status_code);
+      const time = log.accessed_at ? new Date(log.accessed_at).toLocaleString('ko-KR') : '-';
+      const referer = log.referer ? truncate(log.referer, 30) : '-';
+
+      return `<tr>
+        <td>${escapeHtml(time)}</td>
+        <td>${escapeHtml(log.method)}</td>
+        <td title="${escapeHtml(log.path + (log.query_string ? '?' + log.query_string : ''))}">${escapeHtml(truncate(log.path, 40))}</td>
+        <td>${escapeHtml(log.ip_address)}</td>
+        <td><span class="status-badge ${statusClass}">${log.status_code}</span></td>
+        <td>${log.response_time_ms}ms</td>
+        <td title="${escapeHtml(log.referer || '')}">${escapeHtml(referer)}</td>
+      </tr>`;
+    }).join('');
+  } else {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#64748b;">데이터 없음</td></tr>';
+  }
+}
+
+// 로그 정리
+async function cleanupLogs() {
+  const days = document.getElementById('cleanup_days').value;
+  if (!confirm(`${days}일 이전의 로그를 삭제하시겠습니까?`)) return;
+
+  const output = document.getElementById('cleanup_output');
+  output.style.display = 'block';
+  await deleteJson(`/api/v1/access-logs/cleanup?days=${days}`, 'cleanup_output');
+}
+
+// 유틸리티 함수
+function getStatusClass(code) {
+  if (code >= 200 && code < 300) return 'status-2xx';
+  if (code >= 300 && code < 400) return 'status-3xx';
+  if (code >= 400 && code < 500) return 'status-4xx';
+  return 'status-5xx';
+}
+
+function truncate(str, len) {
+  if (!str) return '-';
+  return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// 페이지 로드 시 자동 조회
+document.addEventListener('DOMContentLoaded', () => {
+  loadStats();
+  loadLogs();
+});
+{% endblock %}

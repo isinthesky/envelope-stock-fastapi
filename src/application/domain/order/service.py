@@ -24,6 +24,7 @@ from src.application.domain.order.dto import (
     OrderListResponseDTO,
     OrderStatusResponseDTO,
 )
+from src.application.domain.order.order_id import build_order_id, split_order_id
 from src.settings.config import settings
 
 
@@ -85,7 +86,9 @@ class OrderService:
                 "PDNO": request.symbol,
                 "ORD_DVSN": ord_dvsn,
                 "ORD_QTY": str(request.quantity),
-                "ORD_UNPR": str(int(request.price)),
+                "ORD_UNPR": "0"
+                if request.price_type == PriceType.MARKET.value
+                else str(int(request.price)),
             }
 
             # TR ID 매핑 (실전/모의, 매수/매도)
@@ -105,7 +108,10 @@ class OrderService:
             # 주문 저장
             order_repo = OrderRepository(session)
             order = await order_repo.create(
-                order_id=output.get("KRX_FWDG_ORD_ORGNO", "") + output.get("ODNO", ""),
+                order_id=build_order_id(
+                    output.get("KRX_FWDG_ORD_ORGNO", ""),
+                    output.get("ODNO", ""),
+                ),
                 account_no=account_no,
                 symbol=request.symbol,
                 order_type=request.order_type,
@@ -163,9 +169,9 @@ class OrderService:
             # KIS API 주문 취소 요청
             path = "/uapi/domestic-stock/v1/trading/order-cancel"
 
-            # 원주문번호 추출 (order_id 형식: "{ORG_NO}{ODNO}")
-            org_no = order.order_id[:5] if len(order.order_id) >= 10 else ""
-            odno = request.order_no or order.order_id[5:] if len(order.order_id) >= 10 else ""
+            # 원주문번호 추출
+            org_no, parsed_odno = split_order_id(order.order_id)
+            odno = request.order_no or parsed_odno
 
             # 주문 구분 코드 매핑
             ord_dvsn_map = {
@@ -194,8 +200,9 @@ class OrderService:
             response = await self._post_with_retry(path, payload, headers)
 
             # 주문 상태 업데이트
-            await order_repo.update(
+            await order_repo.update_by_id(
                 order.id,
+                session=session,
                 status=OrderStatus.CANCELED.value,
                 status_message=response.get("msg1", "Canceled"),
             )
@@ -263,8 +270,7 @@ class OrderService:
             path = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
 
             # 원주문번호 추출
-            org_no = order.order_id[:5] if len(order.order_id) >= 10 else ""
-            odno = order.order_id[5:] if len(order.order_id) >= 10 else ""
+            org_no, odno = split_order_id(order.order_id)
 
             # 주문 구분 코드 매핑
             ord_dvsn_map = {
@@ -283,7 +289,9 @@ class OrderService:
                 "ORD_DVSN": ord_dvsn,
                 "RVSE_CNCL_DVSN_CD": "01",  # 01: 정정
                 "ORD_QTY": str(new_quantity or order.order_quantity),
-                "ORD_UNPR": str(int(new_price or order.order_price)),
+                "ORD_UNPR": "0"
+                if order.price_type == PriceType.MARKET.value
+                else str(int(new_price or order.order_price)),
             }
 
             # TR ID 매핑
@@ -299,7 +307,7 @@ class OrderService:
             if new_quantity:
                 update_data["order_quantity"] = new_quantity
 
-            await order_repo.update(order.id, **update_data)
+            await order_repo.update_by_id(order.id, session=session, **update_data)
 
             # 업데이트된 주문 정보 조회
             updated_order = await order_repo.get_by_order_id(order_id)
@@ -348,6 +356,7 @@ class OrderService:
             # KIS API 당일 체결 조회
             path = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
 
+            _, order_no = split_order_id(order.order_id)
             payload = {
                 "CANO": order.account_no,
                 "ACNT_PRDT_CD": settings.kis_product_code,
@@ -358,7 +367,7 @@ class OrderService:
                 "PDNO": order.symbol,
                 "CCLD_DVSN": "00",  # 00: 전체
                 "ORD_GNO_BRNO": "",
-                "ODNO": order.order_id[5:] if len(order.order_id) >= 10 else order.order_id,
+                "ODNO": order_no or order.order_id,
                 "INQR_DVSN_3": "00",
                 "INQR_DVSN_1": "",
                 "CTX_AREA_FK100": "",
@@ -375,7 +384,7 @@ class OrderService:
             # 해당 주문 찾기
             order_data = None
             for item in output:
-                if item.get("odno") == order.order_id[5:]:
+                if item.get("odno") == order_no:
                     order_data = item
                     break
 
@@ -383,7 +392,7 @@ class OrderService:
                 # 체결 정보가 없으면 현재 상태 유지
                 return OrderStatusResponseDTO(
                     order_id=order.order_id,
-                    order_no=order.order_id[5:] if len(order.order_id) >= 10 else "",
+                    order_no=order_no,
                     symbol=order.symbol,
                     status=order.status,
                     order_quantity=order.order_quantity,
@@ -416,7 +425,7 @@ class OrderService:
             if new_status == OrderStatus.FILLED.value and not order.filled_time:
                 update_data["filled_time"] = datetime.now()
 
-            await order_repo.update(order.id, **update_data)
+            await order_repo.update_by_id(order.id, session=session, **update_data)
 
             # 업데이트된 주문 정보 조회
             updated_order = await order_repo.get_by_order_id(order_id)
@@ -425,7 +434,7 @@ class OrderService:
 
             return OrderStatusResponseDTO(
                 order_id=updated_order.order_id,
-                order_no=order.order_id[5:] if len(order.order_id) >= 10 else "",
+                order_no=order_no,
                 symbol=updated_order.symbol,
                 status=updated_order.status,
                 order_quantity=updated_order.order_quantity,
@@ -460,9 +469,10 @@ class OrderService:
         if not order:
             raise OrderError(f"Order not found: {order_id}")
 
+        _, order_no = split_order_id(order.order_id)
         return OrderStatusResponseDTO(
             order_id=order.order_id,
-            order_no=order.order_id.split("-")[-1] if "-" in order.order_id else "",
+            order_no=order_no,
             symbol=order.symbol,
             status=order.status,
             order_quantity=order.order_quantity,
@@ -573,7 +583,7 @@ class OrderService:
         order_list = [
             OrderStatusResponseDTO(
                 order_id=o.order_id,
-                order_no=o.order_id.split("-")[-1] if "-" in o.order_id else "",
+                order_no=split_order_id(o.order_id)[1],
                 symbol=o.symbol,
                 status=o.status,
                 order_quantity=o.order_quantity,

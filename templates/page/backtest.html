@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "layouts/base.html" %}
 
 {% block title %}Backtest - Stock API Admin{% endblock %}
 
@@ -19,18 +19,18 @@
     <button onclick="runBacktest()">단일 종목 실행</button>
     <button onclick="runMultiBacktest()" class="secondary">다중 종목 실행</button>
   </div>
+  <div class="row" style="margin-top: 8px; align-items: center;">
+    <label style="font-size:12px;">스캔 결과 사용:</label>
+    
+    <label style="font-size:12px; margin-left: 8px;"><input id="filter_top_only" type="checkbox" checked /> GC: OPTIMAL_BUY만 / MA5: BREAKOUT만</label>
+    <button onclick="runMultiFromSavedScan('gc')" class="secondary">GC 스캔결과로 다중 백테스트</button>
+    <button onclick="runMultiFromSavedScan('ma5')" class="secondary">MA5 스캔결과로 다중 백테스트</button>
+  </div>
   <pre id="backtest_output">결과 출력</pre>
 </section>
 {% endblock %}
 
-{% block extra_scripts %}
-const runBacktest = () => {
-  const payload = parseJson(document.getElementById("backtest_json").value);
-  postJson("/api/v1/backtest/run", payload, "backtest_output");
-};
-
-const runMultiBacktest = () => {
-  const payload = parseJson(document.getElementById("backtest_json").value);
-  postJson("/api/v1/backtest/run-multi", payload, "backtest_output");
-};
+{% block extra_script_tags %}
+<script src="/static/js/pages/backtest.js"></script>
 {% endblock %}
+

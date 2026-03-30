@@ -28,12 +28,11 @@ router = APIRouter()
 )
 async def create_order(
     request: OrderCreateRequestDTO,
-    session: DatabaseSession,
     kis_client: KISClientDep,
 ) -> ResponseDTO[OrderCreateResponseDTO]:
     """주문 생성"""
-    service = OrderService(kis_client, session)
-    order_data = await service.create_order(session, request)
+    service = OrderService(kis_client)
+    order_data = await service.create_order(request)
     return ResponseDTO.success_response(order_data, "Order created successfully")
 
 
@@ -84,14 +83,13 @@ async def get_order_list(
 async def cancel_order(
     order_id: str,
     request: OrderCancelRequestDTO,
-    session: DatabaseSession,
     kis_client: KISClientDep,
 ) -> ResponseDTO[OrderStatusResponseDTO]:
     """주문 취소"""
-    service = OrderService(kis_client, session)
+    service = OrderService(kis_client)
     # request의 order_id를 경로 파라미터로 설정
     request.order_id = order_id
-    order_status = await service.cancel_order(session, request)
+    order_status = await service.cancel_order(request)
     return ResponseDTO.success_response(order_status, "Order canceled successfully")
 
 
@@ -106,15 +104,14 @@ async def modify_order(
     order_id: str,
     new_price: float | None = Query(default=None, description="변경할 가격"),
     new_quantity: int | None = Query(default=None, description="변경할 수량"),
-    session: DatabaseSession = None,
     kis_client: KISClientDep = None,
 ) -> ResponseDTO[OrderStatusResponseDTO]:
     """주문 정정"""
     from decimal import Decimal
 
-    service = OrderService(kis_client, session)
+    service = OrderService(kis_client)
     order_status = await service.modify_order(
-        session, order_id, Decimal(str(new_price)) if new_price else None, new_quantity
+        order_id, Decimal(str(new_price)) if new_price else None, new_quantity
     )
     return ResponseDTO.success_response(order_status, "Order modified successfully")
 
@@ -128,10 +125,9 @@ async def modify_order(
 )
 async def refresh_order_status(
     order_id: str,
-    session: DatabaseSession,
     kis_client: KISClientDep,
 ) -> ResponseDTO[OrderStatusResponseDTO]:
     """체결 상태 업데이트"""
-    service = OrderService(kis_client, session)
-    order_status = await service.update_order_status(session, order_id)
+    service = OrderService(kis_client)
+    order_status = await service.update_order_status(order_id)
     return ResponseDTO.success_response(order_status, "Order status refreshed successfully")

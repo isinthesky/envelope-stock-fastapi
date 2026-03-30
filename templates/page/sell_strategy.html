@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "layouts/base.html" %}
 
 {% block title %}Sell Strategy - Stock API Admin{% endblock %}
 
@@ -28,6 +28,22 @@
 .phase-PHASE_3 { background: #fed7aa; color: #c2410c; }
 .phase-PHASE_4 { background: #fecaca; color: #991b1b; }
 .phase-PHASE_5 { background: #dc2626; color: #fff; }
+
+/* 비중축소 단계 뱃지 */
+.stage-badge { padding: 8px 14px; border-radius: 8px; font-weight: 600; font-size: 13px; }
+.stage-HOLD { background: #dcfce7; color: #166534; }
+.stage-REDUCE_1 { background: #fef3c7; color: #92400e; }
+.stage-REDUCE_2 { background: #fed7aa; color: #c2410c; }
+.stage-EXIT_ALL { background: #dc2626; color: #fff; }
+
+/* 볼륨/ADX 섹션 */
+.volume-section, .adx-section { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-top: 16px; }
+.volume-section h4, .adx-section h4 { color: #334155; margin-bottom: 12px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.volume-section .indicator-grid, .adx-section .indicator-grid { margin-bottom: 0; }
+.volume-spike-badge { background: #fecaca; color: #991b1b; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.adx-uptrend-badge { background: #dcfce7; color: #166534; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.adx-downtrend-badge { background: #fecaca; color: #991b1b; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.overbought-blocked { background: #dbeafe; color: #1e40af; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
 
 .indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
 .indicator-card { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
@@ -115,6 +131,84 @@
 .btn-save { background: #3b82f6; color: white; border: none; }
 .btn-save:hover { background: #2563eb; }
 .entry-price-badge { background: #dcfce7; color: #166534; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 4px; }
+.last-search {
+  font-size: 13px;
+  color: #1e40af;
+  margin-top: 8px;
+  padding: 10px 14px;
+  background: #eff6ff;
+  border-radius: 8px;
+  border-left: 4px solid #3b82f6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.last-search.stale {
+  background: #fef3c7;
+  border-left-color: #f59e0b;
+  color: #92400e;
+}
+.last-search .time-badge {
+  background: #3b82f6;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.last-search.stale .time-badge {
+  background: #f59e0b;
+}
+.cache-indicator {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+.cache-indicator.cached { background: #e0e7ff; color: #4338ca; }
+.cache-indicator.fresh { background: #dcfce7; color: #166534; }
+.placeholder-message {
+  text-align: center;
+  padding: 40px 20px;
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  font-size: 14px;
+}
+.universe-backtest-section { margin-top: 24px; }
+.universe-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 16px; }
+.universe-summary-card { background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+.universe-summary-card .label { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+.universe-summary-card .value { font-size: 22px; font-weight: 700; color: #0f172a; }
+.universe-ranking { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+.universe-ranking .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; }
+.universe-ranking h4 { margin-bottom: 10px; }
+.universe-ranking ul { list-style: none; padding: 0; margin: 0; }
+.universe-ranking li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+.universe-ranking li:last-child { border-bottom: none; }
+.universe-positive { color: #16a34a; }
+.universe-negative { color: #dc2626; }
+.cash-plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.cash-plan-card { background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+.cash-plan-card .label { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+.cash-plan-card .value { font-size: 22px; font-weight: 700; color: #0f172a; }
+.cash-plan-summary { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.cash-plan-summary ul { list-style: none; padding: 0; margin: 12px 0 0 0; }
+.cash-plan-summary li { padding: 6px 0; border-bottom: 1px solid #fed7aa; font-size: 13px; color: #7c2d12; }
+.cash-plan-summary li:last-child { border-bottom: none; }
+.cash-plan-actions { display: grid; gap: 12px; }
+.cash-plan-action { background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+.cash-plan-action-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.cash-plan-action-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cash-plan-profit { font-size: 11px; padding: 4px 8px; border-radius: 999px; font-weight: 600; }
+.cash-plan-profit.positive { background: #dcfce7; color: #166534; }
+.cash-plan-profit.negative { background: #fecaca; color: #991b1b; }
+.cash-plan-note { margin-top: 8px; font-size: 12px; color: #475569; }
+.cash-plan-reasons { margin-top: 10px; font-size: 12px; color: #7c2d12; }
+.cash-plan-reasons ul { list-style: none; padding: 0; margin: 8px 0 0 0; }
+.cash-plan-reasons li { padding: 4px 0; border-bottom: 1px solid #e2e8f0; }
+.cash-plan-reasons li:last-child { border-bottom: none; }
 {% endblock %}
 
 {% block content %}
@@ -124,15 +218,17 @@
 <section class="strategy-info">
   <h2>매도 시그널 분석 전략</h2>
   <p>
-    MA55/MA165 데드크로스, Stochastic 과매수, RSI 과매수 신호를 종합하여
-    최적의 매도 시점을 추천합니다. Phase 기반 선제적 매도 시그널과 수익률 기반 동적 임계값을 지원합니다.
+    MA55/MA165 데드크로스, Stochastic/RSI 과매수, 거래량 급증, ADX 추세 필터를 종합하여
+    최적의 매도 시점과 비중축소 비율을 추천합니다.
   </p>
   <div class="strategy-flow">
-    <span class="step">Phase 1: 수익 보호</span>
+    <span class="step">HOLD: 보유 유지</span>
     <span class="arrow">→</span>
-    <span class="step">Phase 2: 매도 준비</span>
+    <span class="step">REDUCE_1: 20~30% 축소</span>
     <span class="arrow">→</span>
-    <span class="step">Phase 3-5: 매도 실행</span>
+    <span class="step">REDUCE_2: 30~40% 축소</span>
+    <span class="arrow">→</span>
+    <span class="step">EXIT_ALL: 전량 청산</span>
   </div>
 </section>
 
@@ -143,6 +239,12 @@
     <input type="text" id="symbol_input" placeholder="예: 005930" style="width: 120px;" />
     <button onclick="analyzeSellSignal()">매도 시그널 분석</button>
   </div>
+  <div class="row" style="margin-top: 8px;">
+    <label style="font-size: 12px;">전략 ID (선택):</label>
+    <input id="strategy_id_input" type="number" placeholder="예: 1" style="width: 90px;" />
+    <span style="font-size: 11px; color: #64748b; margin-left: 8px;">입력 시 진입가를 DB에서 자동 조회(가능하면)</span>
+  </div>
+  <div class="last-search" id="sell_last_analysis">마지막 분석: -</div>
   <div class="row" style="margin-top: 8px;">
     <label style="font-size: 12px;">진입가 (선택):</label>
     <input id="entry_price_input" type="number" placeholder="예: 50000" style="width: 100px;" />
@@ -157,9 +259,63 @@
   <pre id="scan_output" style="display: none;"></pre>
 </section>
 
-<section id="result_section" style="display: none;">
+<section id="result_section">
   <h2>분석 결과</h2>
-  <div id="result_container"></div>
+  <div id="result_container">
+    <div class="placeholder-message">
+      결과를 불러오는 중...
+    </div>
+  </div>
+</section>
+
+<section class="history-section">
+  <div class="history-header">
+    <h2>포트폴리오 현금화 계획</h2>
+    <div class="history-actions">
+      <button class="btn-refresh" onclick="loadPortfolioCashPlan()">현금화 계획 갱신</button>
+    </div>
+  </div>
+  <p>활성 추적 중인 매도 종목을 기준으로 목표 현금 비중을 만들기 위한 우선 정리 순서를 보여줍니다.</p>
+  <div class="row" style="margin-top: 8px;">
+    <label>목표 현금 비중</label>
+    <input id="cash_plan_target_ratio" type="number" value="30" min="0" max="100" step="5" style="width: 80px;" />
+    <label style="margin-left: 12px;">현재 현금 비중</label>
+    <input id="cash_plan_current_ratio" type="number" placeholder="예: 10" min="0" max="100" step="1" style="width: 80px;" />
+    <span style="font-size: 11px; color: #64748b; margin-left: 8px;">비워두면 목표 기준 요약만 표시합니다.</span>
+  </div>
+  <div id="cash_plan_container" class="result-card" style="margin-top: 16px;">
+    <div class="placeholder-message">
+      아직 현금화 계획을 불러오지 않았습니다.
+    </div>
+  </div>
+</section>
+
+<section class="universe-backtest-section">
+  <h2>유니버스 백테스트 (공격형 매도 v1)</h2>
+  <p>현재 종목 유니버스를 대상으로 골든크로스 진입 + 공격형 중단기 스윙 매도 규칙의 승률/수익률을 집계합니다.</p>
+  <div class="row">
+    <label>시장</label>
+    <select id="universe_market_filter" style="width: 120px;">
+      <option value="">전체</option>
+      <option value="KOSPI">KOSPI</option>
+      <option value="KOSDAQ">KOSDAQ</option>
+    </select>
+    <label style="margin-left: 12px;">종목 수</label>
+    <input id="universe_limit" type="number" value="20" min="1" max="100" style="width: 80px;" />
+    <label style="margin-left: 12px;"><input id="universe_eligible_only" type="checkbox" checked /> 적격 종목만</label>
+  </div>
+  <div class="row" style="margin-top: 8px;">
+    <label>시작일</label>
+    <input id="universe_start_date" type="date" value="2024-01-01" style="width: 150px;" />
+    <label style="margin-left: 12px;">종료일</label>
+    <input id="universe_end_date" type="date" value="2024-12-31" style="width: 150px;" />
+    <button style="margin-left: 12px;" onclick="runUniverseBacktest()">유니버스 백테스트 실행</button>
+  </div>
+  <div id="universe_backtest_container" class="result-card" style="margin-top: 16px;">
+    <div class="placeholder-message">
+      아직 유니버스 백테스트를 실행하지 않았습니다.
+    </div>
+  </div>
 </section>
 
 <section class="history-section">
@@ -169,6 +325,7 @@
       <button class="btn-refresh" onclick="refreshHistory()">활성 종목 갱신</button>
     </div>
   </div>
+  <div class="last-search" id="sell_last_refresh" style="margin-bottom: 12px;">마지막 갱신: -</div>
   <table class="history-table">
     <thead>
       <tr>
@@ -176,7 +333,8 @@
         <th>종목코드</th>
         <th>종목명</th>
         <th>현재가</th>
-        <th>Phase</th>
+        <th>비중축소</th>
+        <th>ADX</th>
         <th>Stoch K</th>
         <th>RSI</th>
         <th>분석시간</th>
@@ -184,7 +342,7 @@
       </tr>
     </thead>
     <tbody id="history_body">
-      <tr><td colspan="9" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
+      <tr><td colspan="10" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
     </tbody>
   </table>
 </section>
@@ -227,6 +385,15 @@
 {% block extra_scripts %}
 let analysisHistory = [];
 let selectedHistoryId = null;
+let analysisInProgress = false;
+let cashPlanInProgress = false;
+
+const SELL_LAST_ANALYSIS_KEY = 'sellStrategy.lastAnalysis';
+const SELL_LAST_REFRESH_KEY = 'sellStrategy.lastRefresh';
+const CACHE_SCHEMA_VERSION = 1;
+const CACHE_TTL_MS = 3600000;  // 1시간
+const ANALYSIS_COOLDOWN_MS = 60000;  // 1분
+const REFRESH_COOLDOWN_MS = 60000;  // 1분
 
 const formatNumber = (n) => {
   if (n === null || n === undefined) return '-';
@@ -235,17 +402,205 @@ const formatNumber = (n) => {
 
 const formatDateTime = (dateStr) => {
   if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '-';
+  return date.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
 };
 
 const formatTime = (dateStr) => {
   if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' });
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '-';
+  return date.toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' });
+};
+
+// 상대 시간 표시 (안전한 파싱)
+const getRelativeTime = (dateStr) => {
+  if (!dateStr) return null;
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return null;
+
+  const diff = Date.now() - date.getTime();
+  if (diff < 0) return '잠시 후';
+
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (mins < 1) return '방금 전';
+  if (mins < 60) return `${mins}분 전`;
+  if (hours < 24) return `${hours}시간 전`;
+  return `${days}일 전`;
+};
+
+// 캐시 유효성 검사
+const isCacheStale = (savedAt) => {
+  if (!savedAt) return true;
+  return (Date.now() - savedAt) > CACHE_TTL_MS;
 };
 
 const formatPercent = (ratio) => {
   if (ratio === null || ratio === undefined) return '-';
   return (ratio * 100).toFixed(2) + '%';
+};
+
+const updateLastAnalysisLabel = (data, isStale = false) => {
+  const label = document.getElementById("sell_last_analysis");
+  if (!label) return;
+
+  const timeText = formatDateTime(data?.analyzed_at);
+  const relTime = getRelativeTime(data?.analyzed_at);
+  const nameText = data?.symbol ? `${data.symbol}${data.name ? ` ${data.name}` : ''}` : '';
+
+  // 스타일 클래스 적용
+  label.classList.toggle('stale', isStale);
+
+  // nameText가 없으면 하이픈 제외
+  const mainText = nameText
+    ? `마지막 분석: ${nameText} - ${timeText}`
+    : `마지막 분석: ${timeText}`;
+
+  label.innerHTML = `
+    <span class="time-badge">${relTime || '알 수 없음'}</span>
+    <span>${mainText}</span>
+    <span class="cache-indicator ${isStale ? 'cached' : 'fresh'}">${isStale ? '캐시됨' : '최신'}</span>
+  `;
+};
+
+const saveLastAnalysis = (data) => {
+  try {
+    localStorage.setItem(SELL_LAST_ANALYSIS_KEY, JSON.stringify({
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      savedAt: Date.now(),
+      data
+    }));
+  } catch (e) {
+    console.warn('Failed to save last analysis:', e);
+  }
+};
+
+const loadLastAnalysis = () => {
+  try {
+    const raw = localStorage.getItem(SELL_LAST_ANALYSIS_KEY);
+    if (!raw) return null;
+
+    const cached = JSON.parse(raw);
+
+    // 스키마 버전 검증 (구버전이면 data만 반환)
+    if (!cached.schemaVersion) {
+      // 구버전 형식 호환
+      return { data: cached, isStale: true };
+    }
+
+    if (cached.schemaVersion !== CACHE_SCHEMA_VERSION) {
+      localStorage.removeItem(SELL_LAST_ANALYSIS_KEY);
+      return null;
+    }
+
+    const isStale = isCacheStale(cached.savedAt);
+    return { data: cached.data, isStale, savedAt: cached.savedAt };
+  } catch (e) {
+    console.warn('Failed to load last analysis:', e);
+    return null;
+  }
+};
+
+// 갱신 결과 저장/로드
+const saveLastRefresh = (data) => {
+  try {
+    // 메타데이터만 저장 (items 배열 제외하여 localStorage 용량 절약)
+    localStorage.setItem(SELL_LAST_REFRESH_KEY, JSON.stringify({
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      savedAt: Date.now(),
+      refreshedAt: data.refreshedAt,
+      updated_count: data.updated_count
+    }));
+  } catch (e) {
+    console.warn('Failed to save last refresh:', e);
+  }
+};
+
+const loadLastRefresh = () => {
+  try {
+    const raw = localStorage.getItem(SELL_LAST_REFRESH_KEY);
+    if (!raw) return null;
+
+    const cached = JSON.parse(raw);
+
+    // 스키마 불일치 시 제거
+    if (!cached.schemaVersion || cached.schemaVersion !== CACHE_SCHEMA_VERSION) {
+      localStorage.removeItem(SELL_LAST_REFRESH_KEY);
+      return null;
+    }
+
+    const isStale = isCacheStale(cached.savedAt);
+    return {
+      data: { refreshedAt: cached.refreshedAt, updated_count: cached.updated_count },
+      savedAt: cached.savedAt,
+      isStale
+    };
+  } catch (e) {
+    console.warn('Failed to load last refresh:', e);
+    return null;
+  }
+};
+
+const updateLastRefreshLabel = (data, isStale = false) => {
+  const label = document.getElementById("sell_last_refresh");
+  if (!label) return;
+
+  const refreshedAt = data?.refreshedAt;
+  const timeText = formatDateTime(refreshedAt);
+  const relTime = getRelativeTime(refreshedAt);
+  const countText = data?.updated_count != null ? `${data.updated_count}개 종목` : '';
+
+  label.classList.toggle('stale', isStale);
+
+  const mainText = countText
+    ? `마지막 갱신: ${timeText} - ${countText} 갱신됨`
+    : `마지막 갱신: ${timeText}`;
+
+  label.innerHTML = `
+    <span class="time-badge">${relTime || '알 수 없음'}</span>
+    <span>${mainText}</span>
+    <span class="cache-indicator ${isStale ? 'cached' : 'fresh'}">${isStale ? '캐시됨' : '최신'}</span>
+  `;
+};
+
+const normalizeSellReasons = (item) => {
+  let reasons = item.sell_reasons;
+  if (typeof reasons === 'string') {
+    try {
+      reasons = JSON.parse(reasons);
+    } catch (e) {
+      reasons = [reasons];
+    }
+  }
+  if (!Array.isArray(reasons)) reasons = [];
+  return reasons;
+};
+
+const getStageDisplayName = (stage) => {
+  const stageNames = {
+    HOLD: '보유 유지',
+    REDUCE_1: '1차 비중 축소',
+    REDUCE_2: '2차 비중 축소',
+    EXIT_ALL: '전량 청산'
+  };
+  return stageNames[stage] || stage || '보유 유지';
+};
+
+const resolveDisplayStage = (item) => {
+  if (item?.final_stage) return item.final_stage;
+  if (item?.sell_stage) return item.sell_stage;
+
+  const phaseToStage = {
+    PHASE_2: 'REDUCE_1',
+    PHASE_3: 'REDUCE_1',
+    PHASE_4: 'REDUCE_2',
+    PHASE_5: 'EXIT_ALL'
+  };
+  return phaseToStage[item?.sell_phase] || 'HOLD';
 };
 
 // Phase 이름에 번호 추가
@@ -269,31 +624,226 @@ const loadHistory = async () => {
     if (data.success && data.data) {
       analysisHistory = data.data.items;
       renderHistoryTable();
+      loadPortfolioCashPlan();
+
+      // DB 히스토리와 localStorage 캐시 비교하여 최신 결과 표시
+      const latest = analysisHistory[0];
+      if (latest) {
+        const cached = loadLastAnalysis();
+        const cachedTime = cached?.data?.analyzed_at ? new Date(cached.data.analyzed_at).getTime() : 0;
+        const historyTime = latest.analyzed_at ? new Date(latest.analyzed_at).getTime() : 0;
+
+        // DB가 더 최신이면 DB 결과로 업데이트
+        if (historyTime > cachedTime) {
+          const historyLatest = {
+            ...latest,
+            sell_reasons: normalizeSellReasons(latest)
+          };
+          displayResult(historyLatest);
+          updateLastAnalysisLabel(historyLatest, false);
+        }
+      }
     }
   } catch (e) {
     console.error('Failed to load history:', e);
     document.getElementById("history_body").innerHTML =
-      '<tr><td colspan="11" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
+      '<tr><td colspan="10" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
   }
 };
 
-const analyzeSellSignal = async () => {
+const renderPortfolioCashPlan = (data) => {
+  const container = document.getElementById("cash_plan_container");
+  if (!container) return;
+
+  if (!data) {
+    container.innerHTML = `<div class="placeholder-message">현금화 계획 데이터가 없습니다.</div>`;
+    return;
+  }
+
+  const topActions = (data.actions || []).slice(0, 5);
+  const displayGap = data.cash_gap_ratio !== null && data.cash_gap_ratio !== undefined
+    ? data.cash_gap_ratio
+    : (data.current_cash_ratio !== null && data.current_cash_ratio !== undefined
+      ? (data.target_cash_ratio - data.current_cash_ratio)
+      : null);
+  const winnerCount = (data.actions || []).filter(action => (action.profit_ratio || 0) > 0).length;
+  const immediateCount = (data.actions || []).filter(action => action.sell_stage === 'EXIT_ALL').length;
+
+  const actionHtml = topActions.length > 0
+    ? topActions.map(action => {
+        const stage = action.sell_stage || 'HOLD';
+        const stageClass = `stage-${stage}`;
+        const profitClass = (action.profit_ratio || 0) >= 0 ? 'positive' : 'negative';
+        const profitText = action.profit_ratio !== null && action.profit_ratio !== undefined
+          ? `<span class="cash-plan-profit ${profitClass}">${formatPercent(action.profit_ratio)}</span>`
+          : '';
+        const ratioText = `${Math.round((action.suggested_sell_ratio || 0) * 100)}%`;
+        const reasons = (action.reasons || []).slice(0, 3).map(reason => `<li>${reason}</li>`).join('');
+
+        return `
+          <div class="cash-plan-action">
+            <div class="cash-plan-action-header">
+              <div>
+                <strong>${action.priority}. ${action.symbol}${action.name ? ` ${action.name}` : ''}</strong>
+                <div style="font-size: 12px; color: #64748b; margin-top: 4px;">${action.action}</div>
+              </div>
+              <div class="cash-plan-action-meta">
+                ${profitText}
+                <span class="stage-badge ${stageClass}" style="font-size: 11px; padding: 4px 8px;">${getStageDisplayName(stage)}</span>
+                <span class="recommendation-badge recommendation-CONSIDER_SELL" style="font-size: 11px; padding: 4px 8px;">권장 ${ratioText}</span>
+              </div>
+            </div>
+            ${action.note ? `<div class="cash-plan-note">${action.note}</div>` : ''}
+            ${reasons ? `<div class="cash-plan-reasons"><ul>${reasons}</ul></div>` : ''}
+          </div>
+        `;
+      }).join('')
+    : `<div class="placeholder-message">우선 정리할 종목이 없습니다.</div>`;
+
+  container.innerHTML = `
+    <div class="result-header">
+      <h3>포트폴리오 현금화 요약</h3>
+      <div style="font-size: 12px; color: #64748b;">${formatDateTime(data.analyzed_at)}</div>
+    </div>
+    <div class="cash-plan-grid">
+      <div class="cash-plan-card">
+        <div class="label">목표 / 현재 현금</div>
+        <div class="value" style="font-size: 18px;">${formatPercent(data.target_cash_ratio)} / ${data.current_cash_ratio !== null && data.current_cash_ratio !== undefined ? formatPercent(data.current_cash_ratio) : '-'}</div>
+      </div>
+      <div class="cash-plan-card">
+        <div class="label">현금 격차</div>
+        <div class="value" style="font-size: 18px; ${displayGap !== null && displayGap > 0 ? 'color: #dc2626;' : 'color: #166534;'}">${displayGap !== null ? formatPercent(displayGap) : '-'}</div>
+      </div>
+      <div class="cash-plan-card">
+        <div class="label">위험 점수 / 과열도</div>
+        <div class="value" style="font-size: 18px;">${Number(data.market_risk_score || 0).toFixed(1)} / ${data.market_heat_level}</div>
+      </div>
+      <div class="cash-plan-card">
+        <div class="label">활성 종목 / 수익 종목</div>
+        <div class="value" style="font-size: 18px;">${data.active_sell_count} / ${winnerCount}</div>
+      </div>
+      <div class="cash-plan-card">
+        <div class="label">즉시 정리 후보</div>
+        <div class="value" style="font-size: 18px;">${immediateCount}</div>
+      </div>
+    </div>
+    <div class="cash-plan-summary">
+      <strong>${data.portfolio_action}</strong>
+      <ul>
+        ${(data.summary || []).map(line => `<li>${line}</li>`).join('')}
+      </ul>
+    </div>
+    <div class="cash-plan-actions">
+      ${actionHtml}
+    </div>
+  `;
+};
+
+const loadPortfolioCashPlan = async () => {
+  if (cashPlanInProgress) return;
+
+  const targetRaw = document.getElementById("cash_plan_target_ratio")?.value || '30';
+  const currentRaw = document.getElementById("cash_plan_current_ratio")?.value || '';
+  const targetRatio = Number(targetRaw) / 100;
+  const currentRatio = currentRaw === '' ? null : Number(currentRaw) / 100;
+
+  if (Number.isNaN(targetRatio) || targetRatio < 0 || targetRatio > 1) {
+    alert('목표 현금 비중은 0~100 사이여야 합니다.');
+    return;
+  }
+  if (currentRatio !== null && (Number.isNaN(currentRatio) || currentRatio < 0 || currentRatio > 1)) {
+    alert('현재 현금 비중은 0~100 사이여야 합니다.');
+    return;
+  }
+
+  cashPlanInProgress = true;
+  const container = document.getElementById("cash_plan_container");
+  if (container) {
+    container.innerHTML = `<div class="placeholder-message">현금화 계획 계산 중...</div>`;
+  }
+
+  let url = `/api/v1/strategies/portfolio-cash-plan?target_cash_ratio=${targetRatio.toFixed(4)}`;
+  if (currentRatio !== null) {
+    url += `&current_cash_ratio=${currentRatio.toFixed(4)}`;
+  }
+
+  try {
+    const response = await fetch(url);
+    const result = await response.json();
+    if (result.success && result.data) {
+      renderPortfolioCashPlan(result.data);
+    } else {
+      if (container) {
+        container.innerHTML = `<div class="placeholder-message" style="color:#dc2626;">현금화 계획 조회 실패</div>`;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load portfolio cash plan:', e);
+    if (container) {
+      container.innerHTML = `<div class="placeholder-message" style="color:#dc2626;">현금화 계획 조회 실패</div>`;
+    }
+  } finally {
+    cashPlanInProgress = false;
+  }
+};
+
+// 중복 클릭 방지 확인
+const canAnalyze = () => {
+  if (analysisInProgress) {
+    return { allowed: false, reason: '분석 진행 중...' };
+  }
+
+  const cached = loadLastAnalysis();
+  if (!cached?.savedAt) return { allowed: true };
+
+  const elapsed = Date.now() - cached.savedAt;
+  if (elapsed < ANALYSIS_COOLDOWN_MS) {
+    const remaining = Math.ceil((ANALYSIS_COOLDOWN_MS - elapsed) / 1000);
+    return {
+      allowed: false,
+      reason: `${remaining}초 후 재분석 가능`,
+      forceAllowed: true
+    };
+  }
+  return { allowed: true };
+};
+
+const analyzeSellSignal = async (forceRefresh = false) => {
   const symbol = document.getElementById("symbol_input").value.trim();
   if (!symbol) {
     alert("종목코드를 입력해주세요.");
     return;
   }
 
+  // 중복 클릭 방지
+  if (!forceRefresh) {
+    const check = canAnalyze();
+    if (!check.allowed) {
+      if (check.forceAllowed) {
+        if (!confirm(`${check.reason}\n강제로 다시 분석하시겠습니까?`)) {
+          return;
+        }
+      } else {
+        alert(check.reason);
+        return;
+      }
+    }
+  }
+
   const stochThreshold = document.getElementById("stoch_threshold").value || 70;
   const rsiThreshold = document.getElementById("rsi_threshold").value || 70;
   const entryPrice = document.getElementById("entry_price_input").value;
+  const strategyId = document.getElementById("strategy_id_input")?.value;
 
+  analysisInProgress = true;
   document.getElementById("scan_output").style.display = "block";
   document.getElementById("scan_output").textContent = `${symbol} 분석 중... (OHLCV 데이터 조회 및 지표 계산)`;
 
   let url = `/api/v1/strategies/sell-signal/${symbol}?stoch_overbought=${stochThreshold}&rsi_overbought=${rsiThreshold}`;
   if (entryPrice) {
     url += `&entry_price=${entryPrice}`;
+  } else if (strategyId) {
+    url += `&strategy_id=${strategyId}`;
   }
 
   try {
@@ -301,7 +851,12 @@ const analyzeSellSignal = async () => {
     const data = await response.json();
 
     if (data.success && data.data) {
+      if (!data.data.analyzed_at) {
+        data.data.analyzed_at = new Date().toISOString();
+      }
       displayResult(data.data);
+      updateLastAnalysisLabel(data.data);
+      saveLastAnalysis(data.data);
       await saveToHistory(data.data);
       document.getElementById("scan_output").textContent = `분석 완료: ${symbol}`;
     } else {
@@ -309,6 +864,8 @@ const analyzeSellSignal = async () => {
     }
   } catch (e) {
     document.getElementById("scan_output").textContent = `오류: ${e.message}`;
+  } finally {
+    analysisInProgress = false;
   }
 };
 
@@ -331,6 +888,20 @@ const saveToHistory = async (data) => {
       is_rsi_overbought: data.is_rsi_overbought,
       sell_phase: data.sell_phase,
       sell_reasons: data.sell_reasons,
+      // 비중축소 관련 신규 필드
+      sell_stage: data.final_stage || data.sell_stage,
+      sell_ratio_min: data.final_ratio_min ?? data.sell_ratio_min,
+      sell_ratio_max: data.final_ratio_max ?? data.sell_ratio_max,
+      // 거래량 관련 신규 필드
+      volume_ratio: data.volume_ratio,
+      is_volume_spike: data.is_volume_spike,
+      is_volume_sell_signal: data.is_volume_sell_signal,
+      // ADX 관련 신규 필드
+      adx: data.adx,
+      plus_di: data.plus_di,
+      minus_di: data.minus_di,
+      is_strong_uptrend: data.is_strong_uptrend,
+      overbought_sell_blocked: data.overbought_sell_blocked,
       is_active: true
     };
 
@@ -343,8 +914,15 @@ const saveToHistory = async (data) => {
     const result = await response.json();
     if (result.success && result.data) {
       // 새 항목을 목록 맨 앞에 추가
-      analysisHistory.unshift(result.data);
+      analysisHistory.unshift({
+        ...result.data,
+        sell_stage: payload.sell_stage,
+        sell_stage_name: getStageDisplayName(payload.sell_stage),
+        sell_ratio_min: payload.sell_ratio_min,
+        sell_ratio_max: payload.sell_ratio_max
+      });
       renderHistoryTable();
+      loadPortfolioCashPlan();
     }
   } catch (e) {
     console.error('Failed to save history:', e);
@@ -364,6 +942,7 @@ const deleteHistory = async (id, event) => {
     if (response.ok) {
       analysisHistory = analysisHistory.filter(h => h.id !== id);
       renderHistoryTable();
+      loadPortfolioCashPlan();
       if (selectedHistoryId === id) {
         document.getElementById("result_section").style.display = "none";
         selectedHistoryId = null;
@@ -394,6 +973,7 @@ const toggleActive = async (id, event) => {
       if (idx >= 0) {
         analysisHistory[idx] = result.data;
         renderHistoryTable();
+        loadPortfolioCashPlan();
       }
     }
   } catch (e) {
@@ -402,9 +982,55 @@ const toggleActive = async (id, event) => {
 };
 
 // 활성 종목 일괄 갱신
-const refreshHistory = async () => {
+// 중복 갱신 방지 확인
+let refreshInProgress = false;
+
+const canRefresh = () => {
+  if (refreshInProgress) {
+    return { allowed: false, reason: '갱신 진행 중...' };
+  }
+
+  const cached = loadLastRefresh();
+  if (!cached?.savedAt) return { allowed: true };
+
+  const elapsed = Date.now() - cached.savedAt;
+  if (elapsed < REFRESH_COOLDOWN_MS) {
+    const remaining = Math.ceil((REFRESH_COOLDOWN_MS - elapsed) / 1000);
+    return {
+      allowed: false,
+      reason: `${remaining}초 후 재갱신 가능`,
+      forceAllowed: true
+    };
+  }
+  return { allowed: true };
+};
+
+const refreshHistory = async (forceRefresh = false) => {
+  // 중복 클릭 방지
+  if (!forceRefresh) {
+    const check = canRefresh();
+    if (!check.allowed) {
+      if (check.forceAllowed) {
+        if (!confirm(`${check.reason}\n강제로 다시 갱신하시겠습니까?`)) {
+          return;
+        }
+      } else {
+        alert(check.reason);
+        return;
+      }
+    }
+  }
+
   const tbody = document.getElementById("history_body");
+  const refreshBtn = document.querySelector('.history-section .btn-refresh');
   tbody.classList.add('loading');
+  refreshInProgress = true;
+
+  // 버튼 비활성화 및 진행 상태 표시
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '갱신 중...';
+  }
 
   try {
     const response = await fetch('/api/v1/strategies/analysis-history/refresh?analysis_type=sell', {
@@ -414,20 +1040,43 @@ const refreshHistory = async () => {
     const result = await response.json();
     if (result.success && result.data) {
       // 갱신된 항목들로 기존 데이터 업데이트
-      result.data.items.forEach(updated => {
+      const items = result.data.items || [];
+      items.forEach(updated => {
         const idx = analysisHistory.findIndex(h => h.symbol === updated.symbol && h.is_active);
         if (idx >= 0) {
           analysisHistory[idx] = updated;
         }
       });
       renderHistoryTable();
-      alert(`${result.data.updated_count}개 종목 갱신 완료`);
+
+      // 갱신 결과 저장 및 라벨 업데이트 (updated_count 기본값 처리)
+      const updatedCount = result.data.updated_count ?? items.length ?? 0;
+      const refreshData = {
+        updated_count: updatedCount,
+        refreshedAt: new Date().toISOString()
+      };
+      saveLastRefresh(refreshData);
+      updateLastRefreshLabel(refreshData, false);
+      loadPortfolioCashPlan();
+
+      alert(`${updatedCount}개 종목 갱신 완료`);
+    } else {
+      // API 실패 시 사용자 피드백
+      const errorMsg = result.message || result.error || '알 수 없는 오류';
+      alert(`갱신 실패: ${errorMsg}`);
     }
   } catch (e) {
     console.error('Failed to refresh:', e);
-    alert('갱신 실패');
+    alert(`갱신 실패: ${e.message}`);
   } finally {
     tbody.classList.remove('loading');
+    refreshInProgress = false;
+
+    // 버튼 원래 상태로 복원
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = '활성 종목 갱신';
+    }
   }
 };
 
@@ -438,47 +1087,40 @@ const showHistoryDetail = (id) => {
 
   selectedHistoryId = id;
 
-  // sell_reasons 처리 (문자열이면 JSON 파싱)
-  let reasons = item.sell_reasons;
-  if (typeof reasons === 'string') {
-    try {
-      reasons = JSON.parse(reasons);
-    } catch (e) {
-      reasons = [reasons];
-    }
-  }
-  if (!Array.isArray(reasons)) reasons = [];
-
   displayResult({
     ...item,
-    sell_reasons: reasons
+    sell_reasons: normalizeSellReasons(item)
   });
+  updateLastAnalysisLabel(item);
   renderHistoryTable(); // 선택 상태 표시 업데이트
 };
 
 const displayResult = (data) => {
   document.getElementById("result_section").style.display = "block";
 
+  const displayStage = resolveDisplayStage(data);
   const phaseClass = `phase-${data.sell_phase || 'NONE'}`;
+  const stageClass = `stage-${displayStage}`;
 
   const stochStatus = data.is_stoch_overbought ? 'status-danger' : 'status-safe';
   const rsiStatus = data.is_rsi_overbought ? 'status-danger' : 'status-safe';
   const maStatus = data.is_death_cross ? 'status-danger' : 'status-safe';
 
   const sellReasons = data.sell_reasons || [];
+  const stageReasons = data.sell_stage_reasons || [];
 
-  // Phase 인디케이터 생성
-  const phases = ['NONE', 'PHASE_1', 'PHASE_2', 'PHASE_3', 'PHASE_4', 'PHASE_5'];
-  const phaseNames = ['보유', '수익 보호', '매도 준비', '매도 고려', '매도 권장', '강력 매도'];
-  const currentPhase = data.sell_phase || 'NONE';
-  const phaseIdx = phases.indexOf(currentPhase);
+  // Stage 인디케이터 생성
+  const stages = ['HOLD', 'REDUCE_1', 'REDUCE_2', 'EXIT_ALL'];
+  const stageNames = ['보유 유지', '1차 축소 (20~30%)', '2차 축소 (30~40%)', '전량 청산 (100%)'];
+  const currentStage = displayStage;
+  const stageIdx = stages.indexOf(currentStage);
 
-  const phaseIndicatorHtml = phases.map((p, i) => {
+  const stageIndicatorHtml = stages.map((s, i) => {
     let activeClass = '';
-    if (i === phaseIdx && p !== 'NONE') {
-      activeClass = i >= 4 ? 'active critical' : (i >= 3 ? 'active danger' : 'active');
+    if (i === stageIdx) {
+      activeClass = i >= 3 ? 'active critical' : (i >= 2 ? 'active danger' : (i >= 1 ? 'active' : ''));
     }
-    return `<div class="phase-step ${activeClass}">${phaseNames[i]}</div>`;
+    return `<div class="phase-step ${activeClass}">${stageNames[i]}</div>`;
   }).join('');
 
   // 수익률 섹션 생성
@@ -529,24 +1171,110 @@ const displayResult = (data) => {
     `;
   }
 
+  // 거래량 섹션 생성
+  let volumeSectionHtml = '';
+  if (data.volume_ratio !== null && data.volume_ratio !== undefined) {
+    const volumeSpikeBadge = data.is_volume_spike ? '<span class="volume-spike-badge">급증</span>' : '';
+    const volumeSellSignal = data.is_volume_sell_signal ? '<span class="volume-spike-badge">매도 신호</span>' : '';
+    volumeSectionHtml = `
+      <div class="volume-section">
+        <h4>📊 거래량 분석 ${volumeSpikeBadge} ${volumeSellSignal}</h4>
+        <div class="indicator-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+          <div class="indicator-card">
+            <div class="label">현재 거래량</div>
+            <div class="value" style="font-size: 18px;">${formatNumber(data.current_volume)}</div>
+          </div>
+          <div class="indicator-card">
+            <div class="label">20일 평균</div>
+            <div class="value" style="font-size: 18px;">${formatNumber(data.volume_ma_20)}</div>
+          </div>
+          <div class="indicator-card">
+            <div class="label">거래량 비율</div>
+            <div class="value" style="font-size: 18px; ${data.is_volume_spike ? 'color: #dc2626;' : ''}">${(data.volume_ratio * 100).toFixed(0)}%</div>
+            ${data.is_volume_spike ? '<span class="status status-danger">1.3x 초과</span>' : ''}
+          </div>
+          ${data.price_drop_ratio !== null ? `
+          <div class="indicator-card">
+            <div class="label">가격 변동</div>
+            <div class="value" style="font-size: 18px; color: ${data.price_drop_ratio > 0 ? '#dc2626' : '#16a34a'};">${data.price_drop_ratio > 0 ? '-' : '+'}${(Math.abs(data.price_drop_ratio) * 100).toFixed(2)}%</div>
+          </div>
+          ` : ''}
+        </div>
+        ${data.volume_sell_reasons && data.volume_sell_reasons.length > 0 ? `
+          <div style="margin-top: 8px; font-size: 12px; color: #9a3412; background: #fff7ed; padding: 8px; border-radius: 4px;">
+            ${data.volume_sell_reasons.join(', ')}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  // ADX 섹션 생성
+  let adxSectionHtml = '';
+  if (data.adx !== null && data.adx !== undefined) {
+    const uptrendBadge = data.is_strong_uptrend ? '<span class="adx-uptrend-badge">강한 상승 추세</span>' : '';
+    const downtrendBadge = data.is_strong_downtrend ? '<span class="adx-downtrend-badge">강한 하락 추세</span>' : '';
+    const blockedBadge = data.overbought_sell_blocked ? '<span class="overbought-blocked">과매수 매도 차단</span>' : '';
+    adxSectionHtml = `
+      <div class="adx-section">
+        <h4>📈 추세 분석 (ADX) ${uptrendBadge} ${downtrendBadge} ${blockedBadge}</h4>
+        <div class="indicator-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+          <div class="indicator-card">
+            <div class="label">ADX</div>
+            <div class="value" style="font-size: 18px; ${data.adx > 25 ? 'color: #2563eb; font-weight: 700;' : ''}">${Number(data.adx).toFixed(1)}</div>
+            <span class="status ${data.adx > 25 ? 'status-info' : 'status-safe'}">${data.adx > 25 ? '강한 추세' : '횡보/약한 추세'}</span>
+          </div>
+          <div class="indicator-card">
+            <div class="label">+DI (상승 강도)</div>
+            <div class="value" style="font-size: 18px; ${data.plus_di > data.minus_di ? 'color: #16a34a;' : ''}">${Number(data.plus_di).toFixed(1)}</div>
+          </div>
+          <div class="indicator-card">
+            <div class="label">-DI (하락 강도)</div>
+            <div class="value" style="font-size: 18px; ${data.minus_di > data.plus_di ? 'color: #dc2626;' : ''}">${Number(data.minus_di).toFixed(1)}</div>
+          </div>
+          <div class="indicator-card">
+            <div class="label">추세 방향</div>
+            <div class="value" style="font-size: 16px;">${data.plus_di > data.minus_di ? '⬆️ 상승' : '⬇️ 하락'}</div>
+          </div>
+        </div>
+        ${data.overbought_sell_blocked ? `
+          <div style="margin-top: 8px; font-size: 12px; color: #1e40af; background: #eff6ff; padding: 8px; border-radius: 4px;">
+            ℹ️ 강한 상승 추세(ADX>${25})로 과매수 매도 신호가 차단되었습니다.
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  // 매도 비율 정보
+  let sellRatioHtml = '';
+  const ratioMinValue = data.final_ratio_min ?? data.sell_ratio_min;
+  const ratioMaxValue = data.final_ratio_max ?? data.sell_ratio_max;
+  if (currentStage && currentStage !== 'HOLD') {
+    const ratioMin = ratioMinValue !== undefined ? (ratioMinValue * 100).toFixed(0) : '0';
+    const ratioMax = ratioMaxValue !== undefined ? (ratioMaxValue * 100).toFixed(0) : '0';
+    sellRatioHtml = `
+      <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px;">
+        <strong style="color: #991b1b;">💡 권장 매도 비율: ${ratioMin}% ~ ${ratioMax}%</strong>
+        ${data.holding_quantity ? `<span style="color: #7c2d12; margin-left: 12px;">→ 보유 ${data.holding_quantity}주 중 ${Math.floor(data.holding_quantity * ratioMinValue)}~${Math.floor(data.holding_quantity * ratioMaxValue)}주 매도 권장</span>` : ''}
+      </div>
+    `;
+  }
+
   const html = `
     <div class="result-card">
       <div class="result-header">
         <h3>${data.symbol} ${data.name || ''}</h3>
-        <div>
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span class="stage-badge ${stageClass}">${getStageDisplayName(currentStage)}</span>
           <span class="phase-badge ${phaseClass}">${getPhaseDisplayName(data.sell_phase, data.sell_phase_name)}</span>
         </div>
       </div>
 
-      ${data.sell_phase_action && data.sell_phase !== 'NONE' ? `
-      <div style="background: #fef3c7; padding: 12px; border-radius: 8px; margin-bottom: 16px;">
-        <strong style="color: #92400e;">권장 행동:</strong>
-        <span style="color: #78350f;">${data.sell_phase_action}</span>
-      </div>
-      ` : ''}
+      ${sellRatioHtml}
 
       <div class="phase-indicator">
-        ${phaseIndicatorHtml}
+        ${stageIndicatorHtml}
       </div>
 
       ${profitSectionHtml}
@@ -582,6 +1310,18 @@ const displayResult = (data) => {
         ${trailingStopHtml}
       </div>
 
+      ${volumeSectionHtml}
+
+      ${adxSectionHtml}
+
+      ${stageReasons.length > 0 ? `
+      <div class="reasons-list" style="background: #fef2f2; border-color: #fecaca;">
+        <h4 style="color: #991b1b;">비중축소 판단 근거</h4>
+        <ul>
+          ${stageReasons.map(r => `<li style="color: #7c2d12;">${r}</li>`).join('')}
+        </ul>
+      </div>
+      ` : ''}
 
       ${sellReasons.length > 0 ? `
       <div class="reasons-list">
@@ -602,21 +1342,134 @@ const displayResult = (data) => {
   document.getElementById("result_container").innerHTML = html;
 };
 
+const renderUniverseBacktest = (data) => {
+  const container = document.getElementById("universe_backtest_container");
+  if (!container) return;
+
+  if (!data || !data.summary) {
+    container.innerHTML = `<div class="placeholder-message">유니버스 백테스트 결과가 없습니다.</div>`;
+    return;
+  }
+
+  const summary = data.summary;
+  const bestSymbols = (summary.best_symbols || []).map(item => `
+    <li>
+      <span>${item.symbol}</span>
+      <strong class="universe-positive">${Number(item.total_return).toFixed(2)}%</strong>
+    </li>
+  `).join('') || '<li><span>데이터 없음</span><span>-</span></li>';
+
+  const worstSymbols = (summary.worst_symbols || []).map(item => `
+    <li>
+      <span>${item.symbol}</span>
+      <strong class="universe-negative">${Number(item.total_return).toFixed(2)}%</strong>
+    </li>
+  `).join('') || '<li><span>데이터 없음</span><span>-</span></li>';
+
+  const config = data.config_summary || {};
+  const comparisonRows = (config.comparison_results || []).map(item => `
+    <li>
+      <span>${item.label}</span>
+      <strong>${Number(item.average_return).toFixed(2)}% / ${Number(item.average_win_rate).toFixed(2)}% / ${Number(item.average_holding_days).toFixed(1)}일</strong>
+    </li>
+  `).join('');
+
+  container.innerHTML = `
+    <div class="result-header">
+      <h3>유니버스 백테스트 요약</h3>
+      <div style="font-size: 12px; color: #64748b;">
+        ${data.market || '전체'} · ${data.symbols.length}종목 · ${data.start_date?.slice(0,10)} ~ ${data.end_date?.slice(0,10)}
+      </div>
+    </div>
+    <div style="font-size: 13px; color: #475569; margin-bottom: 8px;">
+      전략: ${config.label || '공격형 중단기 스윙 매도 v3'}
+      (손절 ${formatPercent(Math.abs(config.stop_loss || 0))} / 본전보호 ${formatPercent(config.breakeven_activation || 0)} / 1차익절 ${formatPercent(config.partial_take_profit_1 || 0)} / 2차익절 ${formatPercent(config.partial_take_profit_2 || 0)} / trailing ${formatPercent(config.trailing_stop || 0)})
+    </div>
+    <div class="universe-summary-grid">
+      <div class="universe-summary-card"><div class="label">평균 수익률</div><div class="value ${summary.average_return >= 0 ? 'universe-positive' : 'universe-negative'}">${Number(summary.average_return).toFixed(2)}%</div></div>
+      <div class="universe-summary-card"><div class="label">평균 승률</div><div class="value">${Number(summary.average_win_rate).toFixed(2)}%</div></div>
+      <div class="universe-summary-card"><div class="label">수익 종목 비율</div><div class="value">${Number(summary.profitable_ratio).toFixed(2)}%</div></div>
+      <div class="universe-summary-card"><div class="label">평균 MDD</div><div class="value">${Number(summary.average_mdd).toFixed(2)}%</div></div>
+      <div class="universe-summary-card"><div class="label">평균 보유일</div><div class="value">${Number(summary.average_holding_days).toFixed(1)}일</div></div>
+      <div class="universe-summary-card"><div class="label">총 거래 수</div><div class="value">${formatNumber(summary.total_trades)}</div></div>
+    </div>
+    <div class="universe-ranking">
+      <div class="panel">
+        <h4>상위 수익 종목</h4>
+        <ul>${bestSymbols}</ul>
+      </div>
+      <div class="panel">
+        <h4>하위 수익 종목</h4>
+        <ul>${worstSymbols}</ul>
+      </div>
+    </div>
+    ${comparisonRows ? `
+    <div class="panel" style="margin-top:16px; background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:16px;">
+      <h4>비교군 요약 (평균수익률 / 평균승률 / 평균보유일)</h4>
+      <ul style="list-style:none; padding:0; margin:0;">
+        ${comparisonRows}
+      </ul>
+    </div>` : ''}
+  `;
+};
+
+const runUniverseBacktest = async () => {
+  const container = document.getElementById("universe_backtest_container");
+  const market = document.getElementById("universe_market_filter")?.value || null;
+  const limit = parseInt(document.getElementById("universe_limit")?.value || '20', 10);
+  const eligibleOnly = !!document.getElementById("universe_eligible_only")?.checked;
+  const startDate = document.getElementById("universe_start_date")?.value;
+  const endDate = document.getElementById("universe_end_date")?.value;
+
+  if (!startDate || !endDate) {
+    alert('백테스트 기간을 입력해주세요.');
+    return;
+  }
+
+  container.innerHTML = `<div class="placeholder-message">유니버스 백테스트 실행 중...</div>`;
+
+  try {
+    const response = await fetch('/api/v1/backtest/run-universe-golden-cross', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        market: market || null,
+        eligible_only: eligibleOnly,
+        limit,
+        start_date: `${startDate}T00:00:00`,
+        end_date: `${endDate}T00:00:00`
+      })
+    });
+    const result = await response.json();
+    renderUniverseBacktest(result);
+  } catch (e) {
+    console.error('Failed to run universe backtest:', e);
+    container.innerHTML = `<div class="placeholder-message" style="color:#dc2626;">유니버스 백테스트 실행 실패</div>`;
+  }
+};
+
 const renderHistoryTable = () => {
   const tbody = document.getElementById("history_body");
 
   if (analysisHistory.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
     return;
   }
 
   tbody.innerHTML = analysisHistory.map(item => {
-    const phaseClass = `phase-${item.sell_phase || 'NONE'}`;
+    const displayStage = resolveDisplayStage(item);
+    const stageClass = `stage-${displayStage}`;
     const activeIcon = item.is_active ? '●' : '○';
     const activeClass = item.is_active ? 'active' : 'inactive';
     const selectedClass = item.id === selectedHistoryId ? 'selected' : '';
 
     const entryPriceBadge = item.entry_price ? `<span class="entry-price-badge">진입가: ${formatNumber(item.entry_price)}</span>` : '';
+
+    const stageName = getStageDisplayName(displayStage).replace(' 비중 축소', '').replace('보유 유지', '보유');
+
+    // ADX 표시
+    const adxDisplay = item.adx !== null && item.adx !== undefined ? Number(item.adx).toFixed(1) : '-';
+    const adxBadge = item.is_strong_uptrend ? '↑' : (item.adx > 25 ? '↓' : '');
 
     return `<tr class="${selectedClass}" onclick="showHistoryDetail(${item.id})">
       <td>
@@ -625,7 +1478,8 @@ const renderHistoryTable = () => {
       <td><strong>${item.symbol}</strong>${entryPriceBadge}</td>
       <td>${item.name || '-'}</td>
       <td>${formatNumber(item.current_price)}</td>
-      <td><span class="phase-badge ${phaseClass}" style="font-size: 11px; padding: 4px 8px;">${getPhaseDisplayName(item.sell_phase, item.sell_phase_name)}</span></td>
+      <td><span class="stage-badge ${stageClass}" style="font-size: 11px; padding: 4px 8px;">${stageName}</span></td>
+      <td>${adxDisplay} ${adxBadge}</td>
       <td>${Number(item.stoch_k).toFixed(1)}</td>
       <td>${Number(item.rsi).toFixed(1)}</td>
       <td>${formatTime(item.analyzed_at)}</td>
@@ -637,8 +1491,37 @@ const renderHistoryTable = () => {
   }).join('');
 };
 
-// 페이지 로드 시 히스토리 로드
-document.addEventListener('DOMContentLoaded', loadHistory);
+// 페이지 로드 시 히스토리 로드 및 마지막 분석 결과 표시
+document.addEventListener('DOMContentLoaded', () => {
+  // localStorage에서 마지막 분석 결과 로드
+  const cached = loadLastAnalysis();
+  if (cached?.data) {
+    displayResult({
+      ...cached.data,
+      sell_reasons: normalizeSellReasons(cached.data)
+    });
+    updateLastAnalysisLabel(cached.data, cached.isStale);
+    document.getElementById("result_section").style.display = "block";
+  } else {
+    // 저장된 결과 없음 - 안내 메시지 표시
+    document.getElementById("result_section").style.display = "block";
+    document.getElementById("result_container").innerHTML = `
+      <div class="placeholder-message">
+        종목 코드를 입력하고 <strong>매도 시그널 분석</strong> 버튼을 클릭하세요.<br>
+        <small style="color: #94a3b8; margin-top: 8px; display: block;">분석 결과는 자동으로 저장되어 다음 방문 시에도 표시됩니다.</small>
+      </div>
+    `;
+  }
+
+  // localStorage에서 마지막 갱신 정보 로드
+  const cachedRefresh = loadLastRefresh();
+  if (cachedRefresh?.data) {
+    updateLastRefreshLabel(cachedRefresh.data, cachedRefresh.isStale);
+  }
+
+  loadHistory();
+  loadPortfolioCashPlan();
+});
 
 // Enter 키로 분석 실행
 document.getElementById("symbol_input").addEventListener("keypress", (e) => {
@@ -697,6 +1580,7 @@ const saveHistoryEdit = async () => {
       if (idx >= 0) {
         analysisHistory[idx] = result.data;
         renderHistoryTable();
+        loadPortfolioCashPlan();
       }
       closeEditModal();
       alert('수정되었습니다.');

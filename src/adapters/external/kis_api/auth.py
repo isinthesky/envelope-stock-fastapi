@@ -42,6 +42,23 @@ class TokenInfo:
         return max(0, int(delta.total_seconds()))
 
 
+def format_token_expires_in(token_info: TokenInfo | None) -> str:
+    """토큰 만료까지 남은 시간을 로그 출력용 문자열로 포맷."""
+    if token_info is None:
+        return "unknown"
+
+    remaining_seconds = getattr(token_info, "remaining_seconds", None)
+    if remaining_seconds is None:
+        return "unknown"
+
+    try:
+        remaining = int(remaining_seconds)
+    except (TypeError, ValueError):
+        return "unknown"
+
+    return f"{max(0, remaining)}s"
+
+
 class KISAuth:
     """
     KIS API 인증 관리 클래스
@@ -61,6 +78,9 @@ class KISAuth:
         # 커넥션 풀링을 위한 공유 httpx.AsyncClient
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
+
+        # 토큰 재발급 동시성 제어(동일 프로세스 내)
+        self._token_refresh_lock = asyncio.Lock()
 
     async def _get_client(self) -> httpx.AsyncClient:
         """
@@ -111,24 +131,30 @@ class KISAuth:
             raise RuntimeError("Failed to obtain access token")
 
         return self.token_info.access_token
-
     async def refresh_token(self) -> TokenInfo:
         """
         토큰 갱신 (저장된 토큰 확인 후 재발급)
 
+        동시 요청(예: universe refresh에서 다수 코루틴)이 몰릴 때,
+        토큰이 없거나 만료된 순간에 여러 번 발급되는 것을 방지하기 위해
+        단일 프로세스 내에서 lock으로 보호합니다.
+
         Returns:
             TokenInfo: 갱신된 토큰 정보
         """
-        # 1. 저장된 토큰 확인
-        saved_token = await self._load_token_from_file()
-        if saved_token and saved_token.is_valid:
-            self.token_info = saved_token
-            return saved_token
+        async with self._token_refresh_lock:
+            # 1. 저장된 토큰 확인 (다른 코루틴이 먼저 발급했을 수 있으니 lock 내부에서 재확인)
+            saved_token = await self._load_token_from_file()
+            if saved_token and saved_token.is_valid:
+                self.token_info = saved_token
+                return saved_token
 
-        # 2. 새 토큰 발급
-        self.token_info = await self._request_new_token()
-        await self._save_token_to_file(self.token_info)
-        return self.token_info
+            # 2. 새 토큰 발급
+            self.token_info = await self._request_new_token()
+            await self._save_token_to_file(self.token_info)
+            return self.token_info
+
+
 
     async def _request_new_token(self) -> TokenInfo:
         """
@@ -207,10 +233,18 @@ class KISAuth:
         if data is None or "token" not in data or "valid-date" not in data:
             return None
 
+        expires_at = data["valid-date"]
+        # yaml timestamp가 datetime으로 파싱되지 않는 환경을 대비
+        if isinstance(expires_at, str):
+            try:
+                expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return None
+
         token_info = TokenInfo(
             access_token=data["token"],
             token_type="Bearer",
-            expires_at=data["valid-date"],
+            expires_at=expires_at,
         )
 
         # 만료된 토큰은 None 반환

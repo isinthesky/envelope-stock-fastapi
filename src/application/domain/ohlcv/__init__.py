@@ -19,7 +19,6 @@ from src.application.domain.ohlcv.dto import (
     WarmupResultDTO,
 )
 from src.application.domain.ohlcv.scheduler import OHLCVCacheScheduler, get_ohlcv_scheduler
-from src.application.domain.ohlcv.statistics_service import OHLCVStatisticsService
 from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
 
 __all__ = [
@@ -36,7 +35,6 @@ __all__ = [
     "ApiCallEstimateDTO",
     # Services
     "OHLCVCacheManager",
-    "OHLCVStatisticsService",
     "OHLCVWarmupService",
     # Scheduler
     "OHLCVCacheScheduler",

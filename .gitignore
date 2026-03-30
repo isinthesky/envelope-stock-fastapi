@@ -25,6 +25,7 @@ venv/
 env/
 ENV/
 .venv
+.venv.remote*
 
 # IDE
 .vscode/
@@ -83,6 +84,11 @@ token_*
 # Temp files
 *.tmp
 *.bak
+*.bak-*
+*.orig
+*.rej
+_patches/
+.omx/
 *.swp
 *~
 
@@ -105,3 +111,8 @@ uv.lock
 
 # Claude Code local config
 CLAUDE.local.md
+# Attic cleanup (local scratch)
+_attic/cleanup_*/
+
+# Claude local skills (machine-specific)
+.claude/skills/

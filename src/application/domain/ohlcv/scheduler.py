@@ -5,18 +5,23 @@ OHLCV Cache Scheduler - OHLCV 캐시 정기 작업 스케줄러
 매일 정해진 시간에 오래된 데이터 정리 및 증분 업데이트 수행
 """
 
+import asyncio
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from src.adapters.database.connection import get_async_session
+from src.adapters.database.connection import AsyncSessionLocal, get_async_session
 from src.application.domain.ohlcv.cache_manager import OHLCVCacheManager
 from src.application.domain.ohlcv.dto import CacheRetentionPolicyDTO
-from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
+from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService, previous_trading_day_kst
+from src.adapters.database.repositories.stock_universe_repository import StockUniverseRepository
 
 logger = logging.getLogger(__name__)
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 class OHLCVCacheScheduler:
@@ -48,9 +53,24 @@ class OHLCVCacheScheduler:
         # 매일 새벽 2시: 오래된 데이터 정리
         self._scheduler.add_job(
             self._cleanup_job,
-            trigger=CronTrigger(hour=2, minute=0),
+            trigger=CronTrigger(hour=2, minute=0, timezone="Asia/Seoul"),
             id="ohlcv_cleanup",
             name="OHLCV Cache Cleanup",
+            replace_existing=True,
+        )
+
+        # 매일 오전 8시: (거래일 기준) 어제까지 OHLCV 캐시 워밍업
+        # - 주말/휴일은 직전 거래일로 자동 보정
+        # - 전체 기간 재호출이 아니라 누락된 최신 구간만 호출
+        self._scheduler.add_job(
+            self._warmup_until_yesterday_job,
+            trigger=CronTrigger(
+                hour=8,
+                minute=0,
+                timezone="Asia/Seoul",
+            ),
+            id="ohlcv_warmup_until_yesterday",
+            name="OHLCV Morning Warmup (until yesterday)",
             replace_existing=True,
         )
 
@@ -63,6 +83,7 @@ class OHLCVCacheScheduler:
                 day_of_week="mon-fri",
                 hour=16,
                 minute=0,
+                timezone="Asia/Seoul",
             ),
             id="ohlcv_update",
             name="OHLCV Incremental Update",
@@ -72,7 +93,7 @@ class OHLCVCacheScheduler:
         self._scheduler.start()
         self._is_running = True
 
-        logger.info("[OHLCVScheduler] Started (cleanup: 02:00, update: 16:00 weekdays)")
+        logger.info("[OHLCVScheduler] Started (cleanup: 02:00 daily, warmup: 08:00 daily, update: 16:00 weekdays)")
 
     async def stop(self) -> None:
         """스케줄러 중지"""
@@ -84,6 +105,102 @@ class OHLCVCacheScheduler:
         self._is_running = False
 
         logger.info("[OHLCVScheduler] Stopped")
+
+
+    async def _warmup_until_yesterday_job(self) -> None:
+        # (거래일 기준) 어제까지 OHLCV 캐시 워밍업
+        # - 매일 08:00
+        # - 주말/휴일 포함하여 직전 거래일까지(대개 어제, 월요일이면 지난 금요일)
+        # - 전체 기간 재호출이 아니라 누락된 최신 구간만 호출
+        logger.info("[OHLCVScheduler] Starting morning warmup job (until yesterday)...")
+
+        try:
+            # NOTE: 서버/컨테이너 TZ가 KST가 아닐 수도 있으므로 명시적으로 KST 기준 날짜를 사용한다.
+            today_kst = datetime.now(KST).date()
+            end_date = previous_trading_day_kst(today_kst)
+
+            # 스캔 대상 유니버스(최대 500) 심볼 목록 확보
+            async with get_async_session() as session:
+                universe_repo = StockUniverseRepository(session)
+                stocks = await universe_repo.get_scan_stocks(
+                    market=None,
+                    include_etf=True,
+                    limit=500,
+                    session=session,
+                )
+                symbols = list({s.symbol for s in stocks if getattr(s, "symbol", None)})
+
+            if not symbols:
+                logger.info("[OHLCVScheduler] Morning warmup skipped: no symbols")
+                return
+
+            # 세션을 워커마다 분리 (AsyncSession 동시 사용 방지)
+            concurrency = 3
+            semaphore = asyncio.Semaphore(concurrency)
+            work_queue: asyncio.Queue[str] = asyncio.Queue()
+            for sym in symbols:
+                work_queue.put_nowait(sym)
+
+            async def worker() -> tuple[int, int, int, int]:
+                w_saved = 0
+                w_calls = 0
+                w_success = 0
+                w_failed = 0
+
+                async with AsyncSessionLocal() as worker_session:
+                    service = OHLCVWarmupService(worker_session)
+
+                    while True:
+                        try:
+                            sym = work_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+
+                        async with semaphore:
+                            try:
+                                saved, calls = await service.warmup_symbol_until(
+                                    symbol=sym,
+                                    end_date=end_date,
+                                    interval="1d",
+                                    days_if_empty=450,
+                                )
+                                w_saved += saved
+                                w_calls += calls
+                                w_success += 1
+                            except Exception as e:
+                                logger.warning(f"[OHLCVScheduler] Warmup failed {sym}: {e}")
+                                w_failed += 1
+                            finally:
+                                work_queue.task_done()
+
+                return w_saved, w_calls, w_success, w_failed
+
+            workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
+            results = await asyncio.gather(*workers, return_exceptions=True)
+
+            total_saved = 0
+            total_calls = 0
+            success = 0
+            failed = 0
+
+            for r in results:
+                if isinstance(r, Exception):
+                    failed += 1
+                    continue
+                w_saved, w_calls, w_success, w_failed = r
+                total_saved += w_saved
+                total_calls += w_calls
+                success += w_success
+                failed += w_failed
+
+            logger.info(
+                "[OHLCVScheduler] Morning warmup completed: "
+                f"symbols={len(symbols)}, success={success}, failed={failed}, "
+                f"saved={total_saved}, api_calls={total_calls}, end_date={end_date}"
+            )
+
+        except Exception as e:
+            logger.error(f"[OHLCVScheduler] Morning warmup job failed: {e}", exc_info=True)
 
     async def _cleanup_job(self) -> None:
         """오래된 데이터 정리 작업"""

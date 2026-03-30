@@ -10,7 +10,6 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from src.settings.config import settings
 
@@ -25,7 +24,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     from src.adapters.cache.redis_client import get_redis_client
     from src.adapters.database.connection import close_db, engine
-    from src.adapters.external.kis_api.auth import get_kis_auth
+    from src.adapters.external.kis_api.auth import format_token_expires_in, get_kis_auth
     from src.adapters.external.kis_api.client import get_kis_client
 
     # Startup
@@ -69,8 +68,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             from src.application.common.background_tasks import get_token_refresh_task
 
             kis_auth = get_kis_auth()
-            token = await kis_auth.get_access_token()
-            print(f"✅ KIS API token issued (expires in {kis_auth.token_info.remaining_seconds}s)")
+            await kis_auth.get_access_token()
+            expires_in = format_token_expires_in(kis_auth.token_info)
+            print(f"✅ KIS API token issued (expires in {expires_in})")
 
             # 토큰 자동 갱신 백그라운드 태스크 시작
             token_refresh_task = get_token_refresh_task()
@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         notification_scheduler = get_notification_scheduler()
         await notification_scheduler.start()
         if settings.telegram_enabled:
-            print("✅ Telegram notification scheduler started (15:00 Buy, 09:10 Sell)")
+            print("✅ Telegram notification scheduler started (Data: 09:07/14:57, Alert: 09:10/15:00)")
         else:
             print("⏭️  Telegram notification is disabled")
     except Exception as e:
@@ -208,11 +208,19 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="한국투자증권 Open API 기반 자동매매 서비스",
-    docs_url="/docs" if not settings.is_production else None,
-    redoc_url="/redoc" if not settings.is_production else None,
-    openapi_url="/openapi.json" if not settings.is_production else None,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
     lifespan=lifespan,
 )
+
+# Static files (CSS)
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+app.mount("/static/styles", StaticFiles(directory=str(BASE_DIR / "static" / "styles")), name="styles")
+app.mount("/static/js", StaticFiles(directory=str(BASE_DIR / "static" / "js")), name="js")
 
 # CORS 미들웨어 추가
 app.add_middleware(
@@ -222,6 +230,10 @@ app.add_middleware(
     allow_methods=settings.cors_allow_methods,
     allow_headers=settings.cors_allow_headers,
 )
+
+# 접근 로깅 미들웨어 추가 (/page/ 경로 외부 접근 기록)
+from src.application.common.middleware import AccessLoggingMiddleware
+app.add_middleware(AccessLoggingMiddleware)
 
 
 # ==================== Root Endpoint ====================
@@ -253,29 +265,25 @@ async def health_check() -> dict[str, str]:
 
 # ==================== Error Handlers ====================
 
+from src.settings.exception_handlers import register_exception_handlers
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc: Exception) -> JSONResponse:
-    """전역 예외 핸들러"""
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal Server Error",
-            "detail": str(exc) if settings.debug else "An unexpected error occurred",
-        },
-    )
+register_exception_handlers(app)
 
 
 # ==================== Router 등록 ====================
 
+from src.application.interface.api.access_log_router import router as access_log_router
 from src.application.interface.api.account_router import router as account_router
 from src.application.interface.api.auth_router import router as auth_router
 from src.application.interface.api.backtest_router import router as backtest_router
 from src.application.interface.api.market_data_router import router as market_data_router
-from src.application.interface.api.ohlcv_router import router as ohlcv_router
+# from src.application.interface.api.ohlcv_router import router as ohlcv_router  # TODO: apscheduler 의존성 필요
 from src.application.interface.api.order_router import router as order_router
 from src.application.interface.api.screener_router import router as screener_router
-from src.application.interface.api.strategy_router import router as strategy_router
+from src.application.interface.api.strategy_router import (
+    router as strategy_router,
+    admin_router as strategy_admin_router,
+)
 from src.application.interface.api.websocket_router import router as websocket_router
 from src.application.interface.page import page_routers
 
@@ -284,9 +292,19 @@ app.include_router(market_data_router, prefix="/api/v1/market", tags=["MarketDat
 app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
 app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
 app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
-app.include_router(ohlcv_router, prefix="/api/v1/ohlcv", tags=["OHLCV Cache"])
+
+# 전략 생성/수정/삭제 같은 관리자 전용 라우트는 기본 비활성(완전 비노출)
+if settings.enable_admin_strategy_routes:
+    app.include_router(
+        strategy_admin_router,
+        prefix="/api/v1/strategies",
+        tags=["Strategy(Admin)"],
+    )
+
+# app.include_router(ohlcv_router, prefix="/api/v1/ohlcv", tags=["OHLCV Cache"])  # TODO: apscheduler 의존성 필요
 app.include_router(screener_router)  # 내부 prefix: /api/v1/screener
 app.include_router(backtest_router)  # 내부 prefix: /api/v1/backtest
+app.include_router(access_log_router)  # 내부 prefix: /api/v1/access-logs
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 
 # Page routers (각 라우터는 자체 prefix 포함)
