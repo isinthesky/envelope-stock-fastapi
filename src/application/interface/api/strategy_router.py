@@ -18,6 +18,7 @@ from src.application.common.exceptions import ServiceUnavailableError
 from src.adapters.external.telegram import get_telegram_notifier
 
 from src.application.common.dependencies import (
+    AdminAccessDep,
     BuyStrategyServiceDep,
     MarketDataServiceDep,
     StrategyServiceDep,
@@ -35,6 +36,7 @@ from src.application.domain.strategy.dto import (
     GoldenCrossScanListDTO,
     GoldenCrossRecommendationDTO,
     MA5BreakoutScanListDTO,
+    PortfolioCashPlanDTO,
     PresetActivateRequestDTO,
     SellSignalAnalysisDTO,
     SignalListDTO,
@@ -52,23 +54,27 @@ from src.application.domain.strategy.dto import (
 )
 
 router = APIRouter()
+admin_router = APIRouter()
 
 
 # ==================== 정적 경로 (동적 경로보다 먼저 정의) ====================
 
 
-@router.post(
+@admin_router.post(
     "",
     response_model=ResponseDTO[StrategyDetailResponseDTO],
     status_code=status.HTTP_201_CREATED,
     summary="전략 생성",
     description="새로운 자동매매 전략 생성",
+    include_in_schema=False,  # 완전 비노출(문서/Swagger 숨김)
 )
 async def create_strategy(
     request: StrategyCreateRequestDTO,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 생성 - @transaction이 세션을 관리"""
+    _ = admin_access
     strategy_data = await service.create_strategy(request)
     return ResponseDTO.success_response(strategy_data, "Strategy created successfully")
 
@@ -575,6 +581,25 @@ async def refresh_analysis_history(
     return ResponseDTO.success_response(result, "Analysis history refresh completed")
 
 
+@router.get(
+    "/portfolio-cash-plan",
+    response_model=ResponseDTO[PortfolioCashPlanDTO],
+    status_code=status.HTTP_200_OK,
+    summary="포트폴리오 사전 현금화 계획",
+    description="활성 매도 분석 이력을 바탕으로 고점 경고 시 선제 현금화 계획을 생성",
+)
+async def get_portfolio_cash_plan(
+    service: StrategyServiceDep,
+    target_cash_ratio: float = Query(default=0.30, ge=0.0, le=1.0, description="목표 현금 비중"),
+    current_cash_ratio: float | None = Query(default=None, ge=0.0, le=1.0, description="현재 현금 비중"),
+) -> ResponseDTO[PortfolioCashPlanDTO]:
+    result = await service.get_portfolio_cash_plan(
+        target_cash_ratio=target_cash_ratio,
+        current_cash_ratio=current_cash_ratio,
+    )
+    return ResponseDTO.success_response(result, "Portfolio cash plan generated")
+
+
 @router.patch(
     "/analysis-history/{history_id}/active",
     response_model=ResponseDTO[AnalysisHistoryDTO],
@@ -701,34 +726,40 @@ async def get_strategy(
     return ResponseDTO.success_response(strategy_data, "Strategy retrieved successfully")
 
 
-@router.patch(
+@admin_router.patch(
     "/{strategy_id}",
     response_model=ResponseDTO[StrategyDetailResponseDTO],
     status_code=status.HTTP_200_OK,
     summary="전략 수정",
     description="전략 정보 수정",
+    include_in_schema=False,  # 완전 비노출(문서/Swagger 숨김)
 )
 async def update_strategy(
     strategy_id: int,
     request: StrategyUpdateRequestDTO,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 수정 - @transaction이 세션을 관리"""
+    _ = admin_access
     strategy_data = await service.update_strategy(strategy_id, request)
     return ResponseDTO.success_response(strategy_data, "Strategy updated successfully")
 
 
-@router.delete(
+@admin_router.delete(
     "/{strategy_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="전략 삭제",
     description="전략 삭제 (Soft Delete)",
+    include_in_schema=False,  # 완전 비노출(문서/Swagger 숨김)
 )
 async def delete_strategy(
     strategy_id: int,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep,
 ) -> None:
     """전략 삭제 - @transaction이 세션을 관리"""
+    _ = admin_access
     await service.delete_strategy(strategy_id)
 
 

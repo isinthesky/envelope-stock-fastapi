@@ -1040,3 +1040,31 @@ class AnalysisHistoryRefreshResultDTO(BaseDTO):
     updated_count: int = Field(description="갱신된 항목 수")
     items: list[AnalysisHistoryDTO] = Field(description="갱신된 분석 이력 목록")
     errors: list[str] = Field(default_factory=list, description="오류 메시지")
+
+
+class PortfolioCashActionDTO(BaseDTO):
+    """포트폴리오 사전 현금화 액션 항목"""
+
+    symbol: str = Field(description="종목코드")
+    name: str | None = Field(default=None, description="종목명")
+    priority: int = Field(description="우선순위 (1이 가장 높음)")
+    action: str = Field(description="권장 행동")
+    sell_stage: str = Field(description="매도 단계")
+    suggested_sell_ratio: float = Field(description="권장 매도 비중", ge=0.0, le=1.0)
+    urgency_score: float = Field(description="긴급도 점수", ge=0.0)
+    reasons: list[str] = Field(default_factory=list, description="판단 근거")
+    note: str | None = Field(default=None, description="보조 메모")
+
+
+class PortfolioCashPlanDTO(BaseDTO):
+    """포트폴리오 사전 현금화 계획 DTO"""
+
+    analyzed_at: datetime = Field(description="계획 산출 시각")
+    active_sell_count: int = Field(description="활성 추적 매도 분석 종목 수")
+    target_cash_ratio: float = Field(description="목표 현금 비중", ge=0.0, le=1.0)
+    current_cash_ratio: float | None = Field(default=None, description="현재 현금 비중", ge=0.0, le=1.0)
+    market_heat_level: str = Field(description="시장 과열 단계")
+    market_risk_score: float = Field(description="포트폴리오 위험 점수", ge=0.0)
+    portfolio_action: str = Field(description="포트폴리오 전체 권장 행동")
+    summary: list[str] = Field(default_factory=list, description="요약 메시지")
+    actions: list[PortfolioCashActionDTO] = Field(default_factory=list, description="종목별 권장 액션")
