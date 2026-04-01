@@ -24,6 +24,7 @@ from src.adapters.external.telegram import get_telegram_notifier
 from src.application.common.dependencies import (
     AdminAccessDep,
     BuyStrategyServiceDep,
+    DatabaseSession,
     MarketDataServiceDep,
     StrategyServiceDep,
     StrategySymbolStateRepositoryDep,
@@ -56,6 +57,8 @@ from src.application.domain.strategy.dto import (
     StrategyUpdateRequestDTO,
     SymbolStateListDTO,
 )
+from src.application.domain.strategy.sell_risk_backfill_service import SellRiskBackfillService
+from src.application.domain.strategy.sell_rule_research_service import SellPeakRuleResearchService
 
 router = APIRouter()
 admin_router = APIRouter()
@@ -783,6 +786,74 @@ async def refresh_personal_flow_cache(
     _ = admin_access
     result = await get_naver_stock_client().refresh_personal_flow_cache(symbol)
     return ResponseDTO.success_response(result, "Personal flow cache refreshed")
+
+
+@admin_router.post(
+    "/cache/market-credit/backfill",
+    response_model=ResponseDTO[dict],
+    status_code=status.HTTP_200_OK,
+    summary="시장 신용 2년 백필",
+    include_in_schema=False,
+)
+async def backfill_market_credit_cache(
+    admin_access: AdminAccessDep,
+    years: int = Query(default=2, ge=1, le=5, description="백필 연수"),
+    end_date: str | None = Query(default=None, description="종료일 YYYYMMDD"),
+) -> ResponseDTO[dict]:
+    _ = admin_access
+    service = SellRiskBackfillService()
+    result = await service.backfill_market_credit(years=years, end_date=end_date)
+    return ResponseDTO.success_response(result, "Market credit cache backfilled")
+
+
+@admin_router.post(
+    "/cache/personal-flow/backfill",
+    response_model=ResponseDTO[dict],
+    status_code=status.HTTP_200_OK,
+    summary="개인 수급 2년 백필",
+    include_in_schema=False,
+)
+async def backfill_personal_flow_cache(
+    admin_access: AdminAccessDep,
+    session: DatabaseSession,
+    years: int = Query(default=2, ge=1, le=5, description="백필 연수"),
+    symbols: str | None = Query(default=None, description="쉼표 구분 종목코드 목록"),
+    end_date: str | None = Query(default=None, description="종료일 YYYYMMDD"),
+) -> ResponseDTO[dict]:
+    _ = admin_access
+    backfill_service = SellRiskBackfillService(session=session)
+    symbol_list = [symbol.strip() for symbol in symbols.split(",")] if symbols else None
+    result = await backfill_service.backfill_personal_flow(
+        symbols=symbol_list,
+        years=years,
+        end_date=end_date,
+    )
+    return ResponseDTO.success_response(result, "Personal flow cache backfilled")
+
+
+@admin_router.get(
+    "/sell-rules/research",
+    response_model=ResponseDTO[dict],
+    status_code=status.HTTP_200_OK,
+    summary="매도 피크 규칙 리서치",
+    include_in_schema=False,
+)
+async def research_sell_rules(
+    admin_access: AdminAccessDep,
+    session: DatabaseSession,
+    symbols: str | None = Query(default=None, description="쉼표 구분 종목코드 목록"),
+    start_date: str | None = Query(default=None, description="시작일 YYYYMMDD"),
+    end_date: str | None = Query(default=None, description="종료일 YYYYMMDD"),
+) -> ResponseDTO[dict]:
+    _ = admin_access
+    research_service = SellPeakRuleResearchService(session)
+    symbol_list = [symbol.strip() for symbol in symbols.split(",")] if symbols else None
+    result = await research_service.research_top_signal_rules(
+        symbols=symbol_list,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return ResponseDTO.success_response(result, "Sell rule research completed")
 
 
 # ==================== 동적 경로 (/{strategy_id}) ====================

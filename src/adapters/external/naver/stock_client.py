@@ -7,6 +7,7 @@ Naver Stock API Client
 
 import asyncio
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -56,6 +57,7 @@ class NaverStockClient:
     """
 
     PERSONAL_FLOW_CACHE_ROWS = 5
+    PERSONAL_FLOW_BACKFILL_SIZE = 600
 
     BASE_URL = "https://m.stock.naver.com/api/stock"
 
@@ -123,6 +125,28 @@ class NaverStockClient:
         """
         url = f"{self.BASE_URL}/{symbol}/finance/annual"
         return await self._get(url)
+
+    async def get_personal_flow_trend_list(
+        self,
+        symbol: str,
+        size: int = PERSONAL_FLOW_BACKFILL_SIZE,
+    ) -> list[dict[str, Any]]:
+        """
+        개인 수급 추이 조회.
+
+        Naver 모바일 웹의 비공식 trend endpoint를 사용한다.
+        """
+        url = f"{self.BASE_URL}/{symbol}/investor/trend?size={size}"
+        data = await self._get(url)
+
+        for key in ("dealTrendInfos", "trendList", "items", "result"):
+            rows = data.get(key)
+            if isinstance(rows, list):
+                return rows
+
+        if isinstance(data, list):
+            return data
+        return []
 
     async def get_stock_financial_data(self, symbol: str) -> StockFinancialData | None:
         """
@@ -241,35 +265,52 @@ class NaverStockClient:
                 for row in rows
             ]
 
-    async def _fetch_and_cache_personal_flow(self, symbol: str) -> list[dict[str, Any]]:
-        integration_data = await self.get_integration(symbol)
-        deal_trend_infos = integration_data.get("dealTrendInfos", [])
-        if not deal_trend_infos:
-            return []
+    @staticmethod
+    def _parse_int(value: Any) -> int | None:
+        if value in (None, "", "-"):
+            return None
+        try:
+            return int(str(value).replace(",", "").replace("+", ""))
+        except ValueError:
+            return None
 
-        def parse_int(value: Any) -> int | None:
-            if value in (None, "", "-"):
-                return None
-            try:
-                return int(str(value).replace(",", "").replace("+", ""))
-            except ValueError:
-                return None
+    async def _fetch_and_cache_personal_flow(
+        self,
+        symbol: str,
+        size: int | None = None,
+    ) -> list[dict[str, Any]]:
+        try:
+            trend_rows = await self.get_personal_flow_trend_list(
+                symbol,
+                size=size or self.PERSONAL_FLOW_BACKFILL_SIZE,
+            )
+        except Exception:
+            trend_rows = []
+        if not trend_rows:
+            integration_data = await self.get_integration(symbol)
+            trend_rows = integration_data.get("dealTrendInfos", [])
+        if not trend_rows:
+            return []
 
         async with get_async_session() as session:
             repo = PersonalFlowSnapshotRepository(session)
-            for row in deal_trend_infos[: self.PERSONAL_FLOW_CACHE_ROWS]:
-                biz_date = row.get("bizdate")
+            for row in trend_rows:
+                biz_date = row.get("bizdate") or row.get("bizDate") or row.get("date")
                 if not biz_date:
                     continue
                 await repo.upsert_snapshot(
                     symbol=symbol,
                     biz_date=str(biz_date),
-                    individual_net_buy=parse_int(row.get("individualPureBuyQuant")),
-                    close_price=parse_int(row.get("closePrice")),
-                    trading_volume=parse_int(row.get("accumulatedTradingVolume")),
+                    individual_net_buy=self._parse_int(
+                        row.get("individualPureBuyQuant") or row.get("personalPureBuyQuant")
+                    ),
+                    close_price=self._parse_int(row.get("closePrice") or row.get("close")),
+                    trading_volume=self._parse_int(
+                        row.get("accumulatedTradingVolume") or row.get("tradingVolume")
+                    ),
                     session=session,
                 )
-        return deal_trend_infos[: self.PERSONAL_FLOW_CACHE_ROWS]
+        return trend_rows
 
     async def get_personal_flow_data(self, symbol: str) -> StockPersonalFlowData | None:
         """개인 수급 과열 판단용 최근 수급 데이터 조회 (DB 캐시 우선)"""
@@ -284,26 +325,20 @@ class NaverStockClient:
             if not rows:
                 return None
 
-            def parse_int(value: Any) -> int | None:
-                if value in (None, "", "-"):
-                    return None
-                try:
-                    return int(str(value).replace(",", "").replace("+", ""))
-                except ValueError:
-                    return None
-
             rows = rows[: self.PERSONAL_FLOW_CACHE_ROWS]
             latest = rows[0]
-            latest_volume = parse_int(latest.get("accumulatedTradingVolume"))
+            latest_volume = self._parse_int(latest.get("accumulatedTradingVolume"))
             recent_3d_net_buy = sum(
-                parse_int(row.get("individualPureBuyQuant")) or 0 for row in rows[:3]
+                self._parse_int(row.get("individualPureBuyQuant")) or 0 for row in rows[:3]
             )
             recent_5d_net_buy = sum(
-                parse_int(row.get("individualPureBuyQuant")) or 0
+                self._parse_int(row.get("individualPureBuyQuant")) or 0
                 for row in rows[: self.PERSONAL_FLOW_CACHE_ROWS]
             )
             positive_days = sum(
-                1 for row in rows if (parse_int(row.get("individualPureBuyQuant")) or 0) > 0
+                1
+                for row in rows
+                if (self._parse_int(row.get("individualPureBuyQuant")) or 0) > 0
             )
             buy_ratio = None
             if latest_volume and latest_volume > 0 and recent_5d_net_buy > 0:
@@ -312,8 +347,8 @@ class NaverStockClient:
             return StockPersonalFlowData(
                 symbol=symbol,
                 latest_date=latest.get("bizdate"),
-                latest_individual_net_buy=parse_int(latest.get("individualPureBuyQuant")),
-                latest_close_price=parse_int(latest.get("closePrice")),
+                latest_individual_net_buy=self._parse_int(latest.get("individualPureBuyQuant")),
+                latest_close_price=self._parse_int(latest.get("closePrice")),
                 latest_volume=latest_volume,
                 days_positive_count=positive_days,
                 recent_3d_net_buy=recent_3d_net_buy,
@@ -324,8 +359,36 @@ class NaverStockClient:
             return None
 
     async def refresh_personal_flow_cache(self, symbol: str) -> dict[str, Any]:
-        rows = await self._fetch_and_cache_personal_flow(symbol)
+        rows = await self._fetch_and_cache_personal_flow(symbol, size=self.PERSONAL_FLOW_CACHE_ROWS)
         return {"symbol": symbol, "rows": len(rows)}
+
+    async def backfill_personal_flow_cache(
+        self,
+        symbol: str,
+        years: int = 2,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_end = end_date or date.today().strftime("%Y%m%d")
+        start = datetime.strptime(resolved_end, "%Y%m%d").date() - timedelta(days=365 * years)
+        resolved_start = start.strftime("%Y%m%d")
+        rows = await self._fetch_and_cache_personal_flow(
+            symbol,
+            size=max(self.PERSONAL_FLOW_BACKFILL_SIZE, years * 260),
+        )
+        in_range_rows = [
+            row
+            for row in rows
+            if resolved_start
+            <= str(row.get("bizdate") or row.get("bizDate") or row.get("date") or "")
+            <= resolved_end
+        ]
+        return {
+            "symbol": symbol,
+            "start_date": resolved_start,
+            "end_date": resolved_end,
+            "years": years,
+            "rows": len(in_range_rows),
+        }
 
     def _extract_latest_value(
         self, row_list: list[dict], title: str

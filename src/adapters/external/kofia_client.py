@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -40,6 +41,7 @@ class KofiaClient:
 
     MARKET_LABELS: tuple[str, ...] = ("전체", "유가증권", "코스닥")
     CACHE_MIN_ROWS = 2
+    BACKFILL_CHUNK_DAYS = 180
 
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
@@ -81,7 +83,7 @@ class KofiaClient:
         self,
         start_date: str,
         end_date: str,
-    ) -> dict[str, list[dict[str, Any]]]:
+    ) -> dict[str, int]:
         payload = {
             "dmSearch": {
                 "OBJ_NM": "STATSCU0100000140BO",
@@ -120,7 +122,25 @@ class KofiaClient:
                         short_balance_million=self._to_int(row.get("TMPV6")),
                         session=session,
                     )
-        return grouped
+        return {label: len(label_rows) for label, label_rows in grouped.items()}
+
+    @staticmethod
+    def _iter_date_chunks(
+        start_date: str,
+        end_date: str,
+        chunk_days: int,
+    ) -> list[tuple[str, str]]:
+        start = datetime.strptime(start_date, "%Y%m%d").date()
+        end = datetime.strptime(end_date, "%Y%m%d").date()
+        chunks: list[tuple[str, str]] = []
+
+        current = start
+        while current <= end:
+            chunk_end = min(current + timedelta(days=chunk_days - 1), end)
+            chunks.append((current.strftime("%Y%m%d"), chunk_end.strftime("%Y%m%d")))
+            current = chunk_end + timedelta(days=1)
+
+        return chunks
 
     async def _load_recent_rows(self, market_label: str) -> list[dict[str, Any]]:
         async with get_async_session() as session:
@@ -149,7 +169,7 @@ class KofiaClient:
 
         if should_refresh:
             try:
-                await self._fetch_and_cache_snapshots(start_date, end_date)
+                await self.refresh_market_credit_cache(start_date, end_date)
             except Exception:
                 pass
             rows = await self._load_recent_rows(market_label)
@@ -214,8 +234,32 @@ class KofiaClient:
         start_date: str,
         end_date: str,
     ) -> dict[str, int]:
-        grouped = await self._fetch_and_cache_snapshots(start_date, end_date)
-        return {label: len(rows) for label, rows in grouped.items()}
+        totals: dict[str, int] = {}
+        for chunk_start, chunk_end in self._iter_date_chunks(
+            start_date=start_date,
+            end_date=end_date,
+            chunk_days=self.BACKFILL_CHUNK_DAYS,
+        ):
+            counts = await self._fetch_and_cache_snapshots(chunk_start, chunk_end)
+            for label, count in counts.items():
+                totals[label] = totals.get(label, 0) + count
+        return totals
+
+    async def backfill_market_credit_cache(
+        self,
+        years: int = 2,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_end = end_date or date.today().strftime("%Y%m%d")
+        start = datetime.strptime(resolved_end, "%Y%m%d").date() - timedelta(days=365 * years)
+        resolved_start = start.strftime("%Y%m%d")
+        counts = await self.refresh_market_credit_cache(resolved_start, resolved_end)
+        return {
+            "start_date": resolved_start,
+            "end_date": resolved_end,
+            "years": years,
+            "rows_by_market": counts,
+        }
 
     @staticmethod
     def _to_int(value: Any) -> int | None:

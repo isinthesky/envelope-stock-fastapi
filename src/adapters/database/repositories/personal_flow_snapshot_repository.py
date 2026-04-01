@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Personal flow snapshot repository"""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.personal_flow_snapshot import PersonalFlowSnapshotModel
@@ -27,6 +27,52 @@ class PersonalFlowSnapshotRepository(BaseRepository[PersonalFlowSnapshotModel]):
         )
         result = await db.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_latest_date_by_symbol(
+        self,
+        symbol: str,
+        session: AsyncSession | None = None,
+    ) -> str | None:
+        db = self._get_session(session)
+        stmt = select(func.max(self.model.biz_date)).where(self.model.symbol == symbol)
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_symbol_between(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        session: AsyncSession | None = None,
+    ) -> list[PersonalFlowSnapshotModel]:
+        db = self._get_session(session)
+        stmt = (
+            select(self.model)
+            .where(
+                self.model.symbol == symbol,
+                self.model.biz_date >= start_date,
+                self.model.biz_date <= end_date,
+            )
+            .order_by(self.model.biz_date.asc())
+        )
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_by_symbol_between(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        session: AsyncSession | None = None,
+    ) -> int:
+        db = self._get_session(session)
+        stmt = select(func.count()).select_from(self.model).where(
+            self.model.symbol == symbol,
+            self.model.biz_date >= start_date,
+            self.model.biz_date <= end_date,
+        )
+        result = await db.execute(stmt)
+        return int(result.scalar_one() or 0)
 
     async def upsert_snapshot(
         self,
