@@ -14,6 +14,11 @@ from typing import Any
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from src.adapters.database.connection import get_async_session
+from src.adapters.database.repositories.market_credit_snapshot_repository import (
+    MarketCreditSnapshotRepository,
+)
+
 
 @dataclass
 class MarketCreditTrendData:
@@ -32,6 +37,8 @@ class MarketCreditTrendData:
 
 class KofiaClient:
     BASE_URL = "https://freesis.kofia.or.kr/meta/getMetaDataList.do"
+
+    MARKET_LABELS: tuple[str, ...] = ("전체", "유가증권", "코스닥")
 
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
@@ -69,12 +76,11 @@ class KofiaClient:
             response.raise_for_status()
             return response.json()
 
-    async def get_market_credit_trend(
+    async def _fetch_and_cache_snapshots(
         self,
         start_date: str,
         end_date: str,
-        market_label: str = "전체",
-    ) -> MarketCreditTrendData | None:
+    ) -> dict[str, list[dict[str, Any]]]:
         payload = {
             "dmSearch": {
                 "OBJ_NM": "STATSCU0100000140BO",
@@ -87,12 +93,62 @@ class KofiaClient:
             }
         }
 
-        try:
-            data = await self._post_json(payload)
-        except Exception:
-            return None
-
+        data = await self._post_json(payload)
         rows = data.get("ds1") or []
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            label = row.get("TMPV2")
+            if not label:
+                continue
+            grouped.setdefault(label, []).append(row)
+
+        async with get_async_session() as session:
+            repo = MarketCreditSnapshotRepository(session)
+            for label, label_rows in grouped.items():
+                for row in label_rows:
+                    await repo.upsert_snapshot(
+                        market_label=label,
+                        biz_date=str(row.get("TMPV1")),
+                        trading_volume=self._to_int(row.get("TMPV3")),
+                        balance_million=self._to_int(row.get("TMPV5")),
+                        short_balance_million=self._to_int(row.get("TMPV6")),
+                        session=session,
+                    )
+        return grouped
+
+    async def _load_recent_rows(self, market_label: str) -> list[dict[str, Any]]:
+        async with get_async_session() as session:
+            repo = MarketCreditSnapshotRepository(session)
+            snapshots = await repo.get_recent_by_market(market_label=market_label, limit=5, session=session)
+            return [
+                {
+                    "TMPV1": snapshot.biz_date,
+                    "TMPV2": snapshot.market_label,
+                    "TMPV3": snapshot.trading_volume,
+                    "TMPV5": snapshot.balance_million,
+                    "TMPV6": snapshot.short_balance_million,
+                }
+                for snapshot in snapshots
+            ]
+
+    async def get_market_credit_trend(
+        self,
+        start_date: str,
+        end_date: str,
+        market_label: str = "전체",
+    ) -> MarketCreditTrendData | None:
+        rows = await self._load_recent_rows(market_label)
+        if len(rows) < 2:
+            try:
+                await self._fetch_and_cache_snapshots(start_date, end_date)
+            except Exception:
+                pass
+            rows = await self._load_recent_rows(market_label)
+            if len(rows) < 2 and market_label != "전체":
+                rows = await self._load_recent_rows("전체")
+                market_label = "전체"
+            if len(rows) < 2:
+                return None
         filtered_rows = [row for row in rows if row.get("TMPV2") == market_label]
         resolved_market_label = market_label
         if len(filtered_rows) < 2 and market_label != "전체":
