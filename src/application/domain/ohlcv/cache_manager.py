@@ -21,6 +21,9 @@ from src.application.domain.ohlcv.dto import (
 
 logger = logging.getLogger(__name__)
 
+# 하위 모듈(ohlcv_data_loader, warmup_service) 호환용 export
+KOREA_HOLIDAYS = get_trading_calendar().holidays
+
 
 class OHLCVCacheManager:
     """

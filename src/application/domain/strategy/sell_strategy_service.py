@@ -30,6 +30,7 @@ from src.application.domain.strategy.dto import (
     SellStageEnum,
 )
 from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
+from src.application.domain.strategy.sell_rule_research_service import SellPeakRuleResearchService
 from src.settings.sell_score_settings import SellScoreSettings
 from src.adapters.external.kofia_client import MarketCreditTrendData, get_kofia_client
 from src.adapters.external.naver.stock_client import StockPersonalFlowData, get_naver_stock_client
@@ -124,6 +125,32 @@ class SellStrategyService:
                 reasons.append(f"개인 매수 비중 확대 ({ratio * 100:.1f}% of 최근 거래량)")
 
         return len(reasons) >= 2, reasons
+
+    @staticmethod
+    def _upgrade_stage_for_overlay(
+        stage: SellStageEnum,
+        is_triggered: bool,
+        label: str,
+    ) -> tuple[SellStageEnum, list[str]]:
+        """오버레이 신호가 켜지면 Stage를 한 단계 강화한다."""
+        if not is_triggered:
+            return stage, []
+
+        stage_order = [
+            SellStageEnum.HOLD,
+            SellStageEnum.REDUCE_1,
+            SellStageEnum.REDUCE_2,
+            SellStageEnum.EXIT_ALL,
+        ]
+        current_index = stage_order.index(stage)
+        upgraded_stage = stage_order[min(current_index + 1, len(stage_order) - 1)]
+
+        if upgraded_stage == stage:
+            return stage, []
+
+        return upgraded_stage, [
+            f"{label}로 Stage 한 단계 강화 ({stage.value} → {upgraded_stage.value})"
+        ]
 
     async def _get_symbol_hints(
         self,
@@ -515,6 +542,23 @@ class SellStrategyService:
             market_credit_data and market_credit_data.is_overheated
         )
         market_credit_reasons = market_credit_data.reasons if market_credit_data else []
+        overlay_signals = SellPeakRuleResearchService.evaluate_peak_rule_inputs(
+            personal_buy_days_5d=(
+                personal_flow_data.days_positive_count if personal_flow_data else None
+            ),
+            personal_buy_ratio_5d_to_volume=(
+                personal_flow_data.recent_5d_buy_ratio_to_volume if personal_flow_data else None
+            ),
+            market_credit_change_ratio=(
+                market_credit_data.balance_change_ratio if market_credit_data else None
+            ),
+            market_credit_recent_high_ratio=(
+                market_credit_data.recent_5d_high_ratio if market_credit_data else None
+            ),
+            stoch_k=stoch_k,
+            is_52week_high=is_52week_high,
+            high_52week_ratio=high_52week_ratio,
+        )
 
         # 4. 기본 지표 계산
         is_gc_active = ma_short > ma_long
@@ -578,19 +622,12 @@ class SellStrategyService:
             name=name,
             market=market,
         )
-        sell_stage, personal_stage_reasons = self._upgrade_stage_for_personal_overheat(
+        sell_stage, overlay_stage_reasons = self._apply_overlay_stage_upgrade(
             sell_stage,
-            is_personal_buying_overheated,
+            is_personal_buying_overheated=is_personal_buying_overheated,
+            overlay_signals=overlay_signals,
         )
-        stage_reasons.extend(personal_stage_reasons)
-        sell_stage, market_credit_stage_reasons = self._upgrade_stage_for_personal_overheat(
-            sell_stage,
-            is_market_credit_overheated,
-        )
-        if market_credit_stage_reasons:
-            stage_reasons.extend(
-                [reason.replace("개인 수급 과열", "시장 신용 과열") for reason in market_credit_stage_reasons]
-            )
+        stage_reasons.extend(overlay_stage_reasons)
 
         sell_score_result = self.calculate_sell_score(
             stoch_k=stoch_k_raw,
@@ -622,6 +659,14 @@ class SellStrategyService:
             recent_5d_personal_net_buy=(
                 personal_flow_data.recent_5d_net_buy if personal_flow_data else None
             ),
+            market_credit_change_ratio=(
+                market_credit_data.balance_change_ratio if market_credit_data else None
+            ),
+            market_credit_recent_high_ratio=(
+                market_credit_data.recent_5d_high_ratio if market_credit_data else None
+            ),
+            risk_combo_peak=bool(overlay_signals["risk_combo_peak"]),
+            risk_combo_extreme=bool(overlay_signals["risk_combo_extreme"]),
         )
 
         final_stage = self.determine_final_stage(
@@ -630,20 +675,12 @@ class SellStrategyService:
             use_scoring=use_scoring,
             merge_strategy=merge_strategy,
         )
-        final_stage, final_personal_stage_reasons = self._upgrade_stage_for_personal_overheat(
+        final_stage, final_overlay_stage_reasons = self._apply_overlay_stage_upgrade(
             final_stage,
-            is_personal_buying_overheated,
+            is_personal_buying_overheated=is_personal_buying_overheated,
+            overlay_signals=overlay_signals,
         )
-        if final_personal_stage_reasons:
-            stage_reasons.extend(final_personal_stage_reasons)
-        final_stage, final_market_credit_stage_reasons = self._upgrade_stage_for_personal_overheat(
-            final_stage,
-            is_market_credit_overheated,
-        )
-        if final_market_credit_stage_reasons:
-            stage_reasons.extend(
-                [reason.replace("개인 수급 과열", "시장 신용 과열") for reason in final_market_credit_stage_reasons]
-            )
+        stage_reasons.extend(final_overlay_stage_reasons)
 
         final_ratio_min, final_ratio_max = SELL_STAGE_RATIOS.get(final_stage, (0.0, 0.0))
 
@@ -683,6 +720,7 @@ class SellStrategyService:
         sell_reasons.extend(phase_reasons)
         sell_reasons.extend(personal_flow_reasons)
         sell_reasons.extend(market_credit_reasons)
+        sell_reasons.extend(overlay_signals["combo_reasons"])
 
         if not sell_reasons:
             sell_reasons.append("현재 매도 시그널 없음 - 보유 유지")
@@ -840,6 +878,10 @@ class SellStrategyService:
         personal_buy_days_5d: int | None = None,
         personal_buy_ratio_5d_to_volume: float | None = None,
         recent_5d_personal_net_buy: int | None = None,
+        market_credit_change_ratio: float | None = None,
+        market_credit_recent_high_ratio: float | None = None,
+        risk_combo_peak: bool = False,
+        risk_combo_extreme: bool = False,
         settings: SellScoreSettings | None = None,
     ) -> SellScoreResultDTO:
         """점수 기반 매도 판단"""
@@ -951,6 +993,19 @@ class SellStrategyService:
                 score_reasons.append("개인 수급 쏠림 경고 (최근 5일 순매수 우세)")
         total_score += personal_flow_score
 
+        market_credit_score = 0.0
+        if (
+            market_credit_change_ratio is not None
+            and market_credit_recent_high_ratio is not None
+        ):
+            if market_credit_change_ratio >= 0.01 and market_credit_recent_high_ratio >= 0.995:
+                market_credit_score = config.market_credit_weight
+                score_reasons.append("시장 신용 과열 강함 (일간 증가율 + 고점권)")
+            elif market_credit_change_ratio >= 0.008 and market_credit_recent_high_ratio >= 0.99:
+                market_credit_score = config.market_credit_weight * 0.625
+                score_reasons.append("시장 신용 과열 경고 (증가율/고점권)")
+        total_score += market_credit_score
+
         # ADX 약화 점수
         adx_score = 0.0
         if adx is not None:
@@ -989,6 +1044,15 @@ class SellStrategyService:
             total_score += overbought_bonus
             score_reasons.append("신고가 + 과매수 조합 (+5)")
 
+        risk_combo_bonus = 0.0
+        if risk_combo_extreme:
+            risk_combo_bonus = config.risk_combo_weight
+            score_reasons.append("개인 수급+시장 신용+고점권 피크 보너스")
+        elif risk_combo_peak:
+            risk_combo_bonus = config.risk_combo_weight * 0.5
+            score_reasons.append("개인 수급+시장 신용 동시 과열 보너스")
+        total_score += risk_combo_bonus
+
         # ADX 강세 감점
         adx_penalty, adx_penalty_reason = self._calculate_adx_penalty(
             adx, plus_di, minus_di, config
@@ -1011,6 +1075,8 @@ class SellStrategyService:
             available_max += 10.0
         if recent_5d_personal_net_buy is not None and recent_5d_personal_net_buy > 0:
             available_max += config.personal_flow_weight
+        if market_credit_change_ratio is not None and market_credit_recent_high_ratio is not None:
+            available_max += config.market_credit_weight
         if adx is not None:
             available_max += config.adx_weight
         available_max += config.ma_weight + 3.0
@@ -1018,6 +1084,8 @@ class SellStrategyService:
             available_max += config.cross_bonus
         if overbought_bonus > 0:
             available_max += overbought_bonus
+        if risk_combo_peak or risk_combo_extreme:
+            available_max += config.risk_combo_weight
 
         normalized_score = (total_score / available_max) * 100 if available_max > 0 else 0.0
 
@@ -1038,6 +1106,8 @@ class SellStrategyService:
             "high_52week_score": round(high_score, 2),
             "high_52week_bonus": round(overbought_bonus, 2),
             "personal_flow_score": round(personal_flow_score, 2),
+            "market_credit_score": round(market_credit_score, 2),
+            "risk_combo_bonus": round(risk_combo_bonus, 2),
             "adx_score": round(adx_score, 2),
             "ma_score": round(ma_score, 2),
             "cross_score": round(cross_score, 2),
@@ -1085,24 +1155,33 @@ class SellStrategyService:
         is_personal_buying_overheated: bool,
     ) -> tuple[SellStageEnum, list[str]]:
         """개인 수급 과열이면 Stage를 한 단계 강화"""
-        if not is_personal_buying_overheated:
-            return stage, []
+        return self._upgrade_stage_for_overlay(
+            stage,
+            is_personal_buying_overheated,
+            "개인 수급 과열",
+        )
 
-        stage_order = [
-            SellStageEnum.HOLD,
-            SellStageEnum.REDUCE_1,
-            SellStageEnum.REDUCE_2,
-            SellStageEnum.EXIT_ALL,
-        ]
-        current_index = stage_order.index(stage)
-        upgraded_stage = stage_order[min(current_index + 1, len(stage_order) - 1)]
-
-        if upgraded_stage == stage:
-            return stage, []
-
-        return upgraded_stage, [
-            f"개인 수급 과열로 Stage 한 단계 강화 ({stage.value} → {upgraded_stage.value})"
-        ]
+    def _apply_overlay_stage_upgrade(
+        self,
+        stage: SellStageEnum,
+        *,
+        is_personal_buying_overheated: bool,
+        overlay_signals: dict[str, object],
+    ) -> tuple[SellStageEnum, list[str]]:
+        """실전 overlay는 최대 1회만 Stage를 강화한다."""
+        if bool(overlay_signals.get("risk_combo_peak")):
+            return self._upgrade_stage_for_overlay(
+                stage,
+                True,
+                "개인 수급+시장 신용+고점권 정렬",
+            )
+        if is_personal_buying_overheated:
+            return self._upgrade_stage_for_overlay(
+                stage,
+                True,
+                "개인 수급 과열",
+            )
+        return stage, []
 
     def determine_final_stage(
         self,

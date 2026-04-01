@@ -20,6 +20,8 @@ class SellScoreSettings(BaseSettings):
     ma_weight: float = Field(default=10.0, description="MA 점수 가중치")
     cross_bonus: float = Field(default=10.0, description="Stoch 데드크로스 보너스")
     personal_flow_weight: float = Field(default=12.0, description="개인 수급 과열 점수 가중치")
+    market_credit_weight: float = Field(default=8.0, description="시장 신용 과열 점수 가중치")
+    risk_combo_weight: float = Field(default=6.0, description="개인수급+시장신용 피크 조합 보너스")
 
     # 개인 수급 과열 기준
     personal_buy_days_threshold: int = Field(default=4, description="최근 5일 중 개인 순매수 일수 기준")
