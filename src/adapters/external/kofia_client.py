@@ -39,6 +39,7 @@ class KofiaClient:
     BASE_URL = "https://freesis.kofia.or.kr/meta/getMetaDataList.do"
 
     MARKET_LABELS: tuple[str, ...] = ("전체", "유가증권", "코스닥")
+    CACHE_MIN_ROWS = 2
 
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
@@ -108,6 +109,7 @@ class KofiaClient:
 
         async with get_async_session() as session:
             repo = MarketCreditSnapshotRepository(session)
+            await repo.delete_invalid_labels(list(self.MARKET_LABELS), session=session)
             for label, label_rows in grouped.items():
                 for row in label_rows:
                     await repo.upsert_snapshot(
@@ -143,7 +145,7 @@ class KofiaClient:
     ) -> MarketCreditTrendData | None:
         rows = await self._load_recent_rows(market_label)
         latest_cached_date = rows[0].get("TMPV1") if rows else None
-        should_refresh = len(rows) < 2 or latest_cached_date != end_date
+        should_refresh = len(rows) < self.CACHE_MIN_ROWS or latest_cached_date != end_date
 
         if should_refresh:
             try:
@@ -206,6 +208,14 @@ class KofiaClient:
             is_overheated=len(reasons) >= 2,
             reasons=reasons,
         )
+
+    async def refresh_market_credit_cache(
+        self,
+        start_date: str,
+        end_date: str,
+    ) -> dict[str, int]:
+        grouped = await self._fetch_and_cache_snapshots(start_date, end_date)
+        return {label: len(rows) for label, rows in grouped.items()}
 
     @staticmethod
     def _to_int(value: Any) -> int | None:

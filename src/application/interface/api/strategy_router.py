@@ -11,10 +11,14 @@ NOTE: 라우터 순서 중요!
 - 서비스 메서드는 @transaction 데코레이터가 session을 자동 주입
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Query, status
 
 from src.application.common.exceptions import ServiceUnavailableError
 
+from src.adapters.external.kofia_client import get_kofia_client
+from src.adapters.external.naver.stock_client import get_naver_stock_client
 from src.adapters.external.telegram import get_telegram_notifier
 
 from src.application.common.dependencies import (
@@ -745,6 +749,40 @@ async def execute_sell_notification(
     scheduler = get_notification_scheduler()
     result = await scheduler.execute_sell_notification_now()
     return ResponseDTO.success_response(result, "Sell notification executed")
+
+
+@admin_router.post(
+    "/cache/market-credit/refresh",
+    response_model=ResponseDTO[dict],
+    status_code=status.HTTP_200_OK,
+    summary="시장 신용 캐시 수동 갱신",
+    include_in_schema=False,
+)
+async def refresh_market_credit_cache(
+    admin_access: AdminAccessDep,
+) -> ResponseDTO[dict]:
+    _ = admin_access
+    result = await get_kofia_client().refresh_market_credit_cache(
+        start_date="20260101",
+        end_date=datetime.now().strftime("%Y%m%d"),
+    )
+    return ResponseDTO.success_response(result, "Market credit cache refreshed")
+
+
+@admin_router.post(
+    "/cache/personal-flow/{symbol}/refresh",
+    response_model=ResponseDTO[dict],
+    status_code=status.HTTP_200_OK,
+    summary="개인 수급 캐시 수동 갱신",
+    include_in_schema=False,
+)
+async def refresh_personal_flow_cache(
+    symbol: str,
+    admin_access: AdminAccessDep,
+) -> ResponseDTO[dict]:
+    _ = admin_access
+    result = await get_naver_stock_client().refresh_personal_flow_cache(symbol)
+    return ResponseDTO.success_response(result, "Personal flow cache refreshed")
 
 
 # ==================== 동적 경로 (/{strategy_id}) ====================

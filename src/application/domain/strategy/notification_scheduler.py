@@ -15,6 +15,7 @@ APScheduler 기반 스케줄링:
 
 import asyncio
 import logging
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -27,6 +28,8 @@ from src.adapters.database.repositories.analysis_history_repository import (
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
 )
+from src.adapters.external.kofia_client import get_kofia_client
+from src.adapters.external.naver.stock_client import get_naver_stock_client
 from src.adapters.external.telegram import get_telegram_notifier
 from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
 from src.application.domain.strategy.sell_strategy_service import SellStrategyService
@@ -157,6 +160,44 @@ class NotificationScheduler:
 
     # ==================== 데이터 업데이트 Job ====================
 
+    async def _refresh_external_risk_caches(self) -> dict:
+        """시장 신용/개인 수급 캐시 선갱신"""
+        result: dict = {
+            "market_credit": {},
+            "personal_flow_refreshed": 0,
+            "personal_flow_symbols": [],
+        }
+
+        try:
+            result["market_credit"] = await get_kofia_client().refresh_market_credit_cache(
+                start_date="20260101",
+                end_date=datetime.now(KST).strftime("%Y%m%d"),
+            )
+        except Exception as e:
+            logger.warning(f"[NotificationScheduler] Market credit cache refresh failed: {e}")
+
+        try:
+            async with get_async_session() as session:
+                history_repo = AnalysisHistoryRepository(session)
+                active_items = await history_repo.get_active_symbols_with_names("sell")
+            naver_client = get_naver_stock_client()
+            for item in active_items:
+                symbol = item.get("symbol")
+                if not symbol:
+                    continue
+                try:
+                    await naver_client.refresh_personal_flow_cache(symbol)
+                    result["personal_flow_refreshed"] += 1
+                    result["personal_flow_symbols"].append(symbol)
+                except Exception as e:
+                    logger.warning(
+                        f"[NotificationScheduler] Personal flow cache refresh failed for {symbol}: {e}"
+                    )
+        except Exception as e:
+            logger.warning(f"[NotificationScheduler] Personal flow refresh batch failed: {e}")
+
+        return result
+
     async def _buy_data_update_job(self, slot_label: str = "-") -> None:
         """
         매수 알림용 데이터 업데이트 Job
@@ -175,11 +216,12 @@ class NotificationScheduler:
                     freshness_days=1,
                     concurrency=5,
                 )
+                risk_cache_result = await self._refresh_external_risk_caches()
 
                 logger.info(
                     f"[NotificationScheduler] Buy data update completed for {slot_label}: "
                     f"{result.success_count} updated, {result.api_calls_made} API calls, "
-                    f"{result.duration_seconds}s"
+                    f"{result.duration_seconds}s, risk_cache={risk_cache_result}"
                 )
 
         except Exception as e:
@@ -228,11 +270,12 @@ class NotificationScheduler:
                 )
 
                 result = await warmup_service.warmup_symbols(request, concurrency=5)
+                risk_cache_result = await self._refresh_external_risk_caches()
 
                 logger.info(
                     f"[NotificationScheduler] Sell data update completed for {slot_label}: "
                     f"{result.success_count} updated, {result.api_calls_made} API calls, "
-                    f"{result.duration_seconds}s"
+                    f"{result.duration_seconds}s, risk_cache={risk_cache_result}"
                 )
 
         except Exception as e:

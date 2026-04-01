@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Market credit snapshot repository"""
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.market_credit_snapshot import MarketCreditSnapshotModel
@@ -35,6 +35,17 @@ class MarketCreditSnapshotRepository(BaseRepository[MarketCreditSnapshotModel]):
     ) -> MarketCreditSnapshotModel | None:
         rows = await self.get_recent_by_market(market_label=market_label, limit=1, session=session)
         return rows[0] if rows else None
+
+    async def delete_invalid_labels(
+        self,
+        valid_labels: list[str],
+        session: AsyncSession | None = None,
+    ) -> int:
+        db = self._get_session(session)
+        stmt = delete(self.model).where(~self.model.market_label.in_(valid_labels))
+        result = await db.execute(stmt)
+        await db.flush()
+        return result.rowcount or 0
 
     async def upsert_snapshot(
         self,

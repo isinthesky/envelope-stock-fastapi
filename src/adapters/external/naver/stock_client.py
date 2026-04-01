@@ -55,6 +55,8 @@ class NaverStockClient:
     모바일 API를 사용하여 종목 정보를 조회합니다.
     """
 
+    PERSONAL_FLOW_CACHE_ROWS = 5
+
     BASE_URL = "https://m.stock.naver.com/api/stock"
 
     def __init__(self) -> None:
@@ -255,7 +257,7 @@ class NaverStockClient:
 
         async with get_async_session() as session:
             repo = PersonalFlowSnapshotRepository(session)
-            for row in deal_trend_infos[:5]:
+            for row in deal_trend_infos[: self.PERSONAL_FLOW_CACHE_ROWS]:
                 biz_date = row.get("bizdate")
                 if not biz_date:
                     continue
@@ -267,13 +269,13 @@ class NaverStockClient:
                     trading_volume=parse_int(row.get("accumulatedTradingVolume")),
                     session=session,
                 )
-        return deal_trend_infos[:5]
+        return deal_trend_infos[: self.PERSONAL_FLOW_CACHE_ROWS]
 
     async def get_personal_flow_data(self, symbol: str) -> StockPersonalFlowData | None:
         """개인 수급 과열 판단용 최근 수급 데이터 조회 (DB 캐시 우선)"""
         try:
             rows = await self._load_recent_cached_personal_flow(symbol)
-            if len(rows) < 5:
+            if len(rows) < self.PERSONAL_FLOW_CACHE_ROWS:
                 try:
                     await self._fetch_and_cache_personal_flow(symbol)
                 except Exception:
@@ -290,14 +292,15 @@ class NaverStockClient:
                 except ValueError:
                     return None
 
-            rows = rows[:5]
+            rows = rows[: self.PERSONAL_FLOW_CACHE_ROWS]
             latest = rows[0]
             latest_volume = parse_int(latest.get("accumulatedTradingVolume"))
             recent_3d_net_buy = sum(
                 parse_int(row.get("individualPureBuyQuant")) or 0 for row in rows[:3]
             )
             recent_5d_net_buy = sum(
-                parse_int(row.get("individualPureBuyQuant")) or 0 for row in rows[:5]
+                parse_int(row.get("individualPureBuyQuant")) or 0
+                for row in rows[: self.PERSONAL_FLOW_CACHE_ROWS]
             )
             positive_days = sum(
                 1 for row in rows if (parse_int(row.get("individualPureBuyQuant")) or 0) > 0
@@ -319,6 +322,10 @@ class NaverStockClient:
             )
         except Exception:
             return None
+
+    async def refresh_personal_flow_cache(self, symbol: str) -> dict[str, Any]:
+        rows = await self._fetch_and_cache_personal_flow(symbol)
+        return {"symbol": symbol, "rows": len(rows)}
 
     def _extract_latest_value(
         self, row_list: list[dict], title: str
