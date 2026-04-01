@@ -1075,6 +1075,7 @@ class StrategyService:
             top_industries=top_industries,
             buy_candidate_count=len(optimal_candidates),
             scan_time=scan.scan_time,
+            errors=scan.errors,
         )
 
     @transaction

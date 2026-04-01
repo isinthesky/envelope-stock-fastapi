@@ -707,6 +707,46 @@ async def get_scheduler_status() -> ResponseDTO[dict]:
     return ResponseDTO.success_response(status_info, "Scheduler status retrieved")
 
 
+@admin_router.post(
+    "/scheduler/notifications/buy/execute",
+    response_model=ResponseDTO[dict],
+    status_code=status.HTTP_200_OK,
+    summary="매수 텔레그램 알림 수동 실행",
+    description="매수 추천 텔레그램 알림을 즉시 재계산 후 발송합니다.",
+    include_in_schema=False,
+)
+async def execute_buy_notification(
+    admin_access: AdminAccessDep,
+) -> ResponseDTO[dict]:
+    """매수 알림 수동 실행"""
+    _ = admin_access
+    from src.application.domain.strategy.notification_scheduler import get_notification_scheduler
+
+    scheduler = get_notification_scheduler()
+    result = await scheduler.execute_buy_notification_now()
+    return ResponseDTO.success_response(result, "Buy notification executed")
+
+
+@admin_router.post(
+    "/scheduler/notifications/sell/execute",
+    response_model=ResponseDTO[dict],
+    status_code=status.HTTP_200_OK,
+    summary="매도 텔레그램 알림 수동 실행",
+    description="매도 알림 텔레그램 메시지를 즉시 재계산 후 발송합니다.",
+    include_in_schema=False,
+)
+async def execute_sell_notification(
+    admin_access: AdminAccessDep,
+) -> ResponseDTO[dict]:
+    """매도 알림 수동 실행"""
+    _ = admin_access
+    from src.application.domain.strategy.notification_scheduler import get_notification_scheduler
+
+    scheduler = get_notification_scheduler()
+    result = await scheduler.execute_sell_notification_now()
+    return ResponseDTO.success_response(result, "Sell notification executed")
+
+
 # ==================== 동적 경로 (/{strategy_id}) ====================
 
 

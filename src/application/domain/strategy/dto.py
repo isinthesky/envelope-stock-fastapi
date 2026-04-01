@@ -631,6 +631,7 @@ class GoldenCrossRecommendationDTO(BaseDTO):
 
     buy_candidate_count: int = Field(description="매수 후보 종목 수")
     scan_time: datetime = Field(description="기준 스캔 시각")
+    errors: list[str] = Field(default_factory=list, description="스캔 경고/오류 메시지")
 
 
 # ==================== MA5 Breakout Strategy DTOs ====================

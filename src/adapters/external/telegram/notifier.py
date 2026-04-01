@@ -199,6 +199,7 @@ class TelegramNotifier:
     async def send_golden_cross_recommendations_summary(
         self,
         recommendations: dict,
+        slot_label: str | None = None,
     ) -> bool:
         """골든크로스 추천 요약(Top 종목 + Top 업종) 알림 전송
 
@@ -216,6 +217,7 @@ class TelegramNotifier:
         top_industries = recommendations.get("top_industries") or []
         buy_candidate_count = recommendations.get("buy_candidate_count")
         scan_time = recommendations.get("scan_time")
+        errors = recommendations.get("errors") or []
 
         # scan_time 표기 정리
         scan_time_str = ""
@@ -229,8 +231,9 @@ class TelegramNotifier:
 
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
+        slot_part = f" ({slot_label})" if slot_label else ""
         lines: list[str] = [
-            "🧭 <b>골든크로스 추천 요약</b>",
+            f"🧭 <b>매수 추천 알림{slot_part}</b>",
             f"📅 {now}",
         ]
 
@@ -238,7 +241,10 @@ class TelegramNotifier:
             lines.append(f"매수 적기 후보: {buy_candidate_count}개")
 
         if scan_time_str:
-            lines.append(f"(scan_time: {scan_time_str})")
+            lines.append(f"스캔 시각: {scan_time_str}")
+
+        if errors:
+            lines.append(f"⚠️ 데이터/분석 경고: {len(errors)}건")
 
         lines.append("")
 
@@ -262,10 +268,28 @@ class TelegramNotifier:
                 gc_state = s.get("gc_state")
                 ind_name = s.get("industry_name")
                 ind_part = f" | 업종: {ind_name}" if ind_name else ""
-                lines.append(f"• <b>{name}</b> ({symbol})\n  상태: {gc_state}{ind_part}")
+                state_label = {
+                    "OPTIMAL_BUY": "매수 적기",
+                    "BUY_INTEREST": "매수 관심",
+                    "READY_TO_BUY": "매수 준비",
+                }.get(gc_state, gc_state)
+                price = s.get("current_price")
+                price_part = f" | 현재가: {float(price):,.0f}원" if price is not None else ""
+                lines.append(
+                    f"• <b>{name}</b> ({symbol})\n"
+                    f"  상태: {state_label}{price_part}{ind_part}"
+                )
 
             if len(top_stocks) > 10:
                 lines.append(f"\n... 외 {len(top_stocks) - 10}개")
+
+        if errors:
+            lines.append("")
+            lines.append("⚠️ <b>경고 요약</b>")
+            for error in errors[:3]:
+                lines.append(f"• {error}")
+            if len(errors) > 3:
+                lines.append(f"• ... 외 {len(errors) - 3}건")
 
         message = "\n".join(lines)
         return await self.send_message(message)
@@ -344,7 +368,11 @@ class TelegramNotifier:
 
         return await self.send_message(message)
 
-    async def send_no_sell_signals_alert(self, total_tracked: int = 0) -> bool:
+    async def send_no_sell_signals_alert(
+        self,
+        total_tracked: int = 0,
+        slot_label: str | None = None,
+    ) -> bool:
         """
         매도 권장 종목 없음 알림 전송
 
@@ -353,7 +381,8 @@ class TelegramNotifier:
         """
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
-        message = f"""⚪ <b>매도 권장 종목 알림</b>
+        slot_part = f" ({slot_label})" if slot_label else ""
+        message = f"""⚪ <b>매도 권장 종목 알림{slot_part}</b>
 
 📅 {now}
 
@@ -368,6 +397,7 @@ PHASE_4(매도 권장) 또는 PHASE_5(강력 매도) 단계에
     async def send_sell_signals_summary(
         self,
         stocks: list[dict],
+        slot_label: str | None = None,
     ) -> bool:
         """
         매도 권장 종목 요약 알림 전송
@@ -380,7 +410,13 @@ PHASE_4(매도 권장) 또는 PHASE_5(강력 매도) 단계에
 
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
-        lines = [f"🔴 <b>매도 권장 종목 알림</b>", f"📅 {now} (KST)", f"총 {len(stocks)}개 종목", ""]
+        slot_part = f" ({slot_label})" if slot_label else ""
+        lines = [
+            f"🔴 <b>매도 권장 종목 알림{slot_part}</b>",
+            f"📅 {now} (KST)",
+            f"총 {len(stocks)}개 종목",
+            "",
+        ]
 
         for stock in stocks[:10]:  # 최대 10개
             emoji = "🔴" if stock.get("sell_phase") == "PHASE_5" else "🟠"
@@ -399,15 +435,19 @@ PHASE_4(매도 권장) 또는 PHASE_5(강력 매도) 단계에
             phase_action = stock.get("sell_phase_action", "")
 
             if reasons_text:
+                current_price = stock.get("current_price")
+                price_part = f" | 현재가: {float(current_price):,.0f}원" if current_price is not None else ""
                 lines.append(
                     f"{emoji} <b>{name}</b> ({stock['symbol']})\n"
-                    f"  {phase_name} - {phase_action}\n"
+                    f"  {phase_name} - {phase_action}{price_part}\n"
                     f"  💡 {reasons_text}"
                 )
             else:
+                current_price = stock.get("current_price")
+                price_part = f" | 현재가: {float(current_price):,.0f}원" if current_price is not None else ""
                 lines.append(
                     f"{emoji} <b>{name}</b> ({stock['symbol']})\n"
-                    f"  {phase_name} - {phase_action}"
+                    f"  {phase_name} - {phase_action}{price_part}"
                 )
 
         if len(stocks) > 10:

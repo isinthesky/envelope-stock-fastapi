@@ -47,19 +47,19 @@ async def test_start_registers_four_notifications_and_four_updates():
 
 async def test_execute_buy_notification_now_uses_manual_slot_label():
     scheduler = NotificationScheduler()
-    scheduler._buy_notification_job = AsyncMock()
+    scheduler._buy_notification_job = AsyncMock(return_value={"success": True, "slot": "manual"})
 
     result = await scheduler.execute_buy_notification_now()
 
     scheduler._buy_notification_job.assert_awaited_once_with(slot_label="manual")
-    assert result == {"success": True, "message": "Buy notification executed"}
+    assert result == {"success": True, "slot": "manual"}
 
 
 async def test_execute_sell_notification_now_uses_manual_slot_label():
     scheduler = NotificationScheduler()
-    scheduler._sell_notification_job = AsyncMock()
+    scheduler._sell_notification_job = AsyncMock(return_value={"success": True, "slot": "manual"})
 
     result = await scheduler.execute_sell_notification_now()
 
     scheduler._sell_notification_job.assert_awaited_once_with(slot_label="manual")
-    assert result == {"success": True, "message": "Sell notification executed"}
+    assert result == {"success": True, "slot": "manual"}

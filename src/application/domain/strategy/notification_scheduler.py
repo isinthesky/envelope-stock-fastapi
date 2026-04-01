@@ -236,7 +236,7 @@ class NotificationScheduler:
 
     # ==================== 매수 알림 Job ====================
 
-    async def _buy_notification_job(self, slot_label: str = "-") -> None:
+    async def _buy_notification_job(self, slot_label: str = "-") -> dict:
         """
         매수 알림 Job
 
@@ -264,29 +264,50 @@ class NotificationScheduler:
 
                 notifier = get_telegram_notifier()
                 sent = await notifier.send_golden_cross_recommendations_summary(
-                    recommendations.model_dump(mode="json")
+                    recommendations.model_dump(mode="json"),
+                    slot_label=slot_label,
                 )
+
+                result = {
+                    "success": True,
+                    "slot": slot_label,
+                    "sent": sent,
+                    "buy_candidate_count": recommendations.buy_candidate_count,
+                    "top_stock_count": len(recommendations.top_stocks),
+                    "top_industry_count": len(recommendations.top_industries),
+                    "warning_count": len(recommendations.errors),
+                    "warnings": recommendations.errors[:5],
+                }
 
                 if sent:
                     logger.info(
                         "[NotificationScheduler] Sent golden cross recommendations summary "
                         f"for {slot_label}: candidates={recommendations.buy_candidate_count}, "
                         f"top_stocks={len(recommendations.top_stocks)}, "
-                        f"top_industries={len(recommendations.top_industries)}"
+                        f"top_industries={len(recommendations.top_industries)}, "
+                        f"warnings={len(recommendations.errors)}"
                     )
                 else:
                     logger.info(
                         "[NotificationScheduler] Telegram disabled or not configured, skipping DM"
                     )
 
+                return result
+
             except Exception as e:
                 logger.error(
                     f"[NotificationScheduler] Buy notification error for {slot_label}: {e}"
                 )
+                return {
+                    "success": False,
+                    "slot": slot_label,
+                    "sent": False,
+                    "error": str(e),
+                }
 
     # ==================== 매도 알림 Job ====================
 
-    async def _sell_notification_job(self, slot_label: str = "-") -> None:
+    async def _sell_notification_job(self, slot_label: str = "-") -> dict:
         """
         매도 알림 Job
 
@@ -306,7 +327,14 @@ class NotificationScheduler:
 
                     if not active_items:
                         logger.info("[NotificationScheduler] No active sell tracking items")
-                        return
+                        return {
+                            "success": True,
+                            "slot": slot_label,
+                            "sent": False,
+                            "tracked_count": 0,
+                            "sell_alert_count": 0,
+                            "warnings": [],
+                        }
 
                     logger.info(
                         f"[NotificationScheduler] Refreshing {len(active_items)} sell items "
@@ -319,6 +347,7 @@ class NotificationScheduler:
 
                     sell_service = SellStrategyService(session)
                     sell_alerts: list[dict] = []
+                    warnings: list[str] = []
 
                     for item in active_items:
                         symbol = item["symbol"]
@@ -344,42 +373,62 @@ class NotificationScheduler:
                             await asyncio.sleep(0.1)
 
                         except Exception as e:
+                            warning = f"{symbol}: {e}"
+                            warnings.append(warning)
                             logger.warning(
                                 f"[NotificationScheduler] Failed to analyze {symbol}: {e}"
                             )
 
                     notifier = get_telegram_notifier()
                     if sell_alerts:
-                        await notifier.send_sell_signals_summary(sell_alerts)
+                        sent = await notifier.send_sell_signals_summary(
+                            sell_alerts,
+                            slot_label=slot_label,
+                        )
                         logger.info(
                             "[NotificationScheduler] Sent sell notification "
                             f"for {len(sell_alerts)} stocks at {slot_label}"
                         )
                     else:
-                        await notifier.send_no_sell_signals_alert(
-                            total_tracked=len(active_items)
+                        sent = await notifier.send_no_sell_signals_alert(
+                            total_tracked=len(active_items),
+                            slot_label=slot_label,
                         )
                         logger.info(
                             "[NotificationScheduler] No PHASE_4/PHASE_5 stocks found, "
                             f"sent empty alert for {slot_label}"
                         )
 
+                    return {
+                        "success": True,
+                        "slot": slot_label,
+                        "sent": sent,
+                        "tracked_count": len(active_items),
+                        "sell_alert_count": len(sell_alerts),
+                        "warning_count": len(warnings),
+                        "warnings": warnings[:5],
+                    }
+
             except Exception as e:
                 logger.error(
                     f"[NotificationScheduler] Sell notification error for {slot_label}: {e}"
                 )
+                return {
+                    "success": False,
+                    "slot": slot_label,
+                    "sent": False,
+                    "error": str(e),
+                }
 
     # ==================== 수동 실행 ====================
 
     async def execute_buy_notification_now(self) -> dict:
         """매수 알림 수동 실행"""
-        await self._buy_notification_job(slot_label="manual")
-        return {"success": True, "message": "Buy notification executed"}
+        return await self._buy_notification_job(slot_label="manual")
 
     async def execute_sell_notification_now(self) -> dict:
         """매도 알림 수동 실행"""
-        await self._sell_notification_job(slot_label="manual")
-        return {"success": True, "message": "Sell notification executed"}
+        return await self._sell_notification_job(slot_label="manual")
 
 
 _notification_scheduler_instance: NotificationScheduler | None = None
