@@ -116,3 +116,5 @@ _attic/cleanup_*/
 
 # Claude local skills (machine-specific)
 .claude/skills/
+.auto-pipe/
+.venv/
