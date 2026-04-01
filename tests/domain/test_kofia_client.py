@@ -49,3 +49,27 @@ def test_market_credit_trend_falls_back_to_total_when_market_specific_rows_missi
 
     assert result is not None
     assert result.market_label == "전체"
+
+
+def test_market_credit_skips_fetch_when_cache_is_fresh() -> None:
+    client = KofiaClient()
+    rows = [
+        {"TMPV1": "20260401", "TMPV2": "전체", "TMPV3": 74955524, "TMPV5": 3181603332},
+        {"TMPV1": "20260331", "TMPV2": "전체", "TMPV3": 39743233, "TMPV5": 3145131365},
+    ]
+
+    async def fake_load_recent_rows(market_label):
+        return rows
+
+    async def fail_fetch(start_date, end_date):
+        raise AssertionError("fetch should not be called when cache is fresh")
+
+    client._load_recent_rows = fake_load_recent_rows  # type: ignore[attr-defined]
+    client._fetch_and_cache_snapshots = fail_fetch  # type: ignore[attr-defined]
+
+    import asyncio
+
+    result = asyncio.run(client.get_market_credit_trend("20260101", "20260401", "전체"))
+
+    assert result is not None
+    assert result.latest_date == "20260401"

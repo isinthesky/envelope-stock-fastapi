@@ -12,6 +12,11 @@ from typing import Any
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from src.adapters.database.connection import get_async_session
+from src.adapters.database.repositories.personal_flow_snapshot_repository import (
+    PersonalFlowSnapshotRepository,
+)
+
 
 @dataclass
 class StockFinancialData:
@@ -220,12 +225,61 @@ class NaverStockClient:
 
         return total
 
+    async def _load_recent_cached_personal_flow(self, symbol: str) -> list[dict[str, Any]]:
+        async with get_async_session() as session:
+            repo = PersonalFlowSnapshotRepository(session)
+            rows = await repo.get_recent_by_symbol(symbol=symbol, limit=5, session=session)
+            return [
+                {
+                    "bizdate": row.biz_date,
+                    "individualPureBuyQuant": row.individual_net_buy,
+                    "closePrice": row.close_price,
+                    "accumulatedTradingVolume": row.trading_volume,
+                }
+                for row in rows
+            ]
+
+    async def _fetch_and_cache_personal_flow(self, symbol: str) -> list[dict[str, Any]]:
+        integration_data = await self.get_integration(symbol)
+        deal_trend_infos = integration_data.get("dealTrendInfos", [])
+        if not deal_trend_infos:
+            return []
+
+        def parse_int(value: Any) -> int | None:
+            if value in (None, "", "-"):
+                return None
+            try:
+                return int(str(value).replace(",", "").replace("+", ""))
+            except ValueError:
+                return None
+
+        async with get_async_session() as session:
+            repo = PersonalFlowSnapshotRepository(session)
+            for row in deal_trend_infos[:5]:
+                biz_date = row.get("bizdate")
+                if not biz_date:
+                    continue
+                await repo.upsert_snapshot(
+                    symbol=symbol,
+                    biz_date=str(biz_date),
+                    individual_net_buy=parse_int(row.get("individualPureBuyQuant")),
+                    close_price=parse_int(row.get("closePrice")),
+                    trading_volume=parse_int(row.get("accumulatedTradingVolume")),
+                    session=session,
+                )
+        return deal_trend_infos[:5]
+
     async def get_personal_flow_data(self, symbol: str) -> StockPersonalFlowData | None:
-        """개인 수급 과열 판단용 최근 수급 데이터 조회"""
+        """개인 수급 과열 판단용 최근 수급 데이터 조회 (DB 캐시 우선)"""
         try:
-            integration_data = await self.get_integration(symbol)
-            deal_trend_infos = integration_data.get("dealTrendInfos", [])
-            if not deal_trend_infos:
+            rows = await self._load_recent_cached_personal_flow(symbol)
+            if len(rows) < 5:
+                try:
+                    await self._fetch_and_cache_personal_flow(symbol)
+                except Exception:
+                    pass
+                rows = await self._load_recent_cached_personal_flow(symbol)
+            if not rows:
                 return None
 
             def parse_int(value: Any) -> int | None:
@@ -236,7 +290,7 @@ class NaverStockClient:
                 except ValueError:
                     return None
 
-            rows = deal_trend_infos[:5]
+            rows = rows[:5]
             latest = rows[0]
             latest_volume = parse_int(latest.get("accumulatedTradingVolume"))
             recent_3d_net_buy = sum(

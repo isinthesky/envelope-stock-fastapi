@@ -96,9 +96,13 @@ class KofiaClient:
         data = await self._post_json(payload)
         rows = data.get("ds1") or []
         grouped: dict[str, list[dict[str, Any]]] = {}
+        valid_labels = set(self.MARKET_LABELS)
         for row in rows:
             label = row.get("TMPV2")
-            if not label:
+            biz_date = str(row.get("TMPV1") or "")
+            if not label or label not in valid_labels:
+                continue
+            if not biz_date.isdigit():
                 continue
             grouped.setdefault(label, []).append(row)
 
@@ -138,7 +142,10 @@ class KofiaClient:
         market_label: str = "전체",
     ) -> MarketCreditTrendData | None:
         rows = await self._load_recent_rows(market_label)
-        if len(rows) < 2:
+        latest_cached_date = rows[0].get("TMPV1") if rows else None
+        should_refresh = len(rows) < 2 or latest_cached_date != end_date
+
+        if should_refresh:
             try:
                 await self._fetch_and_cache_snapshots(start_date, end_date)
             except Exception:
