@@ -111,7 +111,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         notification_scheduler = get_notification_scheduler()
         await notification_scheduler.start()
         if settings.telegram_enabled:
-            print("✅ Telegram notification scheduler started (Data: 09:07/14:57, Alert: 09:10/15:00)")
+            print(
+                "✅ Telegram notification scheduler started "
+                "(Data: 09:20/11:20/12:20/14:20, Alert: 09:30/11:30/12:30/14:30)"
+            )
         else:
             print("⏭️  Telegram notification is disabled")
     except Exception as e:
