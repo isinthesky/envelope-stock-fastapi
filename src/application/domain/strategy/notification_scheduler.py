@@ -431,6 +431,10 @@ class NotificationScheduler:
                                         "sell_phase": result.sell_phase,
                                         "sell_phase_name": result.sell_phase_name,
                                         "sell_phase_action": result.sell_phase_action,
+                                        "sell_stage": result.sell_stage,
+                                        "sell_stage_name": result.sell_stage_name,
+                                        "final_stage": result.final_stage,
+                                        "is_personal_buying_overheated": result.is_personal_buying_overheated,
                                         "sell_reasons": result.sell_reasons,
                                     }
                                 )

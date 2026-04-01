@@ -433,6 +433,8 @@ PHASE_4(매도 권장) 또는 PHASE_5(강력 매도) 단계에
 
             phase_name = stock.get("sell_phase_name", "")
             phase_action = stock.get("sell_phase_action", "")
+            stage_name = stock.get("sell_stage_name") or stock.get("final_stage") or stock.get("sell_stage") or "-"
+            personal_heat = " | 개인수급 과열" if stock.get("is_personal_buying_overheated") else ""
 
             if reasons_text:
                 current_price = stock.get("current_price")
@@ -440,6 +442,7 @@ PHASE_4(매도 권장) 또는 PHASE_5(강력 매도) 단계에
                 lines.append(
                     f"{emoji} <b>{name}</b> ({stock['symbol']})\n"
                     f"  {phase_name} - {phase_action}{price_part}\n"
+                    f"  Stage: {stage_name}{personal_heat}\n"
                     f"  💡 {reasons_text}"
                 )
             else:
@@ -447,7 +450,8 @@ PHASE_4(매도 권장) 또는 PHASE_5(강력 매도) 단계에
                 price_part = f" | 현재가: {float(current_price):,.0f}원" if current_price is not None else ""
                 lines.append(
                     f"{emoji} <b>{name}</b> ({stock['symbol']})\n"
-                    f"  {phase_name} - {phase_action}{price_part}"
+                    f"  {phase_name} - {phase_action}{price_part}\n"
+                    f"  Stage: {stage_name}{personal_heat}"
                 )
 
         if len(stocks) > 10:

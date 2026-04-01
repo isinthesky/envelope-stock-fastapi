@@ -538,17 +538,22 @@ class SellStrategyService:
             plus_di=adx_indicators.get("plus_di"),
             minus_di=adx_indicators.get("minus_di"),
             is_volume_sell_signal=volume_indicators.get("is_volume_sell_signal", False),
+            profit_ratio=profit_ratio,
             is_volume_spike=volume_indicators.get("is_volume_spike", False),
             is_volume_peak=volume_indicators.get("is_volume_peak", False),
             is_stoch_dead_cross=is_stoch_dead_cross,
             is_52week_high=is_52week_high,
             high_52week_ratio=high_52week_ratio,
-            profit_ratio=profit_ratio,
             dynamic_stoch_threshold=dynamic_stoch,
             dynamic_rsi_threshold=dynamic_rsi,
             name=name,
             market=market,
         )
+        sell_stage, personal_stage_reasons = self._upgrade_stage_for_personal_overheat(
+            sell_stage,
+            is_personal_buying_overheated,
+        )
+        stage_reasons.extend(personal_stage_reasons)
 
         sell_score_result = self.calculate_sell_score(
             stoch_k=stoch_k_raw,
@@ -588,6 +593,12 @@ class SellStrategyService:
             use_scoring=use_scoring,
             merge_strategy=merge_strategy,
         )
+        final_stage, final_personal_stage_reasons = self._upgrade_stage_for_personal_overheat(
+            final_stage,
+            is_personal_buying_overheated,
+        )
+        if final_personal_stage_reasons:
+            stage_reasons.extend(final_personal_stage_reasons)
 
         final_ratio_min, final_ratio_max = SELL_STAGE_RATIOS.get(final_stage, (0.0, 0.0))
 
@@ -1008,6 +1019,31 @@ class SellStrategyService:
             )
 
         return 0.0, None
+
+    def _upgrade_stage_for_personal_overheat(
+        self,
+        stage: SellStageEnum,
+        is_personal_buying_overheated: bool,
+    ) -> tuple[SellStageEnum, list[str]]:
+        """개인 수급 과열이면 Stage를 한 단계 강화"""
+        if not is_personal_buying_overheated:
+            return stage, []
+
+        stage_order = [
+            SellStageEnum.HOLD,
+            SellStageEnum.REDUCE_1,
+            SellStageEnum.REDUCE_2,
+            SellStageEnum.EXIT_ALL,
+        ]
+        current_index = stage_order.index(stage)
+        upgraded_stage = stage_order[min(current_index + 1, len(stage_order) - 1)]
+
+        if upgraded_stage == stage:
+            return stage, []
+
+        return upgraded_stage, [
+            f"개인 수급 과열로 Stage 한 단계 강화 ({stage.value} → {upgraded_stage.value})"
+        ]
 
     def determine_final_stage(
         self,
