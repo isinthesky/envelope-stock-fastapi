@@ -256,14 +256,40 @@ async def root() -> dict[str, str]:
 
 @app.get("/health", tags=["Health"])
 async def health_check() -> dict[str, str]:
-    """헬스체크 엔드포인트"""
-    # TODO: Database, Redis 연결 상태 확인
-    return {
-        "status": "healthy",
-        "database": "connected",  # TODO: 실제 DB 상태 확인
-        "redis": "connected",  # TODO: 실제 Redis 상태 확인
-        "kis_api": "connected",  # TODO: KIS API 토큰 상태 확인
-    }
+    """헬스체크 엔드포인트 - 실제 인프라 연결 상태 확인"""
+    from src.adapters.database.connection import get_async_session
+    from src.adapters.cache.redis_client import get_redis_client
+
+    status_result: dict[str, str] = {"status": "healthy"}
+
+    # DB 상태 확인
+    try:
+        async with get_async_session() as session:
+            await session.execute(__import__("sqlalchemy").text("SELECT 1"))
+        status_result["database"] = "connected"
+    except Exception:
+        status_result["database"] = "disconnected"
+        status_result["status"] = "degraded"
+
+    # Redis 상태 확인
+    try:
+        redis_client = await get_redis_client()
+        await redis_client.ping()
+        status_result["redis"] = "connected"
+    except Exception:
+        status_result["redis"] = "disconnected"
+        status_result["status"] = "degraded"
+
+    # KIS API 토큰 상태 확인
+    try:
+        from src.adapters.external.kis_api.auth import get_kis_auth
+        kis_auth = get_kis_auth()
+        has_token = kis_auth.token_info is not None and kis_auth.token_info.is_valid
+        status_result["kis_api"] = "authenticated" if has_token else "unauthenticated"
+    except Exception:
+        status_result["kis_api"] = "unavailable"
+
+    return status_result
 
 
 # ==================== Error Handlers ====================

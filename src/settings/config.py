@@ -5,10 +5,11 @@
 Pydantic Settings를 사용한 타입 안전 환경 변수 관리
 """
 
+import warnings
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,7 +29,7 @@ class Settings(BaseSettings):
     env: Literal["development", "staging", "production"] = Field(
         default="development", description="실행 환경"
     )
-    debug: bool = Field(default=True, description="디버그 모드")
+    debug: bool = Field(default=False, description="디버그 모드")
 
     # ==================== 서버 설정 ====================
     host: str = Field(default="0.0.0.0", description="서버 호스트")
@@ -306,6 +307,17 @@ class Settings(BaseSettings):
         return self.kis_paper_account_no if self.is_paper_trading else self.kis_account_no
 
     # ==================== Validators ====================
+
+    @model_validator(mode="after")
+    def warn_insecure_jwt_secret(self) -> "Settings":
+        """운영 환경에서 기본 JWT 시크릿 사용 시 경고"""
+        if self.env == "production" and self.jwt_secret_key == "your-secret-key-here-change-in-production":
+            warnings.warn(
+                "JWT_SECRET_KEY가 기본값입니다. 운영 환경에서는 반드시 변경하세요.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return self
 
     @field_validator("kis_account_no", "kis_paper_account_no")
     @classmethod

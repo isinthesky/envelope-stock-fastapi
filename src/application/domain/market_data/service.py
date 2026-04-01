@@ -417,12 +417,12 @@ class MarketDataService:
 
     def has_valid_credentials(self) -> bool:
         """
-        KIS API 자격 증명 확인
+        KIS API 자격 증명 확인 (현재 거래 환경 기준)
 
         Returns:
             bool: 자격 증명 유효 여부
         """
-        return bool(settings.kis_app_key and settings.kis_app_secret)
+        return bool(settings.current_kis_app_key and settings.current_kis_app_secret)
 
     # ==================== 헬스체크 ====================
 

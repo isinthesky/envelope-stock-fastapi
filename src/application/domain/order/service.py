@@ -35,6 +35,12 @@ class OrderService:
     주문 생성, 취소, 조회 및 관리
     """
 
+    # 클래스 레벨 공유 상태: 요청 간 주문 페이싱/정정 횟수 유지
+    _order_lock = asyncio.Lock()
+    _last_order_at: float | None = None
+    _last_order_at_by_symbol: dict[str, float] = {}
+    _amend_counts: dict[str, int] = {}
+
     def __init__(
         self, kis_client: KISAPIClient, session: AsyncSession | None = None
     ) -> None:
@@ -42,10 +48,6 @@ class OrderService:
         self.session = session
         if session:
             self.order_repo = OrderRepository(session)
-        self._order_lock = asyncio.Lock()
-        self._last_order_at: float | None = None
-        self._last_order_at_by_symbol: dict[str, float] = {}
-        self._amend_counts: dict[str, int] = {}
 
     # ==================== 주문 생성 ====================
 
@@ -487,19 +489,20 @@ class OrderService:
 
     async def _enforce_order_pacing(self, symbol: str) -> None:
         """주문 요청 간 최소 간격을 보장한다."""
+        cls = OrderService
         loop = asyncio.get_event_loop()
         min_gap = settings.order_min_interval_ms / 1000.0
         same_symbol_gap = settings.order_same_symbol_interval_ms / 1000.0
 
         while True:
-            async with self._order_lock:
+            async with cls._order_lock:
                 now = loop.time()
                 wait_global = (
-                    (self._last_order_at + min_gap - now)
-                    if self._last_order_at is not None
+                    (cls._last_order_at + min_gap - now)
+                    if cls._last_order_at is not None
                     else 0
                 )
-                last_symbol_at = self._last_order_at_by_symbol.get(symbol)
+                last_symbol_at = cls._last_order_at_by_symbol.get(symbol)
                 wait_symbol = (
                     (last_symbol_at + same_symbol_gap - now)
                     if last_symbol_at is not None
@@ -508,18 +511,19 @@ class OrderService:
 
                 wait_for = max(wait_global, wait_symbol, 0)
                 if wait_for <= 0:
-                    self._last_order_at = now
-                    self._last_order_at_by_symbol[symbol] = now
+                    cls._last_order_at = now
+                    cls._last_order_at_by_symbol[symbol] = now
                     return
 
             await asyncio.sleep(wait_for)
 
     def _enforce_amend_limit(self, order_id: str) -> None:
         """정정/취소 시도 횟수를 제한한다."""
-        count = self._amend_counts.get(order_id, 0) + 1
+        cls = OrderService
+        count = cls._amend_counts.get(order_id, 0) + 1
         if count > settings.order_max_amendments_per_order:
             raise OrderError("Amendment/cancel limit exceeded for this order")
-        self._amend_counts[order_id] = count
+        cls._amend_counts[order_id] = count
 
     async def _post_with_retry(
         self, path: str, payload: dict[str, str], headers: dict[str, str]

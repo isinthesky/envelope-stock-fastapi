@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.connection import get_async_session
 from src.adapters.database.models.strategy import StrategyStatus
 from src.adapters.database.repositories.strategy_repository import StrategyRepository
@@ -160,15 +161,16 @@ class StrategyEngine:
         """차트 데이터 수집"""
         try:
             kis_client = get_kis_client()
-            market_data_service = MarketDataService(kis_client)
+            redis_client = await get_redis_client()
+            market_data_service = MarketDataService(kis_client, redis_client)
 
             # 일봉 데이터 조회 (최근 100일)
-            end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=150)).strftime("%Y%m%d")
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=150)
 
             chart_data = await market_data_service.get_chart_data(
                 symbol=symbol,
-                period="D",  # 일봉
+                interval="1d",  # 일봉
                 start_date=start_date,
                 end_date=end_date,
             )
@@ -222,12 +224,13 @@ class StrategyEngine:
         try:
             # 계좌 잔고 조회
             kis_client = get_kis_client()
-            account_service = AccountService(kis_client)
-            balance = await account_service.get_balance(strategy.account_no)
+            redis_client = await get_redis_client()
+            account_service = AccountService(kis_client, redis_client)
+            balance = await account_service.get_account_balance(strategy.account_no)
 
             # 포지션 크기 계산
             quantity = self.indicators.calculate_position_size(
-                balance.total_cash, config.position.allocation_ratio, current_price
+                balance.cash_balance, config.position.allocation_ratio, current_price
             )
 
             if quantity <= 0:
@@ -265,8 +268,9 @@ class StrategyEngine:
         try:
             # 보유 수량 조회
             kis_client = get_kis_client()
-            account_service = AccountService(kis_client)
-            positions = await account_service.get_positions(strategy.account_no)
+            redis_client = await get_redis_client()
+            account_service = AccountService(kis_client, redis_client)
+            positions = await account_service.get_position_list(strategy.account_no)
 
             # 해당 종목 포지션 찾기
             target_position = None

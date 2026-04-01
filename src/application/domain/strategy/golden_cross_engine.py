@@ -30,6 +30,7 @@ from src.adapters.database.repositories.strategy_signal_repository import (
 from src.adapters.database.repositories.strategy_symbol_state_repository import (
     StrategySymbolStateRepository,
 )
+from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.external.kis_api.client import KISAPIClient, get_kis_client
 from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.account.service import AccountService
@@ -63,14 +64,17 @@ class GoldenCrossEngine:
         self,
         session: AsyncSession,
         kis_client: KISAPIClient | None = None,
+        redis_client=None,
     ):
         """
         Args:
             session: DB 세션
             kis_client: KIS API 클라이언트
+            redis_client: Redis 클라이언트
         """
         self.session = session
         self.kis_client = kis_client or get_kis_client()
+        self.redis_client = redis_client
         self.indicators = TechnicalIndicators()
 
         # Repositories
@@ -78,9 +82,23 @@ class GoldenCrossEngine:
         self.symbol_state_repo = StrategySymbolStateRepository(session)
         self.signal_repo = StrategySignalRepository(session)
 
-        # Services
-        self.market_data_service = MarketDataService(self.kis_client)
-        self.account_service = AccountService(self.kis_client)
+        # Services (redis_client가 없으면 lazy init)
+        self._market_data_service = None
+        self._account_service = None
+
+    async def _get_market_data_service(self) -> MarketDataService:
+        if self._market_data_service is None:
+            if self.redis_client is None:
+                self.redis_client = await get_redis_client()
+            self._market_data_service = MarketDataService(self.kis_client, self.redis_client)
+        return self._market_data_service
+
+    async def _get_account_service(self) -> AccountService:
+        if self._account_service is None:
+            if self.redis_client is None:
+                self.redis_client = await get_redis_client()
+            self._account_service = AccountService(self.kis_client, self.redis_client)
+        return self._account_service
 
     async def execute(
         self,
@@ -417,10 +435,11 @@ class GoldenCrossEngine:
     ):
         """매수 주문 실행"""
         # 계좌 잔고 조회
-        balance = await self.account_service.get_balance(strategy.account_no)
+        account_service = await self._get_account_service()
+        balance = await account_service.get_account_balance(strategy.account_no)
 
         # 포지션 사이즈 계산
-        allocation = float(balance.total_cash) * config.position.allocation_ratio
+        allocation = float(balance.cash_balance) * config.position.allocation_ratio
         quantity = int(allocation / float(price))
 
         if quantity <= 0:
@@ -460,7 +479,8 @@ class GoldenCrossEngine:
     ):
         """매도 주문 실행"""
         # 보유 수량 조회
-        positions = await self.account_service.get_positions(strategy.account_no)
+        account_service = await self._get_account_service()
+        positions = await account_service.get_position_list(strategy.account_no)
         target_position = None
         for pos in positions.positions:
             if pos.symbol == symbol:
@@ -528,12 +548,13 @@ class GoldenCrossEngine:
     async def _fetch_ohlcv(self, symbol: str, days: int) -> pd.DataFrame | None:
         """OHLCV 데이터 조회"""
         try:
-            end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=days + 50)).strftime("%Y%m%d")
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days + 50)
 
-            chart_data = await self.market_data_service.get_chart_data(
+            market_data_service = await self._get_market_data_service()
+            chart_data = await market_data_service.get_chart_data(
                 symbol=symbol,
-                period="D",
+                interval="1d",
                 start_date=start_date,
                 end_date=end_date,
             )
@@ -585,8 +606,9 @@ class GoldenCrossEngine:
     async def _init_safety_guard(self, strategy: StrategyModel) -> SafetyGuard:
         """SafetyGuard 초기화"""
         try:
-            balance = await self.account_service.get_balance(strategy.account_no)
-            initial_capital = Decimal(str(balance.total_cash + balance.total_stock_value))
+            account_service = await self._get_account_service()
+            balance = await account_service.get_account_balance(strategy.account_no)
+            initial_capital = Decimal(str(balance.cash_balance + balance.stock_balance))
         except Exception:
             initial_capital = Decimal("10_000_000")
 

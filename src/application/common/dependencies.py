@@ -291,17 +291,38 @@ BuyStrategyServiceDep = Annotated["BuyStrategyService", Depends(get_buy_strategy
 
 
 def _get_client_ip(request: Request) -> str:
-    """클라이언트 IP 추출"""
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
+    """클라이언트 IP 추출
 
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip
+    프록시 헤더(X-Forwarded-For/X-Real-IP)는 직접 연결 IP가
+    신뢰할 수 있는 내부 네트워크(Docker bridge 등)인 경우에만 참조합니다.
+    """
+    _TRUSTED_PROXIES = (
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("::1/128"),
+    )
 
-    if request.client:
-        return request.client.host
+    direct_ip = request.client.host if request.client else None
+
+    # 직접 연결 IP가 신뢰 가능한 프록시인 경우에만 헤더 참조
+    if direct_ip:
+        try:
+            addr = ipaddress.ip_address(direct_ip)
+            is_trusted = any(addr in net for net in _TRUSTED_PROXIES)
+        except ValueError:
+            is_trusted = False
+
+        if is_trusted:
+            forwarded_for = request.headers.get("x-forwarded-for")
+            if forwarded_for:
+                return forwarded_for.split(",")[0].strip()
+            real_ip = request.headers.get("x-real-ip")
+            if real_ip:
+                return real_ip
+
+        return direct_ip
 
     return "unknown"
 

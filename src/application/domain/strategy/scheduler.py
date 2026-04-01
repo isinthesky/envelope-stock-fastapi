@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Callable
 from zoneinfo import ZoneInfo
 
+from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.connection import get_async_session
 from src.adapters.database.models.strategy import StrategyStatus
 from src.adapters.database.repositories.strategy_repository import StrategyRepository
@@ -201,7 +202,8 @@ class StrategyScheduler:
         """휴장일 체크"""
         try:
             kis_client = get_kis_client()
-            market_data_service = MarketDataService(kis_client)
+            redis_client = await get_redis_client()
+            market_data_service = MarketDataService(kis_client, redis_client)
 
             # is_holiday 메서드가 있는 경우 사용
             if hasattr(market_data_service, "is_holiday"):
