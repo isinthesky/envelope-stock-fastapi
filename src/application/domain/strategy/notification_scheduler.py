@@ -17,9 +17,15 @@ import asyncio
 import logging
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func, select
+
 from src.adapters.database.connection import get_async_session
+from src.adapters.database.models.ohlcv import OHLCVModel
 from src.adapters.database.repositories.analysis_history_repository import (
     AnalysisHistoryRepository,
+)
+from src.adapters.database.repositories.stock_universe_repository import (
+    StockUniverseRepository,
 )
 from src.adapters.external.telegram import get_telegram_notifier
 from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
@@ -236,6 +242,59 @@ class NotificationScheduler:
 
     # ==================== 매수 알림 Job ====================
 
+    async def _extract_no_candle_symbols(self, warnings: list[str]) -> list[str]:
+        """경고 메시지에서 OHLCV가 전혀 없는 종목코드 추출"""
+        symbols: list[str] = []
+        marker = "No candle data available for"
+
+        for warning in warnings:
+            if marker not in warning:
+                continue
+            symbol = warning.split(":", 1)[0].strip()
+            if symbol and symbol not in symbols:
+                symbols.append(symbol)
+
+        if not symbols:
+            return []
+
+        async with get_async_session() as session:
+            valid_symbols: list[str] = []
+            for symbol in symbols:
+                stmt = select(func.count()).select_from(OHLCVModel).where(OHLCVModel.symbol == symbol)
+                count = (await session.execute(stmt)).scalar_one()
+                if count == 0:
+                    valid_symbols.append(symbol)
+
+        return valid_symbols
+
+    async def _auto_exclude_symbols_with_missing_candles(self, warnings: list[str]) -> list[str]:
+        """반복 경고 대상 중 DB에도 OHLCV가 전혀 없는 종목을 유니버스에서 자동 제외"""
+        symbols = await self._extract_no_candle_symbols(warnings)
+        if not symbols:
+            return []
+
+        excluded_symbols: list[str] = []
+        reason = "자동 제외: OHLCV 데이터 없음 (알림 스캔 중 확인)"
+
+        async with get_async_session() as session:
+            repo = StockUniverseRepository(session)
+            for symbol in symbols:
+                stock = await repo.get_by_symbol(symbol, session=session)
+                if not stock or stock.is_excluded:
+                    continue
+                await repo.exclude_stock(symbol, reason, session=session)
+                excluded_symbols.append(symbol)
+            if excluded_symbols:
+                await session.commit()
+
+        if excluded_symbols:
+            logger.warning(
+                "[NotificationScheduler] Auto-excluded symbols with missing candles: "
+                f"{', '.join(excluded_symbols)}"
+            )
+
+        return excluded_symbols
+
     async def _buy_notification_job(self, slot_label: str = "-") -> dict:
         """
         매수 알림 Job
@@ -268,6 +327,10 @@ class NotificationScheduler:
                     slot_label=slot_label,
                 )
 
+                auto_excluded_symbols = await self._auto_exclude_symbols_with_missing_candles(
+                    recommendations.errors
+                )
+
                 result = {
                     "success": True,
                     "slot": slot_label,
@@ -277,6 +340,8 @@ class NotificationScheduler:
                     "top_industry_count": len(recommendations.top_industries),
                     "warning_count": len(recommendations.errors),
                     "warnings": recommendations.errors[:5],
+                    "auto_excluded_count": len(auto_excluded_symbols),
+                    "auto_excluded_symbols": auto_excluded_symbols,
                 }
 
                 if sent:
