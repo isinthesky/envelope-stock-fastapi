@@ -94,6 +94,10 @@ class KofiaClient:
 
         rows = data.get("ds1") or []
         filtered_rows = [row for row in rows if row.get("TMPV2") == market_label]
+        resolved_market_label = market_label
+        if len(filtered_rows) < 2 and market_label != "전체":
+            filtered_rows = [row for row in rows if row.get("TMPV2") == "전체"]
+            resolved_market_label = "전체"
         if len(filtered_rows) < 2:
             return None
 
@@ -129,7 +133,7 @@ class KofiaClient:
             reasons.append(f"시장 거래량 과열 ({latest_volume:,})")
 
         return MarketCreditTrendData(
-            market_label=market_label,
+            market_label=resolved_market_label,
             latest_date=latest.get("TMPV1"),
             latest_balance_million=latest_balance,
             prev_balance_million=prev_balance,

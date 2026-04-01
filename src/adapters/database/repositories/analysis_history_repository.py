@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.analysis_history import AnalysisHistoryModel
+from src.adapters.database.models.stock_universe import StockUniverseModel
 from src.adapters.database.repositories.base_repository import (
     BaseRepository,
     PaginationMixin,
@@ -91,22 +92,26 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
         self, analysis_type: str, session: AsyncSession | None = None
     ) -> list[dict[str, str | None]]:
         """
-        활성 추적 중인 종목 코드 및 종목명 조회
-
-        Args:
-            analysis_type: 분석 유형 (buy/sell)
-            session: AsyncSession (새 패턴) 또는 None (기존 패턴)
+        활성 추적 중인 종목 코드/종목명/시장 조회
 
         Returns:
-            list[dict]: [{"symbol": "005930", "name": "삼성전자"}, ...]
+            list[dict]: [{"symbol": "005930", "name": "삼성전자", "market": "KOSPI"}, ...]
         """
         db = self._get_session(session)
-        stmt = select(self.model.symbol, self.model.name).where(
-            self.model.analysis_type == analysis_type,
-            self.model.is_active == True,  # noqa: E712
-        ).distinct()
+        stmt = (
+            select(self.model.symbol, self.model.name, StockUniverseModel.market)
+            .outerjoin(StockUniverseModel, StockUniverseModel.symbol == self.model.symbol)
+            .where(
+                self.model.analysis_type == analysis_type,
+                self.model.is_active == True,  # noqa: E712
+            )
+            .distinct()
+        )
         result = await db.execute(stmt)
-        return [{"symbol": row[0], "name": row[1]} for row in result.all()]
+        return [
+            {"symbol": row[0], "name": row[1], "market": row[2]}
+            for row in result.all()
+        ]
 
     async def get_by_symbol(
         self,

@@ -419,7 +419,11 @@ class NotificationScheduler:
                         if not symbol:
                             continue
                         try:
-                            result = await sell_service.analyze_sell_signal(symbol)
+                            result = await sell_service.analyze_sell_signal(
+                                symbol,
+                                name=item.get("name"),
+                                market=item.get("market"),
+                            )
 
                             if result.sell_phase in ["PHASE_4", "PHASE_5"]:
                                 stock_name = result.name or symbol_name_map.get(symbol)
