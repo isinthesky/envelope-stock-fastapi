@@ -1,62 +1,52 @@
-# CLAUDE.md - 프로젝트 가이드
+# CLAUDE.md - hantwo-stock-fastapi 프로젝트 가이드
 
-> KIS Trading API Service: 한국투자증권 Open API 기반 자동매매/분석 FastAPI 서버
+> FastAPI 기반 KIS(Open API) 트레이딩/분석 서버. **헥사고날(Ports & Adapters)** 구조를 유지합니다.
 
-## ✅ 프로젝트 역할
-- FastAPI 기반 REST/WS 서버 + 전략 실행/백테스트 엔진 제공
-- 헥사고날 아키텍처(Interface → Domain → Adapters) 유지
-- 애플리케이션 초기화/정리는 `src/main.py` lifespan에서 관리
+## 레이어(폴더) 한눈에 보기
 
----
-
-## 📁 루트 구조
-```
-envelope-stock-fastapi/
-├── src/                  # 애플리케이션 코드
-├── templates/            # Jinja2 대시보드 템플릿
-├── docs/                 # 문서
-├── examples/             # 예제 스크립트
-├── scripts/              # 유틸/실험 스크립트
-├── tests/                # pytest 테스트
-├── alembic/              # DB 마이그레이션
-├── reports/              # 전략/백테스트 리포트 출력
-├── docker-compose.yml    # 로컬 인프라
-├── Dockerfile            # 컨테이너 빌드
-├── pyproject.toml        # 패키지/툴 설정
-└── .env.example          # 환경 변수 템플릿
+```text
+Inbound (HTTP/WS/Page)        Application                 Outbound (I/O)
+src/application/interface  -> src/application/domain  ->  src/adapters/*
+                                ↑
+                           src/application/common
+                                ↑
+                           src/settings
 ```
 
----
+## 의존성 규칙 (Do / Don't)
+- **허용 방향**: `interface → domain → adapters`
+- **공통 사용**: `settings`, `application/common`은 모든 레이어에서 사용 가능
+- **금지**
+  - `domain`에서 FastAPI 객체(`Request`, `Response`) 직접 사용 금지
+  - `interface`에서 DB 모델/Repository 직접 호출 금지(서비스 호출만)
+  - `adapters`에서 비즈니스 규칙/정책 결정 금지(순수 I/O)
 
-## 🧠 실행 흐름 요약
-`src/main.py`의 lifespan에서 아래 작업을 수행합니다.
-- DB 연결 확인 및 상태 로그 출력
-- Redis 연결 확인
-- `auto_reauth` 활성화 시 KIS 토큰 발급 + 갱신 태스크 시작
-- 레거시 전략 엔진 시작 (`strategy.engine`)
-- 골든크로스 전략 스케줄러 시작 (`strategy.scheduler`)
-- Telegram 알림 스케줄러 시작 (`strategy.notification_scheduler`)
-- 종료 시 위 작업과 외부 클라이언트 정리
+## 실행/개발 명령
+- **의존성 설치**: `uv sync`
+- **개발 서버**: `uvicorn src.main:app --reload`
+- **테스트**: `pytest`
+- **품질 도구**: `black src/ tests/`, `isort src/ tests/`, `mypy src/`
 
----
+## 코드 추가 위치 가이드
+- **새 REST API**: `src/application/interface/api/*_router.py` + `src/main.py`에 `include_router`
+- **새 페이지(대시보드)**: `src/application/interface/page/*_page_router.py` + `page/__init__.py`의 `page_routers`에 등록
+- **새 유즈케이스/서비스**: `src/application/domain/<domain>/service.py` (DTO는 `dto.py`)
+- **새 외부 연동(KIS 외 API 등)**: `src/adapters/external/<provider>/...`
+- **새 DB 엔티티/Repository**: `src/adapters/database/models`, `src/adapters/database/repositories`
+- **환경 변수/설정 추가**: `src/settings/config.py` (+ `.env.example`는 템플릿만)
 
-## 🧭 레이어 규칙
-```
-Interface → Domain → Adapters
-         ↘ Common/Settings
-```
-- Interface는 HTTP/WS 진입점만 담당합니다.
-- Domain은 비즈니스 규칙과 트랜잭션 경계를 관리합니다.
-- Adapters는 외부 연동(DB/Redis/KIS/Telegram/WS)을 담당합니다.
-- Common/Settings는 모든 레이어에서 공통으로 사용합니다.
+## 보안/운영 주의
+- **절대 커밋 금지**: `.env`, 실전 키/시크릿/계좌번호, 토큰 캐시 파일류
+- 로그에 인증정보를 남기지 말 것(특히 URL credential, 토큰)
 
----
+## 레이어별 상세 문서
+- `docs/base/CLAUDE.md` (문서 레이어 운영 규칙)
+- `src/CLAUDE.md` (서버 엔트리포인트/라우터/라이프사이클)
+- `src/application/CLAUDE.md` (application 하위 레이어 개요)
+- `src/application/common/CLAUDE.md` (DTO/DI/데코레이터/태스크)
+- `src/application/domain/CLAUDE.md` (도메인 서비스/엔진/스케줄러)
+- `src/application/domain/news_trading/CLAUDE.md` (뉴스 트레이딩 서브도메인)
+- `src/application/interface/CLAUDE.md` (API/WS/Page 라우팅 규칙)
+- `src/adapters/CLAUDE.md` (DB/Redis/KIS/Naver/Telegram/WS 인프라)
+- `src/settings/CLAUDE.md` (설정 규칙/환경 변수)
 
-## 🔗 세부 가이드
-- `src/CLAUDE.md`
-- `src/application/CLAUDE.md`
-- `src/application/domain/CLAUDE.md`
-- `src/application/common/CLAUDE.md`
-- `src/application/interface/CLAUDE.md`
-- `src/adapters/CLAUDE.md`
-- `src/settings/CLAUDE.md`

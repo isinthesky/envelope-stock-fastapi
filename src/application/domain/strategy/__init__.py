@@ -12,7 +12,7 @@ Strategy Domain - 자동매매 전략 실행 및 관리
 from src.application.domain.strategy.strategy_service import StrategyService
 from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
 from src.application.domain.strategy.sell_strategy_service import SellStrategyService
-from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
+from src.application.domain.ohlcv.data_loader import OHLCVDataLoader
 
 __all__ = [
     "StrategyService",

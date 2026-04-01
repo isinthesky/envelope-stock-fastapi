@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.repositories.ohlcv_repository import OHLCVRepository
+from src.application.common.trading_calendar import get_trading_calendar
 from src.application.domain.ohlcv.dto import (
     CacheRetentionPolicyDTO,
     CleanupResultDTO,
@@ -19,72 +20,6 @@ from src.application.domain.ohlcv.dto import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# 한국 공휴일 (간단 버전 - 필요시 확장)
-KOREA_HOLIDAYS_2024 = {
-    datetime(2024, 1, 1),   # 신정
-    datetime(2024, 2, 9),   # 설날 연휴
-    datetime(2024, 2, 10),  # 설날
-    datetime(2024, 2, 11),  # 설날 연휴
-    datetime(2024, 2, 12),  # 대체휴일
-    datetime(2024, 3, 1),   # 삼일절
-    datetime(2024, 4, 10),  # 국회의원선거
-    datetime(2024, 5, 5),   # 어린이날
-    datetime(2024, 5, 6),   # 대체휴일
-    datetime(2024, 5, 15),  # 부처님오신날
-    datetime(2024, 6, 6),   # 현충일
-    datetime(2024, 8, 15),  # 광복절
-    datetime(2024, 9, 16),  # 추석 연휴
-    datetime(2024, 9, 17),  # 추석
-    datetime(2024, 9, 18),  # 추석 연휴
-    datetime(2024, 10, 3),  # 개천절
-    datetime(2024, 10, 9),  # 한글날
-    datetime(2024, 12, 25), # 성탄절
-}
-
-KOREA_HOLIDAYS_2025 = {
-    datetime(2025, 1, 1),   # 신정
-    datetime(2025, 1, 28),  # 설날 연휴
-    datetime(2025, 1, 29),  # 설날
-    datetime(2025, 1, 30),  # 설날 연휴
-    datetime(2025, 3, 1),   # 삼일절
-    datetime(2025, 5, 5),   # 어린이날
-    datetime(2025, 5, 6),   # 부처님오신날
-    datetime(2025, 6, 6),   # 현충일
-    datetime(2025, 8, 15),  # 광복절
-    datetime(2025, 10, 3),  # 개천절
-    datetime(2025, 10, 5),  # 추석 연휴
-    datetime(2025, 10, 6),  # 추석
-    datetime(2025, 10, 7),  # 추석 연휴
-    datetime(2025, 10, 8),  # 대체휴일
-    datetime(2025, 10, 9),  # 한글날
-    datetime(2025, 12, 25), # 성탄절
-}
-
-KOREA_HOLIDAYS_2026 = {
-    datetime(2026, 1, 1),   # 신정
-    datetime(2026, 2, 16),  # 설날 연휴
-    datetime(2026, 2, 17),  # 설날
-    datetime(2026, 2, 18),  # 설날 연휴
-    datetime(2026, 3, 1),   # 삼일절
-    datetime(2026, 3, 2),   # 대체휴일
-    datetime(2026, 5, 5),   # 어린이날
-    datetime(2026, 5, 24),  # 부처님오신날
-    datetime(2026, 5, 25),  # 대체휴일
-    datetime(2026, 6, 6),   # 현충일
-    datetime(2026, 8, 15),  # 광복절
-    datetime(2026, 8, 17),  # 대체휴일
-    datetime(2026, 9, 24),  # 추석 연휴
-    datetime(2026, 9, 25),  # 추석
-    datetime(2026, 9, 26),  # 추석 연휴
-    datetime(2026, 10, 3),  # 개천절
-    datetime(2026, 10, 5),  # 대체휴일
-    datetime(2026, 10, 9),  # 한글날
-    datetime(2026, 12, 25), # 성탄절
-}
-
-KOREA_HOLIDAYS = KOREA_HOLIDAYS_2024 | KOREA_HOLIDAYS_2025 | KOREA_HOLIDAYS_2026
 
 
 class OHLCVCacheManager:
@@ -101,6 +36,7 @@ class OHLCVCacheManager:
         """
         self.session = session
         self.ohlcv_repo = OHLCVRepository(session)
+        self.calendar = get_trading_calendar()
 
     # ==================== 데이터 정리 ====================
 
@@ -405,16 +341,7 @@ class OHLCVCacheManager:
         Returns:
             bool: 거래일 여부
         """
-        # 주말 확인
-        if date.weekday() >= 5:  # 토요일(5), 일요일(6)
-            return False
-
-        # 공휴일 확인
-        date_only = datetime(date.year, date.month, date.day)
-        if date_only in KOREA_HOLIDAYS:
-            return False
-
-        return True
+        return self.calendar.is_trading_day(date)
 
     def get_trading_days_between(
         self,
@@ -431,15 +358,7 @@ class OHLCVCacheManager:
         Returns:
             list[datetime]: 거래일 목록
         """
-        trading_days = []
-        current = start_date
-
-        while current <= end_date:
-            if self.is_trading_day(current):
-                trading_days.append(current)
-            current += timedelta(days=1)
-
-        return trading_days
+        return self.calendar.get_trading_days_between(start_date, end_date)
 
     def estimate_trading_days(self, days: int) -> int:
         """
@@ -453,5 +372,4 @@ class OHLCVCacheManager:
         Returns:
             int: 예상 거래일 수
         """
-        # 연간 약 365일 중 250일 거래 → 비율 0.685
-        return int(days * 0.685)
+        return self.calendar.estimate_trading_days(days)

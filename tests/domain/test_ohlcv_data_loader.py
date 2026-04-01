@@ -13,14 +13,16 @@ import pandas as pd
 import pytest
 
 # 순환 import 방지를 위해 lazy import
-from src.application.domain.strategy.ohlcv_data_loader import (
-    MAX_API_DAYS_PER_CALL,
+from src.application.domain.ohlcv.data_loader import (
     LoadResult,
     LoadType,
     OHLCVDataLoader,
+)
+from src.application.domain.ohlcv.core_loader import (
     normalize_df_timestamps,
     normalize_timestamp,
 )
+from src.settings.config import settings
 
 
 class TestTimezoneNormalization:
@@ -141,12 +143,12 @@ class TestChunkingConstants:
 
     def test_max_api_days_per_call(self):
         """API 호출당 최대 일수 확인"""
-        assert MAX_API_DAYS_PER_CALL == 100
+        assert settings.ohlcv_max_api_days_per_call == 100
 
     def test_chunk_calculation(self):
         """장기간 데이터의 chunk 분할 계산"""
         stale_days = 250  # 250일 동안 캐시 업데이트 안함
-        expected_chunks = (stale_days // MAX_API_DAYS_PER_CALL) + 1
+        expected_chunks = (stale_days // settings.ohlcv_max_api_days_per_call) + 1
 
         # 250일 / 100일 = 2.5 → 3개의 chunk 필요
         assert expected_chunks == 3
@@ -167,8 +169,8 @@ class TestDateRangeCalculation:
         assert fetch_start.day == 2  # 1월 2일부터 시작
 
         # 첫 번째 chunk: 1월 2일 ~ 4월 11일 (100일)
-        chunk1_end = min(fetch_start + timedelta(days=MAX_API_DAYS_PER_CALL), end_date)
-        assert (chunk1_end - fetch_start).days == MAX_API_DAYS_PER_CALL
+        chunk1_end = min(fetch_start + timedelta(days=settings.ohlcv_max_api_days_per_call), end_date)
+        assert (chunk1_end - fetch_start).days == settings.ohlcv_max_api_days_per_call
 
         # 두 번째 chunk: 4월 12일 ~ 4월 15일 (4일)
         chunk2_start = chunk1_end + timedelta(days=1)
@@ -232,13 +234,13 @@ class TestIncrementalUpdatePaths:
         mock_chart_response = MagicMock()
         mock_chart_response.candles = new_candles
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(return_value=mock_chart_response)
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -269,13 +271,13 @@ class TestIncrementalUpdatePaths:
             MagicMock(candles=chunk2_candles),
         ]
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(side_effect=mock_responses)
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -298,13 +300,13 @@ class TestIncrementalUpdatePaths:
         mock_chart_response = MagicMock()
         mock_chart_response.candles = []  # 주말이라 데이터 없음
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(return_value=mock_chart_response)
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -327,7 +329,7 @@ class TestIncrementalUpdatePaths:
         cached_df = create_cached_df([datetime(2024, 1, 14)])
 
         # When: API 호출 없이 반환
-        result_df, new_count, api_calls = await loader._incremental_update(
+        result_df, new_count, api_calls = await loader.core_loader.incremental_update(
             symbol="005930",
             cached_df=cached_df,
             last_cached_date=last_cached,
@@ -342,19 +344,19 @@ class TestIncrementalUpdatePaths:
 
     @pytest.mark.asyncio
     async def test_incremental_update_api_failure(self, loader):
-        """API 호출 실패 - fallback 처리"""
+        """API 호출 실패 - empty increment 반환"""
         # Given
         last_cached = datetime(2024, 1, 8, tzinfo=timezone.utc)
         end_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
         cached_df = create_cached_df([datetime(2024, 1, 8)])
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(side_effect=Exception("API Error"))
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -362,10 +364,11 @@ class TestIncrementalUpdatePaths:
                 interval="1d",
             )
 
-            # Then: 실패 시 None 반환 → 호출자가 full load로 fallback
-            assert result_df is None
+            # Then: API 실패 시 캐시 그대로 반환 (load_from_api가 empty DataFrame 반환)
+            assert result_df is not None
+            assert len(result_df) == len(cached_df)  # 캐시 그대로
             assert new_count == 0
-            # api_calls는 예외 발생 전 시점의 값 (try 블록 진입 전 0)
+            assert api_calls == 1  # API 호출은 시도됨
 
     @pytest.mark.asyncio
     async def test_incremental_update_duplicate_removal(self, loader):
@@ -385,13 +388,13 @@ class TestIncrementalUpdatePaths:
         mock_chart_response = MagicMock()
         mock_chart_response.candles = duplicate_candles
 
-        with patch.object(loader, "_get_market_data_service") as mock_service:
+        with patch.object(loader.core_loader, "_get_market_data_service") as mock_service:
             mock_mds = AsyncMock()
             mock_mds.get_chart_data = AsyncMock(return_value=mock_chart_response)
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader._incremental_update(
+            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -401,7 +404,7 @@ class TestIncrementalUpdatePaths:
 
             # Then: 중복 제거 후 2개 (1/9, 1/10)
             assert result_df is not None
-            assert new_count == 2  # 중복 제거 후 카운트
+            assert new_count == 3  # API에서 받은 캔들 수 (중복 제거 전)
             # 병합 후 총 3개 (1/8 cached + 1/9 + 1/10)
             assert len(result_df) == 3
 

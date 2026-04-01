@@ -50,6 +50,7 @@ dependencies = [
     # 유틸리티
     "python-multipart>=0.0.9",
     "email-validator>=2.2.0",
+    "holidays>=0.58",
 
     # 스케줄링
     "apscheduler>=3.10.0",
