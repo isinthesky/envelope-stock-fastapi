@@ -28,6 +28,21 @@ class StockFinancialData:
     pbr: float | None  # PBR
 
 
+@dataclass
+class StockPersonalFlowData:
+    """개인 수급 데이터 (네이버 dealTrend 기반)"""
+
+    symbol: str
+    latest_date: str | None
+    latest_individual_net_buy: int | None
+    latest_close_price: int | None
+    latest_volume: int | None
+    days_positive_count: int
+    recent_3d_net_buy: int
+    recent_5d_net_buy: int
+    recent_5d_buy_ratio_to_volume: float | None
+
+
 class NaverStockClient:
     """
     네이버 주식 API 클라이언트
@@ -204,6 +219,52 @@ class NaverStockClient:
                 pass
 
         return total
+
+    async def get_personal_flow_data(self, symbol: str) -> StockPersonalFlowData | None:
+        """개인 수급 과열 판단용 최근 수급 데이터 조회"""
+        try:
+            integration_data = await self.get_integration(symbol)
+            deal_trend_infos = integration_data.get("dealTrendInfos", [])
+            if not deal_trend_infos:
+                return None
+
+            def parse_int(value: Any) -> int | None:
+                if value in (None, "", "-"):
+                    return None
+                try:
+                    return int(str(value).replace(",", "").replace("+", ""))
+                except ValueError:
+                    return None
+
+            rows = deal_trend_infos[:5]
+            latest = rows[0]
+            latest_volume = parse_int(latest.get("accumulatedTradingVolume"))
+            recent_3d_net_buy = sum(
+                parse_int(row.get("individualPureBuyQuant")) or 0 for row in rows[:3]
+            )
+            recent_5d_net_buy = sum(
+                parse_int(row.get("individualPureBuyQuant")) or 0 for row in rows[:5]
+            )
+            positive_days = sum(
+                1 for row in rows if (parse_int(row.get("individualPureBuyQuant")) or 0) > 0
+            )
+            buy_ratio = None
+            if latest_volume and latest_volume > 0 and recent_5d_net_buy > 0:
+                buy_ratio = recent_5d_net_buy / latest_volume
+
+            return StockPersonalFlowData(
+                symbol=symbol,
+                latest_date=latest.get("bizdate"),
+                latest_individual_net_buy=parse_int(latest.get("individualPureBuyQuant")),
+                latest_close_price=parse_int(latest.get("closePrice")),
+                latest_volume=latest_volume,
+                days_positive_count=positive_days,
+                recent_3d_net_buy=recent_3d_net_buy,
+                recent_5d_net_buy=recent_5d_net_buy,
+                recent_5d_buy_ratio_to_volume=buy_ratio,
+            )
+        except Exception:
+            return None
 
     def _extract_latest_value(
         self, row_list: list[dict], title: str

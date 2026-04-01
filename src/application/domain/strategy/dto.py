@@ -897,6 +897,14 @@ class SellSignalAnalysisDTO(BaseDTO):
     is_strong_downtrend: bool = Field(default=False, description="강한 하락 추세 여부 (ADX>25 & -DI>+DI)")
     overbought_sell_blocked: bool = Field(default=False, description="과매수 매도 차단 여부 (강한 상승 추세)")
 
+    # === 개인 수급 관련 신규 필드 ===
+    personal_net_buy_latest: int | None = Field(default=None, description="최근 일자 개인 순매수 수량")
+    personal_net_buy_3d: int | None = Field(default=None, description="최근 3일 개인 순매수 합계")
+    personal_net_buy_5d: int | None = Field(default=None, description="최근 5일 개인 순매수 합계")
+    personal_buy_days_5d: int | None = Field(default=None, description="최근 5일 중 개인 순매수 일수")
+    personal_buy_ratio_5d_to_volume: float | None = Field(default=None, description="최근 5일 개인 순매수 합계 / 최근 거래량")
+    is_personal_buying_overheated: bool = Field(default=False, description="개인 수급 과열 여부")
+
     # 추가 정보
     candle_count: int = Field(default=0, description="분석에 사용된 캔들 수")
 

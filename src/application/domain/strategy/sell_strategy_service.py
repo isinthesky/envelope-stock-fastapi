@@ -9,6 +9,7 @@ Sell Strategy Service - 매도 전략 서비스
 
 import logging
 import math
+from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal
 
@@ -30,6 +31,7 @@ from src.application.domain.strategy.dto import (
 )
 from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
 from src.settings.sell_score_settings import SellScoreSettings
+from src.adapters.external.naver.stock_client import StockPersonalFlowData, get_naver_stock_client
 
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,41 @@ class SellStrategyService:
         if self._data_loader is None:
             self._data_loader = OHLCVDataLoader(self.session)
         return self._data_loader
+
+    async def _get_personal_flow_data(self, symbol: str) -> StockPersonalFlowData | None:
+        """네이버 dealTrend 기반 개인 수급 데이터 조회"""
+        try:
+            return await get_naver_stock_client().get_personal_flow_data(symbol)
+        except Exception:
+            logger.debug("[Sell Signal] failed to fetch personal flow for %s", symbol, exc_info=True)
+            return None
+
+    def _is_personal_buying_overheated(
+        self,
+        personal_flow_data: StockPersonalFlowData | None,
+    ) -> tuple[bool, list[str]]:
+        """개인 수급 과열 여부 판단"""
+        if personal_flow_data is None:
+            return False, []
+
+        config = self.sell_score_settings
+        reasons: list[str] = []
+        ratio = personal_flow_data.recent_5d_buy_ratio_to_volume
+        positive_days = personal_flow_data.days_positive_count
+        recent_5d_net_buy = personal_flow_data.recent_5d_net_buy
+
+        if positive_days >= config.personal_buy_days_threshold and recent_5d_net_buy > 0:
+            reasons.append(
+                f"개인 순매수 집중 ({positive_days}/5일, 5일 합계 {recent_5d_net_buy:,}주)"
+            )
+
+        if ratio is not None:
+            if ratio >= config.personal_buy_ratio_high:
+                reasons.append(f"개인 매수 과열 비중 높음 ({ratio * 100:.1f}% of 최근 거래량)")
+            elif ratio >= config.personal_buy_ratio_mid:
+                reasons.append(f"개인 매수 비중 확대 ({ratio * 100:.1f}% of 최근 거래량)")
+
+        return len(reasons) >= 2, reasons
 
     async def _get_symbol_hints(
         self,
@@ -444,6 +481,12 @@ class SellStrategyService:
                 if high_52week_value > 0:
                     high_52week_ratio = close / high_52week_value
 
+        # 3-2. 개인 수급 과열 체크 (정확한 신용잔고 API 확보 전 보조지표)
+        personal_flow_data = await self._get_personal_flow_data(symbol)
+        is_personal_buying_overheated, personal_flow_reasons = self._is_personal_buying_overheated(
+            personal_flow_data
+        )
+
         # 4. 기본 지표 계산
         is_gc_active = ma_short > ma_long
         is_death_cross = ma_short < ma_long
@@ -528,6 +571,15 @@ class SellStrategyService:
             is_52week_high=is_52week_high,
             high_52week_score=high_52week_score if high_52week_value is not None else None,
             high_52week_reason=high_52week_reason if high_52week_value is not None else None,
+            personal_buy_days_5d=(
+                personal_flow_data.days_positive_count if personal_flow_data else None
+            ),
+            personal_buy_ratio_5d_to_volume=(
+                personal_flow_data.recent_5d_buy_ratio_to_volume if personal_flow_data else None
+            ),
+            recent_5d_personal_net_buy=(
+                personal_flow_data.recent_5d_net_buy if personal_flow_data else None
+            ),
         )
 
         final_stage = self.determine_final_stage(
@@ -573,6 +625,7 @@ class SellStrategyService:
 
         # Phase 근거 추가
         sell_reasons.extend(phase_reasons)
+        sell_reasons.extend(personal_flow_reasons)
 
         if not sell_reasons:
             sell_reasons.append("현재 매도 시그널 없음 - 보유 유지")
@@ -671,6 +724,24 @@ class SellStrategyService:
             is_strong_uptrend=adx_indicators.get("is_strong_uptrend", False),
             is_strong_downtrend=adx_indicators.get("is_strong_downtrend", False),
             overbought_sell_blocked=overbought_sell_blocked,
+            personal_net_buy_latest=(
+                personal_flow_data.latest_individual_net_buy if personal_flow_data else None
+            ),
+            personal_net_buy_3d=(
+                personal_flow_data.recent_3d_net_buy if personal_flow_data else None
+            ),
+            personal_net_buy_5d=(
+                personal_flow_data.recent_5d_net_buy if personal_flow_data else None
+            ),
+            personal_buy_days_5d=(
+                personal_flow_data.days_positive_count if personal_flow_data else None
+            ),
+            personal_buy_ratio_5d_to_volume=(
+                round(personal_flow_data.recent_5d_buy_ratio_to_volume, 4)
+                if personal_flow_data and personal_flow_data.recent_5d_buy_ratio_to_volume is not None
+                else None
+            ),
+            is_personal_buying_overheated=is_personal_buying_overheated,
             candle_count=candle_count,
         )
 
@@ -696,6 +767,9 @@ class SellStrategyService:
         is_52week_high: bool = False,
         high_52week_score: float | None = None,
         high_52week_reason: str | None = None,
+        personal_buy_days_5d: int | None = None,
+        personal_buy_ratio_5d_to_volume: float | None = None,
+        recent_5d_personal_net_buy: int | None = None,
         settings: SellScoreSettings | None = None,
     ) -> SellScoreResultDTO:
         """점수 기반 매도 판단"""
@@ -779,6 +853,34 @@ class SellStrategyService:
                 score_reasons.append(high_52week_reason)
         total_score += high_score
 
+        # 개인 수급 과열 점수
+        personal_flow_score = 0.0
+        if (
+            recent_5d_personal_net_buy is not None
+            and recent_5d_personal_net_buy > 0
+            and personal_buy_days_5d is not None
+        ):
+            if (
+                personal_buy_ratio_5d_to_volume is not None
+                and personal_buy_days_5d >= config.personal_buy_days_threshold
+                and personal_buy_ratio_5d_to_volume >= config.personal_buy_ratio_high
+            ):
+                personal_flow_score = config.personal_flow_weight
+                score_reasons.append(
+                    "개인 수급 과열 강함 (연속 순매수 + 거래량 대비 비중 높음)"
+                )
+            elif (
+                personal_buy_ratio_5d_to_volume is not None
+                and personal_buy_days_5d >= config.personal_buy_days_threshold
+                and personal_buy_ratio_5d_to_volume >= config.personal_buy_ratio_mid
+            ):
+                personal_flow_score = config.personal_flow_weight * 0.7
+                score_reasons.append("개인 수급 과열 경고 (최근 5일 순매수 집중)")
+            elif personal_buy_days_5d >= config.personal_buy_days_threshold:
+                personal_flow_score = config.personal_flow_weight * 0.4
+                score_reasons.append("개인 수급 쏠림 경고 (최근 5일 순매수 우세)")
+        total_score += personal_flow_score
+
         # ADX 약화 점수
         adx_score = 0.0
         if adx is not None:
@@ -837,6 +939,8 @@ class SellStrategyService:
             available_max += 5.0
         if high_52week_score is not None:
             available_max += 10.0
+        if recent_5d_personal_net_buy is not None and recent_5d_personal_net_buy > 0:
+            available_max += config.personal_flow_weight
         if adx is not None:
             available_max += config.adx_weight
         available_max += config.ma_weight + 3.0
@@ -863,6 +967,7 @@ class SellStrategyService:
             "volume_peak_score": round(peak_score_raw, 2),
             "high_52week_score": round(high_score, 2),
             "high_52week_bonus": round(overbought_bonus, 2),
+            "personal_flow_score": round(personal_flow_score, 2),
             "adx_score": round(adx_score, 2),
             "ma_score": round(ma_score, 2),
             "cross_score": round(cross_score, 2),
