@@ -31,6 +31,7 @@ from src.application.domain.strategy.dto import (
 )
 from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
 from src.settings.sell_score_settings import SellScoreSettings
+from src.adapters.external.kofia_client import MarketCreditTrendData, get_kofia_client
 from src.adapters.external.naver.stock_client import StockPersonalFlowData, get_naver_stock_client
 
 
@@ -74,6 +75,27 @@ class SellStrategyService:
             return await get_naver_stock_client().get_personal_flow_data(symbol)
         except Exception:
             logger.debug("[Sell Signal] failed to fetch personal flow for %s", symbol, exc_info=True)
+            return None
+
+    async def _get_market_credit_trend(
+        self,
+        market: str | None,
+    ) -> MarketCreditTrendData | None:
+        """KOFIA 기반 시장 신용 과열 데이터 조회"""
+        market_label = "전체"
+        if (market or "").upper() == "KOSPI":
+            market_label = "유가증권"
+        elif (market or "").upper() == "KOSDAQ":
+            market_label = "코스닥"
+
+        try:
+            return await get_kofia_client().get_market_credit_trend(
+                start_date="20260101",
+                end_date=datetime.now().strftime("%Y%m%d"),
+                market_label=market_label,
+            )
+        except Exception:
+            logger.debug("[Sell Signal] failed to fetch market credit trend for %s", market, exc_info=True)
             return None
 
     def _is_personal_buying_overheated(
@@ -487,6 +509,13 @@ class SellStrategyService:
             personal_flow_data
         )
 
+        # 3-3. 시장 신용 과열 체크 (KOFIA)
+        market_credit_data = await self._get_market_credit_trend(market)
+        is_market_credit_overheated = bool(
+            market_credit_data and market_credit_data.is_overheated
+        )
+        market_credit_reasons = market_credit_data.reasons if market_credit_data else []
+
         # 4. 기본 지표 계산
         is_gc_active = ma_short > ma_long
         is_death_cross = ma_short < ma_long
@@ -554,6 +583,14 @@ class SellStrategyService:
             is_personal_buying_overheated,
         )
         stage_reasons.extend(personal_stage_reasons)
+        sell_stage, market_credit_stage_reasons = self._upgrade_stage_for_personal_overheat(
+            sell_stage,
+            is_market_credit_overheated,
+        )
+        if market_credit_stage_reasons:
+            stage_reasons.extend(
+                [reason.replace("개인 수급 과열", "시장 신용 과열") for reason in market_credit_stage_reasons]
+            )
 
         sell_score_result = self.calculate_sell_score(
             stoch_k=stoch_k_raw,
@@ -599,6 +636,14 @@ class SellStrategyService:
         )
         if final_personal_stage_reasons:
             stage_reasons.extend(final_personal_stage_reasons)
+        final_stage, final_market_credit_stage_reasons = self._upgrade_stage_for_personal_overheat(
+            final_stage,
+            is_market_credit_overheated,
+        )
+        if final_market_credit_stage_reasons:
+            stage_reasons.extend(
+                [reason.replace("개인 수급 과열", "시장 신용 과열") for reason in final_market_credit_stage_reasons]
+            )
 
         final_ratio_min, final_ratio_max = SELL_STAGE_RATIOS.get(final_stage, (0.0, 0.0))
 
@@ -637,6 +682,7 @@ class SellStrategyService:
         # Phase 근거 추가
         sell_reasons.extend(phase_reasons)
         sell_reasons.extend(personal_flow_reasons)
+        sell_reasons.extend(market_credit_reasons)
 
         if not sell_reasons:
             sell_reasons.append("현재 매도 시그널 없음 - 보유 유지")
@@ -753,6 +799,19 @@ class SellStrategyService:
                 else None
             ),
             is_personal_buying_overheated=is_personal_buying_overheated,
+            market_credit_label=(market_credit_data.market_label if market_credit_data else None),
+            market_credit_balance_million=(market_credit_data.latest_balance_million if market_credit_data else None),
+            market_credit_change_ratio=(
+                round(market_credit_data.balance_change_ratio, 4)
+                if market_credit_data and market_credit_data.balance_change_ratio is not None
+                else None
+            ),
+            market_credit_recent_high_ratio=(
+                round(market_credit_data.recent_5d_high_ratio, 4)
+                if market_credit_data and market_credit_data.recent_5d_high_ratio is not None
+                else None
+            ),
+            is_market_credit_overheated=is_market_credit_overheated,
             candle_count=candle_count,
         )
 

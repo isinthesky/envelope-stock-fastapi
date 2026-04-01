@@ -435,6 +435,8 @@ class NotificationScheduler:
                                         "sell_stage_name": result.sell_stage_name,
                                         "final_stage": result.final_stage,
                                         "is_personal_buying_overheated": result.is_personal_buying_overheated,
+                                        "is_market_credit_overheated": result.is_market_credit_overheated,
+                                        "market_credit_label": result.market_credit_label,
                                         "sell_reasons": result.sell_reasons,
                                     }
                                 )

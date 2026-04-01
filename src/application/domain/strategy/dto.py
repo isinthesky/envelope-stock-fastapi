@@ -905,6 +905,13 @@ class SellSignalAnalysisDTO(BaseDTO):
     personal_buy_ratio_5d_to_volume: float | None = Field(default=None, description="최근 5일 개인 순매수 합계 / 최근 거래량")
     is_personal_buying_overheated: bool = Field(default=False, description="개인 수급 과열 여부")
 
+    # === 시장 신용 과열 관련 신규 필드 ===
+    market_credit_label: str | None = Field(default=None, description="시장 신용 데이터 기준 시장")
+    market_credit_balance_million: int | None = Field(default=None, description="최신 시장 신용잔고 (백만 단위)")
+    market_credit_change_ratio: float | None = Field(default=None, description="시장 신용잔고 일간 증감률")
+    market_credit_recent_high_ratio: float | None = Field(default=None, description="최근 5일 고점 대비 현재 비율")
+    is_market_credit_overheated: bool = Field(default=False, description="시장 신용 과열 여부")
+
     # 추가 정보
     candle_count: int = Field(default=0, description="분석에 사용된 캔들 수")
 
