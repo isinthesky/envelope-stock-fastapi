@@ -25,6 +25,10 @@ class TestOrderPacing:
     @pytest.fixture
     def service(self):
         """테스트용 OrderService (모킹)"""
+        # 클래스 레벨 공유 상태를 테스트 간 격리
+        OrderService._last_order_at = None
+        OrderService._last_order_at_by_symbol = {}
+        OrderService._amend_counts = {}
         mock_kis_client = MagicMock()
         service = OrderService(kis_client=mock_kis_client, session=None)
         return service
@@ -97,13 +101,13 @@ class TestOrderPacing:
     @pytest.mark.asyncio
     async def test_timestamps_updated(self, service):
         """타임스탬프가 정상 업데이트됨"""
-        assert service._last_order_at is None
-        assert len(service._last_order_at_by_symbol) == 0
+        assert OrderService._last_order_at is None
+        assert len(OrderService._last_order_at_by_symbol) == 0
 
         await service._enforce_order_pacing("005930")
 
-        assert service._last_order_at is not None
-        assert "005930" in service._last_order_at_by_symbol
+        assert OrderService._last_order_at is not None
+        assert "005930" in OrderService._last_order_at_by_symbol
 
 
 class TestAmendLimit:
@@ -112,6 +116,7 @@ class TestAmendLimit:
     @pytest.fixture
     def service(self):
         """테스트용 OrderService"""
+        OrderService._amend_counts = {}
         mock_kis_client = MagicMock()
         return OrderService(kis_client=mock_kis_client, session=None)
 
@@ -366,10 +371,15 @@ class TestOrderServiceInitialization:
 
     def test_initial_state(self):
         """초기 상태 확인"""
+        # 클래스 레벨 상태 리셋
+        OrderService._last_order_at = None
+        OrderService._last_order_at_by_symbol = {}
+        OrderService._amend_counts = {}
+
         mock_kis_client = MagicMock()
         service = OrderService(kis_client=mock_kis_client, session=None)
 
-        assert service._last_order_at is None
-        assert service._last_order_at_by_symbol == {}
-        assert service._amend_counts == {}
-        assert isinstance(service._order_lock, asyncio.Lock)
+        assert OrderService._last_order_at is None
+        assert OrderService._last_order_at_by_symbol == {}
+        assert OrderService._amend_counts == {}
+        assert isinstance(OrderService._order_lock, asyncio.Lock)

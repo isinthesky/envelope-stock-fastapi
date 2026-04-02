@@ -28,6 +28,10 @@ from src.adapters.database.repositories.analysis_history_repository import (
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
 )
+from src.adapters.database.repositories.strategy_repository import StrategyRepository
+from src.adapters.database.repositories.strategy_symbol_state_repository import (
+    StrategySymbolStateRepository,
+)
 from src.adapters.external.kofia_client import get_kofia_client
 from src.adapters.external.naver.stock_client import get_naver_stock_client
 from src.adapters.external.telegram import get_telegram_notifier
@@ -457,15 +461,43 @@ class NotificationScheduler:
                     sell_alerts: list[dict] = []
                     warnings: list[str] = []
 
+                    # 활성 전략의 보유 종목 진입가/최고가 조회 (페이지 API와 동일한 파라미터 적용)
+                    symbol_state_map: dict[str, dict] = {}
+                    try:
+                        strategy_repo = StrategyRepository(session)
+                        state_repo = StrategySymbolStateRepository(session)
+                        active_strategies = await strategy_repo.get_active_strategies(session=session)
+                        for strategy in active_strategies:
+                            for item in active_items:
+                                sym = item["symbol"]
+                                if sym and sym not in symbol_state_map:
+                                    state = await state_repo.get_by_strategy_and_symbol(
+                                        strategy.id, sym, session=session
+                                    )
+                                    if state and state.entry_price:
+                                        symbol_state_map[sym] = {
+                                            "entry_price": float(state.entry_price),
+                                            "highest_price": float(state.highest_price) if state.highest_price else None,
+                                            "trailing_stop_activated": state.trailing_stop_activated or False,
+                                        }
+                    except Exception as e:
+                        logger.warning(f"[NotificationScheduler] Failed to load symbol states: {e}")
+
                     for item in active_items:
                         symbol = item["symbol"]
                         if not symbol:
                             continue
                         try:
+                            # 보유 종목 상태에서 진입가/최고가 조회 (페이지 API와 동일)
+                            state_info = symbol_state_map.get(symbol, {})
+
                             result = await sell_service.analyze_sell_signal(
                                 symbol,
                                 name=item.get("name"),
                                 market=item.get("market"),
+                                entry_price=state_info.get("entry_price"),
+                                highest_price=state_info.get("highest_price"),
+                                trailing_stop_activated=state_info.get("trailing_stop_activated", False),
                             )
 
                             if result.sell_phase in ["PHASE_4", "PHASE_5"]:
