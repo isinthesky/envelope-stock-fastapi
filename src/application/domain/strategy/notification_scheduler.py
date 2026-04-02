@@ -468,15 +468,16 @@ class NotificationScheduler:
                         state_repo = StrategySymbolStateRepository(session)
                         active_strategies = await strategy_repo.get_active_strategies(session=session)
                         for strategy in active_strategies:
-                            for item in active_items:
-                                sym = item["symbol"]
-                                if sym and sym not in symbol_state_map:
-                                    state = await state_repo.get_by_strategy_and_symbol(
-                                        strategy.id, sym, session=session
-                                    )
-                                    if state and state.entry_price:
+                            states = await state_repo.get_all_by_strategy(strategy.id, session=session)
+                            for state in states:
+                                sym = state.symbol
+                                if sym and state.entry_price:
+                                    new_entry = float(state.entry_price)
+                                    existing = symbol_state_map.get(sym)
+                                    # 다중 전략 보유 시 가장 낮은 진입가(보수적) 채택
+                                    if existing is None or new_entry < existing["entry_price"]:
                                         symbol_state_map[sym] = {
-                                            "entry_price": float(state.entry_price),
+                                            "entry_price": new_entry,
                                             "highest_price": float(state.highest_price) if state.highest_price else None,
                                             "trailing_stop_activated": state.trailing_stop_activated or False,
                                         }
@@ -500,7 +501,10 @@ class NotificationScheduler:
                                 trailing_stop_activated=state_info.get("trailing_stop_activated", False),
                             )
 
-                            if result.sell_phase in ["PHASE_4", "PHASE_5"]:
+                            # Phase 기반 OR final_stage 기반 강한 매도 판단 시 알림
+                            is_phase_alert = result.sell_phase in ["PHASE_4", "PHASE_5"]
+                            is_stage_alert = result.final_stage in ["REDUCE_2", "EXIT_ALL"]
+                            if is_phase_alert or is_stage_alert:
                                 stock_name = result.name or symbol_name_map.get(symbol)
                                 sell_alerts.append(
                                     {
@@ -545,8 +549,8 @@ class NotificationScheduler:
                             slot_label=slot_label,
                         )
                         logger.info(
-                            "[NotificationScheduler] No PHASE_4/PHASE_5 stocks found, "
-                            f"sent empty alert for {slot_label}"
+                            "[NotificationScheduler] No sell alert stocks found "
+                            f"(PHASE_4/5 or REDUCE_2/EXIT_ALL), sent empty alert for {slot_label}"
                         )
 
                     return {

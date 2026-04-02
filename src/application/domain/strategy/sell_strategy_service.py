@@ -63,6 +63,7 @@ class SellStrategyService:
         self._data_loader: OHLCVDataLoader | None = None
         self.dynamic_config = dynamic_config or DynamicSellThresholdConfig()
         self.sell_score_settings = sell_score_settings or SellScoreSettings()
+        self._market_credit_cache: dict[str | None, MarketCreditTrendData | None] = {}
 
     def _get_data_loader(self) -> OHLCVDataLoader:
         """OHLCVDataLoader 인스턴스 반환"""
@@ -82,21 +83,28 @@ class SellStrategyService:
         self,
         market: str | None,
     ) -> MarketCreditTrendData | None:
-        """KOFIA 기반 시장 신용 과열 데이터 조회"""
+        """KOFIA 기반 시장 신용 과열 데이터 조회 (인스턴스 레벨 캐시)"""
+        cache_key = (market or "").upper() or None
+        if cache_key in self._market_credit_cache:
+            return self._market_credit_cache[cache_key]
+
         market_label = "전체"
-        if (market or "").upper() == "KOSPI":
+        if cache_key == "KOSPI":
             market_label = "유가증권"
-        elif (market or "").upper() == "KOSDAQ":
+        elif cache_key == "KOSDAQ":
             market_label = "코스닥"
 
         try:
-            return await get_kofia_client().get_market_credit_trend(
+            result = await get_kofia_client().get_market_credit_trend(
                 start_date="20260101",
                 end_date=datetime.now().strftime("%Y%m%d"),
                 market_label=market_label,
             )
+            self._market_credit_cache[cache_key] = result
+            return result
         except Exception:
             logger.debug("[Sell Signal] failed to fetch market credit trend for %s", market, exc_info=True)
+            self._market_credit_cache[cache_key] = None
             return None
 
     def _is_personal_buying_overheated(
