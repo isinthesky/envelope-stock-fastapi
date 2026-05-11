@@ -2,15 +2,76 @@
 
 {% block title %}WebSocket - Stock API Admin{% endblock %}
 
+{% block extra_styles %}
+.ws-status-badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+.ws-connected { background: #dcfce7; color: #166534; }
+.ws-disconnected { background: #fee2e2; color: #991b1b; }
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 12px; }
+.info-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; }
+.info-card .label { font-size: 11px; color: #64748b; text-transform: uppercase; margin-bottom: 4px; }
+.info-card .value { font-size: 20px; font-weight: 700; color: #1e293b; }
+.sub-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; min-height: 32px; }
+.sub-tag { background: #dbeafe; color: #1e40af; font-size: 12px; padding: 3px 10px; border-radius: 12px; font-family: monospace; }
+{% endblock %}
+
 {% block content %}
 <h1>WebSocket</h1>
-<p>실시간 시세 WebSocket 상태 조회</p>
+<p>실시간 시세 WebSocket 상태 및 구독 정보</p>
 
 <section>
-  <h2>WebSocket 상태</h2>
+  <h2>연결 상태</h2>
   <div class="row">
-    <button onclick="getJson('/ws/info', 'ws_output')">WS 상태 조회</button>
+    <button onclick="loadWsInfo()">상태 조회</button>
   </div>
-  <pre id="ws_output">결과 출력</pre>
+  <div id="ws_status_badge" style="display:none;"></div>
+  <div class="info-grid" id="ws_info_grid" style="display:none;">
+    <div class="info-card"><div class="label">연결 수</div><div class="value" id="ws_connections">-</div></div>
+    <div class="info-card"><div class="label">구독 종목</div><div class="value" id="ws_subscriptions">-</div></div>
+    <div class="info-card"><div class="label">가용 슬롯</div><div class="value" id="ws_remaining">-</div></div>
+    <div class="info-card"><div class="label">KIS 연결</div><div class="value" id="ws_kis_status">-</div></div>
+  </div>
+  <div id="ws_symbol_list" style="display:none;">
+    <p style="font-size:13px; color:#475569; margin-top:12px;">구독 중인 종목</p>
+    <div class="sub-list" id="ws_symbols"></div>
+  </div>
+  <pre id="ws_raw_output" style="display:none; margin-top:12px;"></pre>
 </section>
+
+<section>
+  <h2>승인 키</h2>
+  <div class="row">
+    <button onclick="getApprovalKey()" class="secondary">WebSocket 승인 키 조회</button>
+  </div>
+  <pre id="ws_approval_output">결과 출력</pre>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+const loadWsInfo = async () => {
+  const data = await getJson('/ws/info', 'ws_raw_output');
+  document.getElementById('ws_raw_output').style.display = 'block';
+
+  const info = data?.data ?? data;
+  if (!info) return;
+
+  const isConnected = info.connected_clients > 0 || info.subscription_count > 0;
+  const badge = document.getElementById('ws_status_badge');
+  badge.style.display = 'inline-block';
+  badge.className = 'ws-status-badge ' + (isConnected ? 'ws-connected' : 'ws-disconnected');
+  badge.textContent = isConnected ? '연결 중' : '미연결';
+
+  document.getElementById('ws_connections').textContent = info.connected_clients ?? '-';
+  document.getElementById('ws_subscriptions').textContent = info.subscription_count ?? '-';
+  document.getElementById('ws_remaining').textContent = info.remaining_slots ?? '-';
+  document.getElementById('ws_kis_status').textContent = info.kis_ws_connected !== undefined ? (info.kis_ws_connected ? 'OK' : '미연결') : '-';
+  document.getElementById('ws_info_grid').style.display = 'grid';
+
+  const symbols = info.subscribed_symbols || [];
+  if (symbols.length > 0) {
+    document.getElementById('ws_symbols').innerHTML = symbols.map(s => `<span class="sub-tag">${s}</span>`).join('');
+    document.getElementById('ws_symbol_list').style.display = 'block';
+  }
+};
+
+const getApprovalKey = () => getJson('/api/v1/auth/websocket/approval', 'ws_approval_output');
 {% endblock %}

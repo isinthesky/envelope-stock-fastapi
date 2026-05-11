@@ -84,13 +84,13 @@ const listOrders = () => {
 
 const getOrderStatus = () => {
   const orderId = document.getElementById("order_id").value;
-  if (!orderId) return alert("order_id 입력");
+  if (!orderId) { document.getElementById("manage_output").textContent = "Order ID를 입력해주세요."; return; }
   getJson(`/api/v1/orders/${orderId}`, "manage_output");
 };
 
 const cancelOrder = () => {
   const orderId = document.getElementById("order_id").value;
-  if (!orderId) return alert("order_id 입력");
+  if (!orderId) { document.getElementById("manage_output").textContent = "Order ID를 입력해주세요."; return; }
   const payload = {
     order_id: orderId,
     order_no: document.getElementById("order_no").value || null,
@@ -101,7 +101,7 @@ const cancelOrder = () => {
 
 const modifyOrder = () => {
   const orderId = document.getElementById("order_id").value;
-  if (!orderId) return alert("order_id 입력");
+  if (!orderId) { document.getElementById("manage_output").textContent = "Order ID를 입력해주세요."; return; }
   const newPrice = document.getElementById("new_price").value;
   const newQty = document.getElementById("new_qty").value;
   const params = new URLSearchParams();
@@ -118,7 +118,7 @@ const modifyOrder = () => {
 
 const refreshOrderStatus = () => {
   const orderId = document.getElementById("order_id").value;
-  if (!orderId) return alert("order_id 입력");
+  if (!orderId) { document.getElementById("manage_output").textContent = "Order ID를 입력해주세요."; return; }
   postJson(`/api/v1/orders/${orderId}/refresh-status`, {}, "manage_output");
 };
 {% endblock %}

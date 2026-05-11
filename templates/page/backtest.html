@@ -2,35 +2,138 @@
 
 {% block title %}Backtest - Stock API Admin{% endblock %}
 
+{% block extra_styles %}
+.result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+.result-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; text-align: center; }
+.result-card .label { font-size: 11px; color: #64748b; text-transform: uppercase; margin-bottom: 4px; }
+.result-card .value { font-size: 22px; font-weight: 700; color: #1e293b; }
+.result-card .value.positive { color: #16a34a; }
+.result-card .value.negative { color: #dc2626; }
+.multi-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+.multi-table th { background: #f1f5f9; padding: 8px 10px; text-align: left; font-weight: 600; border-bottom: 2px solid #e2e8f0; }
+.multi-table td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; }
+.multi-table tr:hover { background: #f8fafc; }
+{% endblock %}
+
 {% block content %}
 <h1>Backtest</h1>
-<p>백테스팅 실행 및 결과 조회</p>
+<p>전략 백테스팅 실행 및 결과 분석</p>
 
 <section>
   <h2>백테스트 설정</h2>
-  <textarea id="backtest_json">{
+  <div class="row">
+    <label style="min-width: auto;">심볼</label>
+    <input id="bt_symbol" value="005930" style="width:100px;" />
+    <label style="min-width: auto;">시작일</label>
+    <input id="bt_start" type="date" value="2024-01-01" style="width:150px;" />
+    <label style="min-width: auto;">종료일</label>
+    <input id="bt_end" type="date" value="2024-12-31" style="width:150px;" />
+  </div>
+  <div style="margin-bottom: 4px;">
+    <button type="button" class="secondary" onclick="toggleAdvanced()" style="padding:4px 10px; font-size:12px;">고급 파라미터 (JSON) ▼</button>
+  </div>
+  <div id="json_advanced" style="display:none; margin-bottom: 8px;">
+    <textarea id="backtest_json">{
   "symbol": "005930",
   "start_date": "2024-01-01",
   "end_date": "2024-06-30",
   "strategy_config": {"type": "mean_reversion"},
   "backtest_config": {"initial_cash": 1000000}
 }</textarea>
-  <div class="row">
-    <button onclick="runBacktest()">단일 종목 실행</button>
+  </div>
+  <div class="row" style="margin-top: 8px;">
+    <button onclick="runBacktestUI()">단일 종목 실행</button>
     <button onclick="runMultiBacktest()" class="secondary">다중 종목 실행</button>
   </div>
   <div class="row" style="margin-top: 8px; align-items: center;">
-    <label style="font-size:12px;">스캔 결과 사용:</label>
-    
-    <label style="font-size:12px; margin-left: 8px;"><input id="filter_top_only" type="checkbox" checked /> GC: OPTIMAL_BUY만 / MA5: BREAKOUT만</label>
-    <button onclick="runMultiFromSavedScan('gc')" class="secondary">GC 스캔결과로 다중 백테스트</button>
-    <button onclick="runMultiFromSavedScan('ma5')" class="secondary">MA5 스캔결과로 다중 백테스트</button>
+    <label style="font-size:12px; min-width:auto;">스캔 결과 사용:</label>
+    <label style="font-size:12px; margin-left: 8px;"><input id="filter_top_only" type="checkbox" checked /> GC: OPTIMAL_BUY / MA5: BREAKOUT만</label>
+    <button onclick="runMultiFromSavedScan('gc')" class="secondary">GC 스캔 다중 백테스트</button>
+    <button onclick="runMultiFromSavedScan('ma5')" class="secondary">MA5 스캔 다중 백테스트</button>
   </div>
+</section>
+
+<section id="result_section" style="display:none;">
+  <h2>결과 요약</h2>
+  <div class="result-grid" id="result_cards"></div>
+</section>
+
+<section>
+  <h2>원본 출력</h2>
   <pre id="backtest_output">결과 출력</pre>
 </section>
 {% endblock %}
 
-{% block extra_script_tags %}
-<script src="/static/js/pages/backtest.js"></script>
+{% block extra_scripts %}
+const toggleAdvanced = () => {
+  const el = document.getElementById('json_advanced');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+};
+
+const renderBacktestResult = (data) => {
+  const section = document.getElementById('result_section');
+  const grid = document.getElementById('result_cards');
+  if (!data || typeof data !== 'object') { section.style.display = 'none'; return; }
+
+  const fmtPct = (n) => n != null ? Number(n).toFixed(2) + '%' : '-';
+  const fmtNum = (n) => n != null ? Number(n).toLocaleString('ko-KR') : '-';
+  const signClass = (n) => (n > 0 ? 'positive' : n < 0 ? 'negative' : '');
+
+  const cards = [
+    { label: '총 수익률', value: fmtPct(data.total_return), cls: signClass(data.total_return) },
+    { label: '승률', value: fmtPct(data.win_rate), cls: '' },
+    { label: 'MDD', value: fmtPct(data.mdd), cls: 'negative' },
+    { label: 'Sharpe', value: data.sharpe_ratio != null ? Number(data.sharpe_ratio).toFixed(2) : '-', cls: '' },
+    { label: '총 거래', value: fmtNum(data.total_trades), cls: '' },
+    { label: '보유일(평균)', value: data.avg_holding_days != null ? Number(data.avg_holding_days).toFixed(1) + '일' : '-', cls: '' },
+  ];
+
+  grid.innerHTML = cards.map(c => `
+    <div class="result-card">
+      <div class="label">${c.label}</div>
+      <div class="value ${c.cls}">${c.value}</div>
+    </div>
+  `).join('');
+  section.style.display = 'block';
+};
+
+const runBacktestUI = () => {
+  const symbol = document.getElementById('bt_symbol').value.trim();
+  const start = document.getElementById('bt_start').value;
+  const end = document.getElementById('bt_end').value;
+
+  const raw = document.getElementById('backtest_json').value.trim();
+  let payload;
+  try {
+    payload = raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    document.getElementById('backtest_output').textContent = '입력 오류: JSON 형식이 올바르지 않습니다.';
+    return;
+  }
+
+  if (symbol) payload.symbol = symbol;
+  if (start) payload.start_date = start;
+  if (end) payload.end_date = end;
+
+  document.getElementById('backtest_json').value = JSON.stringify(payload, null, 2);
+  runBacktest();
+};
 {% endblock %}
 
+{% block extra_script_tags %}
+<script src="/static/js/pages/backtest.js"></script>
+<script>
+const _origSetOutput = typeof setOutput !== 'undefined' ? setOutput : null;
+document.addEventListener('DOMContentLoaded', () => {
+  const out = document.getElementById('backtest_output');
+  if (!out) return;
+  const observer = new MutationObserver(() => {
+    try {
+      const data = JSON.parse(out.textContent);
+      renderBacktestResult(data);
+    } catch (e) {}
+  });
+  observer.observe(out, { childList: true, characterData: true, subtree: true });
+});
+</script>
+{% endblock %}

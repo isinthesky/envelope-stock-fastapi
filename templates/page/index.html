@@ -2,29 +2,55 @@
 
 {% block title %}Dashboard - Stock API Admin{% endblock %}
 
+{% block extra_styles %}
+.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.dash-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: border-color .15s; }
+.dash-card:hover { border-color: #3b82f6; }
+.dash-card .icon { font-size: 24px; margin-bottom: 6px; }
+.dash-card .name { font-size: 13px; font-weight: 600; color: #334155; }
+.dash-card .desc { font-size: 11px; color: #64748b; margin-top: 2px; }
+{% endblock %}
+
 {% block content %}
 <h1>Stock API Admin Dashboard</h1>
-<p>KIS Trading API 관리 대시보드입니다. 좌측 메뉴에서 도메인을 선택하세요.</p>
+<p>KIS Trading API 관리 대시보드입니다.</p>
 
 <section>
-  <h2>Quick Status</h2>
+  <h2>서버 상태</h2>
   <div class="row">
-    <button onclick="checkAuth()">Auth 상태 확인</button>
-    <button onclick="checkHealth()">서버 Health Check</button>
+    <button onclick="checkAuth()">토큰 상태</button>
+    <button onclick="checkHealth()" class="secondary">Health Check</button>
   </div>
-  <pre id="status_output">상태 확인 버튼을 클릭하세요</pre>
+  <pre id="status_output">버튼을 클릭하세요</pre>
 </section>
 
 <section>
-  <h2>도메인 바로가기</h2>
-  <div class="row" style="gap: 16px;">
-    <a href="/page/auth/" style="text-decoration: none;"><button>Auth</button></a>
-    <a href="/page/account/" style="text-decoration: none;"><button>Account</button></a>
-    <a href="/page/market-data/" style="text-decoration: none;"><button>Market Data</button></a>
-    <a href="/page/order/" style="text-decoration: none;"><button>Order</button></a>
-    <a href="/page/strategy/" style="text-decoration: none;"><button>Strategy</button></a>
-    <a href="/page/backtest/" style="text-decoration: none;"><button>Backtest</button></a>
-    <a href="/page/websocket/" style="text-decoration: none;"><button>WebSocket</button></a>
+  <h2>바로가기</h2>
+  <div class="dashboard-grid">
+    <a href="/mypage/auth/" style="text-decoration:none;">
+      <div class="dash-card"><div class="icon">🔑</div><div class="name">Auth</div><div class="desc">토큰 관리</div></div>
+    </a>
+    <a href="/mypage/account/" style="text-decoration:none;">
+      <div class="dash-card"><div class="icon">💰</div><div class="name">Account</div><div class="desc">잔고 · 포지션</div></div>
+    </a>
+    <a href="/mypage/market-data/" style="text-decoration:none;">
+      <div class="dash-card"><div class="icon">📈</div><div class="name">Market Data</div><div class="desc">시세 · 스크리너</div></div>
+    </a>
+    <a href="/mypage/order/" style="text-decoration:none;">
+      <div class="dash-card"><div class="icon">📋</div><div class="name">Order</div><div class="desc">주문 관리</div></div>
+    </a>
+    <a href="/mypage/strategy/" style="text-decoration:none;">
+      <div class="dash-card"><div class="icon">🎯</div><div class="name">매수 전략</div><div class="desc">GC · MA5 스캔</div></div>
+    </a>
+    <a href="/mypage/sell-strategy/" style="text-decoration:none;">
+      <div class="dash-card"><div class="icon">📉</div><div class="name">매도 전략</div><div class="desc">시그널 분석</div></div>
+    </a>
+    <a href="/mypage/backtest/" style="text-decoration:none;">
+      <div class="dash-card"><div class="icon">🔬</div><div class="name">Backtest</div><div class="desc">전략 검증</div></div>
+    </a>
+    <a href="/ops/" style="text-decoration:none;">
+      <div class="dash-card"><div class="icon">⚙️</div><div class="name">Operations</div><div class="desc">운영 현황</div></div>
+    </a>
   </div>
 </section>
 {% endblock %}

@@ -1,0 +1,157 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Operations Dashboard - Stock API Admin{% endblock %}
+
+{% block extra_styles %}
+.ops-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+.card h3 { font-size: 14px; color: #475569; font-weight: 600; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #f1f5f9; }
+.card p { font-size: 13px; color: #334155; margin-bottom: 4px; line-height: 1.5; }
+.card ul { list-style: none; padding: 0; margin: 0; font-size: 13px; color: #334155; }
+.card li { padding: 3px 0; }
+.refresh-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #64748b; margin-bottom: 16px; }
+.refresh-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+{% endblock %}
+
+{% block content %}
+<h1>Operations Dashboard</h1>
+<p>실시간 운영 상태, 스케줄러, 계좌, 알림 리스크를 한 화면에서 확인합니다.</p>
+
+<div class="refresh-bar">
+  <span class="refresh-dot"></span>
+  <span>30초마다 자동 갱신</span>
+  <span id="last_updated" style="margin-left:auto;"></span>
+  <button class="secondary" onclick="loadOpsSummary()" style="padding:4px 10px; font-size:12px;">지금 갱신</button>
+</div>
+
+<div id="loading">로딩 중...</div>
+<div id="error" class="card" style="display:none; border-left:4px solid #dc2626;"></div>
+
+<div id="content" style="display:none;">
+  <div class="ops-grid">
+    <section class="card"><h3>서비스</h3><div id="service"></div></section>
+    <section class="card"><h3>헬스</h3><div id="health"></div></section>
+    <section class="card"><h3>토큰</h3><div id="token"></div></section>
+    <section class="card"><h3>스케줄러</h3><div id="schedulers"></div></section>
+    <section class="card"><h3>계좌</h3><div id="account"></div></section>
+    <section class="card"><h3>주문</h3><div id="orders"></div></section>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <h3>알림</h3>
+    <ul id="alerts"></ul>
+  </div>
+
+  <div class="ops-grid" style="margin-top:16px;">
+    <section class="card"><h3>매수 추천</h3><div id="buy-recommendations"></div></section>
+    <section class="card"><h3>매도 감시</h3><div id="sell-watchlist"></div></section>
+    <section class="card"><h3>현금화 계획</h3><div id="cash-plan"></div></section>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+const formatNumber = (value) => {
+  if (value === null || value === undefined || value === '') return '-';
+  return new Intl.NumberFormat('ko-KR').format(value);
+};
+
+const formatPercent = (value) => {
+  if (value === null || value === undefined) return '-';
+  return `${value.toFixed(2)}%`;
+};
+
+const setList = (el, items) => {
+  if (!items || !items.length) { el.innerHTML = '<li>-</li>'; return; }
+  el.innerHTML = items.map(item => `<li>${item}</li>`).join('');
+};
+
+async function loadOpsSummary() {
+  const loading = document.getElementById('loading');
+  const error = document.getElementById('error');
+  const content = document.getElementById('content');
+  try {
+    const response = await fetch('{{ api_base }}/summary');
+    const payload = await response.json();
+    if (!response.ok || !payload.success) {
+      throw new Error(payload.message || '요약 정보를 불러오지 못했습니다.');
+    }
+    const data = payload.data;
+
+    document.getElementById('service').innerHTML = `
+      <p><strong>${data.service.name}</strong> v${data.service.version}</p>
+      <p>ENV: ${data.service.env}</p>
+      <p>거래: ${data.service.trading_environment}</p>
+      <p>갱신 주기: ${data.service.dashboard_refresh_interval}s</p>
+    `;
+    document.getElementById('health').innerHTML = `
+      <p>상태: <strong>${data.health.status}</strong></p>
+      <p>DB: ${data.health.database}</p>
+      <p>Redis: ${data.health.redis}</p>
+      <p>KIS API: ${data.health.kis_api}</p>
+    `;
+    document.getElementById('token').innerHTML = data.token.is_valid === false && data.token.error ? `
+      <p><strong>invalid</strong></p>
+      <p>${data.token.error}</p>
+    ` : `
+      <p>유효: <strong>${data.token.is_valid}</strong></p>
+      <p>만료: ${data.token.expires_at}</p>
+      <p>잔여: ${formatNumber(data.token.remaining_seconds)}s</p>
+    `;
+    document.getElementById('schedulers').innerHTML = `
+      <p>전략: <strong>${data.schedulers.strategy.is_running}</strong></p>
+      <p>알림: <strong>${data.schedulers.notification.is_running}</strong></p>
+      <p>텔레그램: ${data.schedulers.notification.telegram_enabled}</p>
+      <p>작업 수: ${data.schedulers.notification.jobs.length}</p>
+    `;
+    document.getElementById('account').innerHTML = `
+      <p>총 자산: ${formatNumber(data.account.total_balance)}</p>
+      <p>현금: ${formatNumber(data.account.cash_balance)}</p>
+      <p>주문가능: ${formatNumber(data.account.available_amount)}</p>
+      <p>손익: ${formatNumber(data.account.total_profit_loss)} (${formatPercent(data.account.total_profit_loss_rate)})</p>
+      <p>포지션: ${data.account.position_count}</p>
+    `;
+    document.getElementById('orders').innerHTML = `
+      <p>총 주문: ${data.orders.total_count}</p>
+      <p>대기 중: ${data.orders.pending_count}</p>
+      <p>최근: ${data.orders.recent.map(item => `${item.symbol}:${item.status}`).join(', ') || '-'}</p>
+    `;
+
+    setList(
+      document.getElementById('alerts'),
+      data.alerts.map(item => `[${item.severity}] ${item.title} - ${item.message}`)
+    );
+
+    document.getElementById('buy-recommendations').innerHTML = `
+      <p>매수 후보: <strong>${data.buy_recommendations.buy_candidate_count}</strong></p>
+      <ul>
+        ${data.buy_recommendations.top_stocks.map(item => `<li>${item.symbol} ${item.name} / score ${item.screening_score ?? '-'}</li>`).join('') || '<li>-</li>'}
+      </ul>
+    `;
+    document.getElementById('sell-watchlist').innerHTML = `
+      <p>활성 추적: <strong>${data.sell_watchlist.active_tracking_count}</strong></p>
+      <ul>
+        ${data.sell_watchlist.items.map(item => `<li>${item.symbol} ${item.name || ''} / ${item.final_stage || item.sell_stage || '-'}</li>`).join('') || '<li>-</li>'}
+      </ul>
+    `;
+    document.getElementById('cash-plan').innerHTML = `
+      <p>현재 현금: ${formatPercent((data.cash_plan.current_cash_ratio || 0) * 100)}</p>
+      <p>목표 현금: ${formatPercent((data.cash_plan.target_cash_ratio || 0) * 100)}</p>
+      <p>필요 현금: ${formatPercent((data.cash_plan.required_cash_ratio || 0) * 100)}</p>
+      <p>정리 후보: ${data.cash_plan.actions.length}건</p>
+    `;
+
+    loading.style.display = 'none';
+    content.style.display = 'block';
+    document.getElementById('last_updated').textContent = `최종 갱신: ${new Date().toLocaleTimeString('ko-KR')}`;
+  } catch (err) {
+    loading.style.display = 'none';
+    error.style.display = 'block';
+    error.innerHTML = `<strong>로드 실패</strong><p>${err.message}</p>`;
+  }
+}
+
+loadOpsSummary();
+setInterval(loadOpsSummary, 30000);
+{% endblock %}
