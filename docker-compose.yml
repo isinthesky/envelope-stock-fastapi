@@ -1,8 +1,10 @@
+name: kis-strategy-alert-server
+
 services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: kis-trading-postgres
+    container_name: kis-strategy-alert-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-kis_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -24,7 +26,7 @@ services:
   # Redis Cache
   redis:
     image: redis:7-alpine
-    container_name: kis-trading-redis
+    container_name: kis-strategy-alert-redis
     environment:
       REDISCLI_AUTH: ${REDIS_PASSWORD}
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
@@ -46,7 +48,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: kis-trading-api
+    container_name: kis-strategy-alert-server
     environment:
       # Database (컨테이너 내부 네트워크)
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-kis_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kis_trading}
@@ -58,7 +60,7 @@ services:
       HOST: 0.0.0.0
       PORT: "8000"
     ports:
-      - "${API_PORT:-5001}:8000"
+      - "${API_PORT:-10131}:8000"
     volumes:
       - kis_token_cache:/root/KIS/config  # KIS API 토큰 캐시 (1일 1회 발급 원칙 유지)
     networks:
@@ -80,12 +82,13 @@ services:
 
 networks:
   kis-network:
+    name: kis-strategy-alert-server_kis-network
     driver: bridge
 
 volumes:
   postgres_data:
-    driver: local
+    name: kis-strategy-alert-server_postgres_data
   redis_data:
-    driver: local
+    name: kis-strategy-alert-server_redis_data
   kis_token_cache:
-    driver: local
+    name: kis-strategy-alert-server_kis_token_cache

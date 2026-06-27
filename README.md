@@ -1,332 +1,199 @@
-# KIS Trading API Service
+# KIS Strategy & Alert Server
 
-> 한국투자증권 Open API 기반 증권 자동매매 API 서버
+한국투자증권 Open API 기반의 **전략 실행 + 알림 운영 서버**입니다.
+이 저장소는 단순 예제 API가 아니라, 실제 운영 관점에서 아래 흐름을 다룹니다.
 
-## 📋 프로젝트 개요
+- KIS 토큰/인증 관리
+- 계좌/포지션/주문 조회
+- 골든크로스 기반 매수 후보 스캔
+- 매도 추적 이력/사전 현금화 계획
+- 전략 스케줄러(08:00 유니버스 갱신, 15:35 전략 실행)
+- 알림 스케줄러(09:30/11:30/12:30/14:30 Telegram 알림)
+- `/ops` 운영 대시보드와 `/api/v1/ops/*` 운영 요약 API
 
-**헥사고날 아키텍처(Hexagonal Architecture)** 기반 엔터프라이즈급 자동매매 시스템
+## 핵심 운영 포인트
 
-### 주요 기능
+- FastAPI 기본 Swagger/ReDoc/OpenAPI는 비활성화되어 있습니다.
+  - `docs_url=None`
+  - `redoc_url=None`
+  - `openapi_url=None`
+- `/api/v1/ops/*` 와 `/ops` 는 **IP allowlist 기반 관리자 보호**를 사용합니다.
+- `main.py` 기준 `/mypage/*`는 include-level 관리자 보호를 사용하고, `/page/*` 공개 페이지는 별도로 열어둡니다.
+- 접근 로그는 현재 전체 API가 아니라 **`/page` 공개 경로 중심**으로 수집됩니다.
+- 전략 스케줄러와 알림 스케줄러는 별개입니다.
+  - 전략 스케줄러 status: `/api/v1/strategies/scheduler/status`
+  - 알림 스케줄러 status: `/api/v1/ops/notification-scheduler-status`
 
-- ✅ **다중 상품 지원** - 국내/해외 주식, 선물옵션, 채권, ETF/ETN (166개 API)
-- ✅ **실전/모의투자** - 환경 분리 및 안전한 테스트
-- ✅ **실시간 시세** - WebSocket 기반 실시간 데이터
-- ✅ **자동매매 전략** - 조건 기반 자동 주문 실행
-- ✅ **리스크 관리** - 손실 제한, 포지션 관리
-- ✅ **대시보드** - 실시간 모니터링 및 관리
+## 디렉터리 개요
 
-### 기술 스택
-
-- **Backend**: FastAPI, Python 3.9+
-- **Database**: PostgreSQL 14+, SQLAlchemy (async)
-- **Cache**: Redis 7+
-- **WebSocket**: websockets, asyncio
-- **Package Manager**: UV
-
----
-
-## 🚀 빠른 시작
-
-### 1. 환경 설정
-
-```bash
-# 저장소 클론
-git clone <repository-url>
-cd hantwo-stock-fastapi
-
-# UV로 의존성 설치
-uv sync
-
-# 환경 변수 설정
-cp .env.example .env
-# .env 파일 수정 (KIS API 키 입력)
+```text
+kis-strategy-alert-server/
+├── src/
+│   ├── application/
+│   │   ├── interface/api/          # API 라우터
+│   │   ├── interface/page/         # HTML 페이지 라우터
+│   │   ├── domain/strategy/        # 전략/스케줄러/알림 로직
+│   │   └── common/                 # 공통 DTO, 의존성, 예외
+│   ├── adapters/                   # DB, Redis, KIS, Telegram 연동
+│   └── settings/                   # 설정, 예외 처리, 로깅
+├── templates/                      # HTML 템플릿
+├── docs/ops/                       # 운영 backlog / README 개편안 / ops 설계 / 운영 루틴
+├── tests/                          # pytest 테스트
+├── docker-compose.yml
+└── README.md
 ```
 
-### 2. KIS API 키 발급
+## 주요 엔드포인트
 
-1. [한국투자증권 Open API 포털](https://apiportal.koreainvestment.com/) 접속
-2. 앱키(App Key), 앱시크릿(App Secret) 발급
-3. `.env` 파일에 키 입력
+### 헬스/운영
+- `GET /health`
+- `GET /ops`
+- `GET /api/v1/ops/summary`
+- `GET /api/v1/ops/notification-scheduler-status`
+
+### 인증/환경
+- `POST /api/v1/auth/token`
+- `POST /api/v1/auth/token/refresh`
+- `GET /api/v1/auth/token-status`
+- `GET /api/v1/auth/environment`
+
+### 계좌/주문
+- `GET /api/v1/accounts/balance`
+- `GET /api/v1/accounts/positions`
+- `GET /api/v1/orders`
+
+### 전략/분석
+- `GET /api/v1/strategies`
+- `GET /api/v1/strategies/scheduler/status`
+- `GET /api/v1/strategies/portfolio-cash-plan`
+- `GET /api/v1/strategies/universe/golden-cross-recommendations`
+- `GET /api/v1/strategies/analysis-history`
+
+### 페이지
+- 공개 페이지: `/page/*`
+- 관리자 성격 페이지: `/mypage/*`
+- 운영 허브: `/ops`
+
+## 빠른 시작
+
+### 1) 환경 파일 준비
+
+```bash
+cd /Users/m2-dev/Apps/kis-strategy-alert-server
+cp .env.example .env
+```
+
+필수 항목 예시:
 
 ```env
-# 실전투자
-KIS_APP_KEY=your_real_app_key
-KIS_APP_SECRET=your_real_app_secret
-
-# 모의투자
-KIS_PAPER_APP_KEY=your_paper_app_key
-KIS_PAPER_APP_SECRET=your_paper_app_secret
+APP_NAME="KIS Strategy & Alert Server"
+POSTGRES_PASSWORD=change-me
+API_PORT=10131
+KIS_APP_KEY=...
+KIS_APP_SECRET=...
+KIS_ACCOUNT_NO=12345678
+KIS_HTS_ID=...
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
 ```
 
-### 3. 서버 실행
+> 현재 로컬 `.env` 예시에서는 `API_PORT=10131` 로 오버라이드될 수 있습니다. 실제 노출 포트는 `.env` 값을 기준으로 확인하세요.
+
+### 2) Docker Compose 기동
 
 ```bash
-# 개발 서버 실행
-python -m src.main
-
-# 또는 uvicorn 직접 실행
-uvicorn src.main:app --reload --port 8000
+/opt/homebrew/bin/docker compose up -d --build
 ```
 
-### 4. API 문서 확인
-
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-
----
-
-## 📁 프로젝트 구조
-
-```
-hantwo-stock-fastapi/
-├── docs/                       # 프로젝트 문서
-│   ├── CLAUDE.md               # 프로젝트 개요
-│   ├── ARCHITECTURE.md         # 아키텍처 설계
-│   ├── SERVICE.md              # 서비스 구현 가이드
-│   └── convention.md           # 코딩 컨벤션
-│
-├── examples/                   # KIS API 샘플 코드
-│   ├── examples_user/          # 사용자용 통합 예제
-│   └── examples_llm/           # LLM용 기능 단위 샘플
-│
-├── src/                        # 소스 코드
-│   ├── adapters/               # 어댑터 계층
-│   │   ├── database/           # DB 모델 & Repository
-│   │   ├── external/           # KIS API, WebSocket
-│   │   └── cache/              # Redis 캐싱
-│   │
-│   ├── application/            # 애플리케이션 계층
-│   │   ├── common/             # 공통 유틸리티
-│   │   ├── domain/             # 도메인 서비스
-│   │   │   ├── auth/           # 인증
-│   │   │   ├── order/          # 주문
-│   │   │   ├── account/        # 계좌
-│   │   │   ├── market_data/    # 시세
-│   │   │   ├── strategy/       # 전략
-│   │   │   └── websocket_domain/  # 실시간 데이터
-│   │   └── interface/          # API Router
-│   │
-│   ├── settings/               # 환경 설정
-│   │   └── config.py           # Pydantic Settings
-│   │
-│   └── main.py                 # FastAPI 애플리케이션
-│
-├── tests/                      # 테스트 코드
-├── .env.example                # 환경 변수 템플릿
-├── .gitignore                  # Git 제외 파일
-├── pyproject.toml              # 프로젝트 의존성
-└── README.md                   # 본 문서
-```
-
----
-
-## 🏗️ 아키텍처
-
-### 헥사고날 아키텍처 (Ports & Adapters)
-
-```
-┌─────────────────────────────────────────────┐
-│            외부 세계 (External)              │
-│  Client, KIS API, Database, Redis, WebSocket │
-└─────────────────────────────────────────────┘
-                    ↕
-┌─────────────────────────────────────────────┐
-│         Adapters Layer (어댑터 계층)          │
-│  REST Router, DB Adapter, KIS Client, Cache  │
-└─────────────────────────────────────────────┘
-                    ↕
-┌─────────────────────────────────────────────┐
-│      Application Layer (애플리케이션 계층)     │
-│     Service, Repository, DTO, Utils          │
-└─────────────────────────────────────────────┘
-                    ↕
-┌─────────────────────────────────────────────┐
-│          Domain Layer (도메인 계층)           │
-│   Auth, Order, Account, MarketData, Strategy │
-└─────────────────────────────────────────────┘
-```
-
-### 핵심 패턴
-
-- **BaseRepository + Mixin**: 40% 코드 감소
-- **의존성 주입 중앙화**: 100% 일관성
-- **@transaction 데코레이터**: 선언적 트랜잭션 관리
-- **비동기 처리**: asyncio + SQLAlchemy async
-- **캐싱 전략**: Redis (시세 5초, 계좌 30초, 토큰 24시간)
-
----
-
-## 🐳 Docker 배포
-
-### Docker Compose로 실행
+검증:
 
 ```bash
-# 1. 환경 변수 설정
-cp .env.example .env
-# .env 파일 수정 (민감정보 변경 필수)
-
-# 2. Docker Compose 실행
-docker compose up -d
-
-# 3. 로그 확인
-docker compose logs -f api
+/opt/homebrew/bin/docker compose ps
+curl -fsS http://localhost:${API_PORT:-10131}/health
 ```
 
-### 외부 접속
+## 운영 확인 순서
 
-API 서버는 기본적으로 **포트 5001**로 외부에 노출됩니다.
-
-| 서비스 | 내부 포트 | 외부 포트 | 접속 URL |
-|--------|-----------|-----------|----------|
-| API Server | 8000 | 5001 | http://localhost:5001 |
-| PostgreSQL | 5432 | 5434 | localhost:5434 |
-| Redis | 6379 | 6379 | localhost:6379 |
-
-**API 문서 접속:**
-- Swagger UI: http://localhost:5001/docs
-- ReDoc: http://localhost:5001/redoc
-- Health Check: http://localhost:5001/health
-
-### 환경 변수 (Docker)
-
-`.env` 파일에서 다음 민감정보를 반드시 변경하세요:
-
-```env
-# PostgreSQL (필수 변경)
-POSTGRES_USER=kis_user
-POSTGRES_PASSWORD=your_secure_password  # 반드시 변경!
-POSTGRES_DB=kis_trading
-
-# Redis (선택)
-REDIS_PASSWORD=  # 필요시 설정
-
-# 포트 설정 (선택)
-API_PORT=5001       # API 외부 포트
-POSTGRES_PORT=5434  # PostgreSQL 외부 포트
-REDIS_PORT=6379     # Redis 외부 포트
-```
-
-### Docker 명령어
+### 1. 기본 생존 확인
 
 ```bash
-# 서비스 시작
-docker compose up -d
-
-# 서비스 중지
-docker compose down
-
-# 볼륨 포함 삭제 (데이터 초기화)
-docker compose down -v
-
-# 이미지 재빌드
-docker compose up -d --build
-
-# 특정 서비스 로그
-docker compose logs -f api
-docker compose logs -f postgres
-
-# 컨테이너 상태 확인
-docker compose ps
+curl -fsS http://localhost:${API_PORT:-10131}/health
+curl -fsS http://localhost:${API_PORT:-10131}/api/v1/ops/summary
 ```
 
----
+`/health`는 최소 연결 상태 확인용입니다.
+WebSocket/전략 스케줄/알림 스케줄의 세부 상태는 `/api/v1/ops/summary` 또는 각 status API로 확인하세요.
 
-## 📚 개발 가이드
-
-### 개발 명령어
+### 2. 전략 스케줄러 확인
 
 ```bash
-# 의존성 설치
-uv sync
-
-# 개발 서버 실행
-python -m src.main
-
-# 테스트 실행
-pytest
-
-# 테스트 커버리지
-pytest --cov=src tests/
-
-# 코드 포맷팅
-black src/
-isort src/
-
-# 타입 체크
-mypy src/
-
-# 데이터베이스 마이그레이션
-alembic upgrade head
-alembic revision --autogenerate -m "description"
+curl -fsS http://localhost:${API_PORT:-10131}/api/v1/strategies/scheduler/status
 ```
 
-### 환경 변수
+현재 코드 기준 전략 스케줄러는 다음 두 작업을 다룹니다.
 
-주요 환경 변수는 `.env.example` 참고
+- `08:00` 유니버스 갱신
+- `15:35` 일일 전략 실행
 
-- `TRADING_ENVIRONMENT`: `prod` (실전) / `vps` (모의)
-- `DATABASE_URL`: PostgreSQL 연결 URL
-- `REDIS_URL`: Redis 연결 URL
-- `KIS_APP_KEY`, `KIS_APP_SECRET`: KIS API 인증
+### 3. 알림 스케줄러 확인
 
----
+```bash
+curl -fsS http://localhost:${API_PORT:-10131}/api/v1/ops/notification-scheduler-status
+```
 
-## 🔒 보안 및 리스크 관리
+현재 알림 슬롯:
 
-### 보안 원칙
+- 매도 알림: `09:30`, `12:30`
+- 매수 알림: `11:30`, `14:30`
+- 각 알림 10분 전 데이터 갱신 수행
 
-- ✅ API 키는 환경 변수로만 관리
-- ✅ 토큰은 안전한 경로에 암호화 저장
-- ✅ 실전/모의 환경 완전 분리
-- ✅ WebSocket 연결 시 approval_key 검증
+### 4. 운영 허브 페이지 확인
 
-### 리스크 관리
+브라우저에서 아래 주소를 열면 운영 요약 대시보드를 볼 수 있습니다.
 
-- ⚠️ **모의투자 우선**: 실전 투자 전 충분한 테스트
-- ⚠️ **손실 제한**: 일일 손실 한도 설정
-- ⚠️ **포지션 관리**: 최대 보유 종목 수 제한
-- ⚠️ **긴급 정지**: 전체 주문 취소 기능
+```text
+http://localhost:${API_PORT:-10131}/ops
+```
 
----
+표시 항목:
+- service / env / 거래환경
+- KIS token 상태
+- 전략/알림 스케줄러 상태
+- 계좌 잔고 / 포지션 / 미체결 주문
+- 매수 추천 요약
+- 매도 추적 종목 요약
+- 현금화 계획 / 운영 alert
 
-## 📖 문서
+## 운영 문서
 
-- [프로젝트 개요](docs/CLAUDE.md)
-- [아키텍처 설계](docs/base/ARCHITECTURE.md)
-- [서비스 구현 가이드](docs/base/SERVICE.md)
-- [코딩 컨벤션](docs/base/convention.md)
+`docs/ops/` 아래에 운영 중심 문서를 정리했습니다.
 
----
+- `01-priority-backlog.md` — 운영 개선 우선순위 backlog
+- `02-readme-revamp-draft.md` — README 개편 초안 원본
+- `03-ops-dashboard-proposal.md` — `/ops` 설계안
+- `04-api-operations-routine.md` — 하루 운영 루틴 기준 API 시나리오
 
-## 🔗 참고 링크
+## 테스트
 
-- [한국투자증권 Open API 포털](https://apiportal.koreainvestment.com/)
-- [FastAPI 공식 문서](https://fastapi.tiangolo.com/)
-- [SQLAlchemy 2.0 Async](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html)
-- [UV Package Manager](https://docs.astral.sh/uv/)
+로컬 Python 환경 기준:
 
----
+```bash
+uv run pytest tests/interface/test_ops_page_router.py tests/domain/test_notification_scheduler_status.py -q
+```
 
-## 📞 문의 및 지원
+프로젝트 전체 테스트는 환경 의존성이 있으므로 필요한 범위부터 점진적으로 실행하는 것을 권장합니다.
 
-- **프로젝트**: KIS Trading API Service
-- **버전**: 0.1.0
-- **최종 업데이트**: 2025년 10월 7일
+## 알려진 한계
 
----
+- 개별 page router를 테스트/별도 앱에서 직접 include하면 `main.py`와 동일한 관리자 guard를 별도로 붙여야 합니다.
+- access log는 아직 `/api`, `/mypage`, `/health` 전체를 포괄하지 않습니다.
+- `/api/v1/ops/summary` 는 여러 서비스 호출을 집계하므로, 일부 외부 API 상태가 나쁘면 응답이 느려질 수 있습니다.
 
-## ⚠️ 투자 책임 고지
+## 다음 우선 개발 후보
 
-**본 시스템은 한국투자증권 OPEN API를 활용한 자동매매 도구이며, 투자 조언이나 권유를 제공하지 않습니다.**
-
-- 📈 **투자 결정 책임**: 모든 투자 결정과 그에 따른 손익은 전적으로 투자자 본인의 책임입니다
-- 💰 **손실 위험**: 주식, 선물, 옵션 등 모든 금융상품 투자에는 원금 손실 위험이 있습니다
-- 🎯 **모의투자 권장**: 실전 투자 전 반드시 모의투자를 통해 충분히 연습하시기 바랍니다
-
-**투자는 본인의 판단과 책임 하에 이루어져야 하며, 본 시스템 사용으로 인한 어떠한 손실에 대해서도 개발자는 책임지지 않습니다.**
-
----
-
-## 📄 라이선스
-
-MIT License
+- `/ops` summary 경량화 및 부분 실패 tolerant aggregation
+- `/mypage/*` route-level 관리자 보호 확대
+- access log 범위를 `/api`, `/mypage` 까지 확장
+- notification scheduler 결과 이력 영속화
+- README와 운영 문서의 지속 동기화

@@ -5,9 +5,9 @@
 ## 📋 프로젝트 개요
 
 ### 서비스 정보
-- **서비스명**: KIS Trading API Service
+- **서비스명**: KIS Strategy & Alert Server
 - **포트**: 8000 (개발), 8080 (운영)
-- **역할**: 한국투자증권 Open API 기반 자동매매 서비스
+- **역할**: 한국투자증권 Open API 기반 전략 실행 및 알림 서비스
 - **기술스택**: FastAPI, PostgreSQL, SQLAlchemy(async), Redis, WebSocket, UV
 
 ### 주요 기능

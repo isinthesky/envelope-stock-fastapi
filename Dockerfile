@@ -1,5 +1,5 @@
 # ============================================
-# KIS Trading API Service - Dockerfile
+# KIS Strategy & Alert Server - Dockerfile
 # ============================================
 
 FROM python:3.13-slim

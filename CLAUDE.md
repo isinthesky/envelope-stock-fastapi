@@ -1,6 +1,6 @@
-# CLAUDE.md - hantwo-stock-fastapi 프로젝트 가이드
+# CLAUDE.md - KIS Strategy & Alert Server 프로젝트 가이드
 
-> FastAPI 기반 KIS(Open API) 트레이딩/분석 서버. **헥사고날(Ports & Adapters)** 구조를 유지합니다.
+> FastAPI 기반 KIS(Open API) 전략/알림 서버. **헥사고날(Ports & Adapters)** 구조를 유지합니다.
 
 ## 레이어(폴더) 한눈에 보기
 

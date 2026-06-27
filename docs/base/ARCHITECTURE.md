@@ -1,8 +1,8 @@
-# 증권 자동매매 API 서버 아키텍처 - KIS Trading API Service
+# 증권 전략·알림 서버 아키텍처 - KIS Strategy & Alert Server
 
 ## 📋 개요
 
-이 문서는 **한국투자증권 Open API 기반 자동매매 서비스(KIS Trading API)**의 서버 구조와 구현 규칙을 정의합니다. **헥사고날 아키텍처(Hexagonal Architecture)**를 기반으로 설계된 증권 자동매매 시스템의 계층별 역할과 데이터 흐름을 설명합니다.
+이 문서는 **한국투자증권 Open API 기반 전략·알림 서비스(KIS Strategy & Alert Server)**의 서버 구조와 구현 규칙을 정의합니다. **헥사고날 아키텍처(Hexagonal Architecture)**를 기반으로 설계된 증권 전략 실행·알림 시스템의 계층별 역할과 데이터 흐름을 설명합니다.
 
 ### 🎯 시스템 특징
 

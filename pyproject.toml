@@ -1,7 +1,7 @@
 [project]
-name = "kis-trading-api"
+name = "kis-strategy-alert-server"
 version = "0.1.0"
-description = "한국투자증권 Open API 기반 증권 자동매매 API 서버"
+description = "한국투자증권 Open API 기반 전략 실행 및 알림 서버"
 requires-python = ">=3.10"
 authors = [
     { name = "hantwo", email = "hantwo@example.com" }
