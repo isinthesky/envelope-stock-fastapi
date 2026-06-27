@@ -42,6 +42,7 @@ from src.application.domain.strategy.dto import (
     GoldenCrossConfigDTO,
     PortfolioCashActionDTO,
     PortfolioCashPlanDTO,
+    GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
     GoldenCrossRecommendationDTO,
     IndustrySummaryDTO,
@@ -290,9 +291,7 @@ class StrategyService:
 
         strategy_list = [self._to_detail_dto(s) for s in strategies]
 
-        return StrategyListResponseDTO(
-            strategies=strategy_list, total_count=len(strategy_list)
-        )
+        return StrategyListResponseDTO(strategies=strategy_list, total_count=len(strategy_list))
 
     # ==================== 전략 수정 ====================
 
@@ -659,7 +658,9 @@ class StrategyService:
 
         from src.adapters.cache.redis_client import get_redis_client
         from src.adapters.database.connection import AsyncSessionLocal
-        from src.adapters.database.repositories.stock_universe_repository import StockUniverseRepository
+        from src.adapters.database.repositories.stock_universe_repository import (
+            StockUniverseRepository,
+        )
         from src.adapters.external.kis_api.client import get_kis_client
         from src.adapters.external.naver.stock_client import get_naver_stock_client
         from src.application.domain.market_data.service import MarketDataService
@@ -740,7 +741,7 @@ class StrategyService:
                 for symbol, name in await fetch_kind_corp_list("kosdaqMkt"):
                     if symbol in existing_symbols:
                         continue
-                
+
                     rows.append({"symbol": symbol, "name": name, "market": MarketType.KOSDAQ.value})
                     existing_symbols.add(symbol)
                     if len(rows) >= need:
@@ -776,6 +777,7 @@ class StrategyService:
         naver_client = get_naver_stock_client()
 
         import logging, time
+
         logger = logging.getLogger(__name__)
         started_at = time.monotonic()
 
@@ -800,10 +802,14 @@ class StrategyService:
                 return
             if not warning_suppressed.get(category, False):
                 warning_suppressed[category] = True
-                logger.warning(f"[universe.refresh] {category} warnings suppressed (>{warn_budget})")
+                logger.warning(
+                    f"[universe.refresh] {category} warnings suppressed (>{warn_budget})"
+                )
 
         concurrency = max(1, min(settings.scan_concurrency_limit, 20))
-        logger.info(f"[universe.refresh] start: target={len(target_stocks)} seeded={seeded} concurrency={concurrency}")
+        logger.info(
+            f"[universe.refresh] start: target={len(target_stocks)} seeded={seeded} concurrency={concurrency}"
+        )
 
         work_queue: asyncio.Queue[tuple[int, object]] = asyncio.Queue()
         for idx, stock in enumerate(target_stocks):
@@ -885,9 +891,21 @@ class StrategyService:
                             name=(fin.name if fin and fin.name else getattr(stock, "name", None)),
                             market=getattr(stock, "market", None),
                             sector=getattr(stock, "sector", None),
-                            market_cap=(Decimal(fin.market_cap) if fin and fin.market_cap else getattr(stock, "market_cap", None)),
-                            avg_volume_20d=(Decimal(avg_vol_20d) if avg_vol_20d is not None else getattr(stock, "avg_volume_20d", None)),
-                            current_price=(price.current_price if price else getattr(stock, "current_price", None)),
+                            market_cap=(
+                                Decimal(fin.market_cap)
+                                if fin and fin.market_cap
+                                else getattr(stock, "market_cap", None)
+                            ),
+                            avg_volume_20d=(
+                                Decimal(avg_vol_20d)
+                                if avg_vol_20d is not None
+                                else getattr(stock, "avg_volume_20d", None)
+                            ),
+                            current_price=(
+                                price.current_price
+                                if price
+                                else getattr(stock, "current_price", None)
+                            ),
                         )
                         updated += 1
 
@@ -971,7 +989,6 @@ class StrategyService:
             "refreshed_at": datetime.now().isoformat(),
         }
 
-
     # ==================== Buy/Sell Strategy Delegation ====================
 
     @transaction
@@ -1020,17 +1037,26 @@ class StrategyService:
         max_concurrent: int | None = None,
         top_n: int = 5,
         top_industries_n: int = 3,
+        target_states: list[str] | None = None,
+        min_recommendation_score: float = 0.0,
+        apply_financial_filter: bool = False,
+        financial_filter_max_concurrent: int = 3,
     ) -> GoldenCrossRecommendationDTO:
         """골든크로스 추천 요약 (Top 종목 + Top 업종)
 
-        - Top 종목: OPTIMAL_BUY(매수 적기) 종목 중 screening_score 상위 N개
-        - Top 업종: OPTIMAL_BUY(매수 적기) 후보에서 업종별 count 상위 N개
+        - Top 종목: 대상 상태 후보 중 추천 점수 상위 N개
+        - Top 업종: 대상 상태 후보에서 업종별 count 상위 N개
         """
         from collections import Counter
 
         from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
 
         buy_service = BuyStrategyService(session=session)
+        if target_states is None:
+            target_states = ["OPTIMAL_BUY"]
+        target_states = self._validate_recommendation_target_states(target_states)
+        target_state_set = set(target_states)
+
         scan = await buy_service.scan_golden_cross_candidates(
             market=market,
             stoch_threshold=stoch_threshold,
@@ -1039,24 +1065,61 @@ class StrategyService:
             limit=limit,
             max_concurrent=max_concurrent,
         )
+        financial_filter_applied = False
+        if apply_financial_filter:
+            scan_before_financial_filter = scan
+            try:
+                scan = await buy_service.apply_financial_filter(
+                    scan,
+                    target_states=target_states,
+                    max_concurrent=financial_filter_max_concurrent,
+                )
+                if self._financial_filter_has_any_success(scan, target_state_set):
+                    financial_filter_applied = True
+                else:
+                    errors = list(scan_before_financial_filter.errors)
+                    errors.append(
+                        "Financial filter skipped: all target financial screenings failed"
+                    )
+                    scan = scan_before_financial_filter.model_copy(update={"errors": errors})
+            except Exception as exc:
+                errors = list(scan_before_financial_filter.errors)
+                errors.append(f"Financial filter skipped: {exc}")
+                scan = scan_before_financial_filter.model_copy(update={"errors": errors})
 
-        # OPTIMAL_BUY(매수 적기)만 추천 대상으로 사용
-        optimal_candidates = [s for s in scan.stocks if s.gc_state == "OPTIMAL_BUY"]
-        optimal_candidates.sort(
+        explained_stocks = [
+            self._attach_recommendation_explainability(
+                stock,
+                target_state_set=target_state_set,
+                min_recommendation_score=min_recommendation_score,
+                financial_filter_applied=financial_filter_applied,
+            )
+            for stock in scan.stocks
+        ]
+        candidates = [
+            stock
+            for stock in explained_stocks
+            if stock.gc_state in target_state_set
+            and float(stock.recommendation_score or 0) >= min_recommendation_score
+            and self._passes_recommendation_financial_filter(
+                stock,
+                financial_filter_applied=financial_filter_applied,
+            )
+        ]
+        candidates.sort(
             key=lambda s: (
-                -float(s.screening_score or 0),
+                -float(s.recommendation_score or 0),
+                self._recommendation_state_rank(s.gc_state),
                 s.symbol,
             )
         )
-        top_stocks = optimal_candidates[:top_n]
+        top_stocks = candidates[:top_n]
 
-        counter: Counter[str] = Counter(
-            [s.industry_code for s in optimal_candidates if s.industry_code]
-        )
+        counter: Counter[str] = Counter([s.industry_code for s in candidates if s.industry_code])
 
         # code -> name (이미 scan 단계에서 industry_name attach 됨)
         code_to_name: dict[str, str | None] = {}
-        for s in optimal_candidates:
+        for s in candidates:
             if s.industry_code and s.industry_code not in code_to_name:
                 code_to_name[s.industry_code] = s.industry_name
 
@@ -1073,10 +1136,159 @@ class StrategyService:
         return GoldenCrossRecommendationDTO(
             top_stocks=top_stocks,
             top_industries=top_industries,
-            buy_candidate_count=len(optimal_candidates),
+            buy_candidate_count=len(candidates),
             scan_time=scan.scan_time,
             errors=scan.errors,
+            candidate_state_counts=dict(Counter(stock.gc_state for stock in candidates)),
+            selected_state_counts=dict(Counter(stock.gc_state for stock in top_stocks)),
+            financial_status_counts=dict(
+                Counter(str(stock.financial_filter_status or "NOT_CHECKED") for stock in candidates)
+            ),
+            excluded_count=len(explained_stocks) - len(candidates),
+            selection_criteria=[
+                f"target_states={','.join(target_states)}",
+                f"min_recommendation_score={min_recommendation_score:.1f}",
+                (
+                    "score = signal stage + screening score + MA gap health + "
+                    "Stoch recovery + financial status"
+                ),
+                (
+                    "financial_filter="
+                    f"{'applied' if financial_filter_applied else 'requested_failed' if apply_financial_filter else 'disabled'}"
+                ),
+            ],
         )
+
+    @staticmethod
+    def _validate_recommendation_target_states(target_states: list[str]) -> list[str]:
+        allowed_states = {
+            "OPTIMAL_BUY",
+            "BUY_INTEREST",
+            "READY_TO_BUY",
+            "WAITING_FOR_PULLBACK",
+            "GC_ACTIVE",
+            "NOT_GC",
+        }
+        invalid = sorted(set(target_states) - allowed_states)
+        if invalid:
+            raise StrategyError(
+                "Invalid target_states: "
+                f"{', '.join(invalid)}. Allowed: {', '.join(sorted(allowed_states))}"
+            )
+        return target_states
+
+    @staticmethod
+    def _recommendation_state_rank(gc_state: str) -> int:
+        return {
+            "OPTIMAL_BUY": 0,
+            "BUY_INTEREST": 1,
+            "READY_TO_BUY": 2,
+            "WAITING_FOR_PULLBACK": 3,
+            "GC_ACTIVE": 4,
+            "NOT_GC": 5,
+        }.get(gc_state, 99)
+
+    @staticmethod
+    def _passes_recommendation_financial_filter(
+        stock: GoldenCrossScanItemDTO,
+        *,
+        financial_filter_applied: bool,
+    ) -> bool:
+        if not financial_filter_applied:
+            return True
+        return stock.financial_filter_status in {"PASS", "TURNAROUND"}
+
+    @staticmethod
+    def _financial_filter_has_any_success(
+        scan: GoldenCrossScanListDTO,
+        target_state_set: set[str],
+    ) -> bool:
+        return any(
+            stock.gc_state in target_state_set
+            and stock.financial_filter_status in {"PASS", "TURNAROUND", "FAIL"}
+            for stock in scan.stocks
+        )
+
+    def _attach_recommendation_explainability(
+        self,
+        stock: GoldenCrossScanItemDTO,
+        *,
+        target_state_set: set[str],
+        min_recommendation_score: float,
+        financial_filter_applied: bool = False,
+    ) -> GoldenCrossScanItemDTO:
+        score, reasons, filter_reasons = self._score_recommendation_candidate(stock)
+        if stock.gc_state not in target_state_set:
+            filter_reasons.append(f"대상 상태 제외 ({stock.gc_state})")
+        if score < min_recommendation_score:
+            filter_reasons.append(f"추천 점수 미달 ({score:.1f} < {min_recommendation_score:.1f})")
+        if financial_filter_applied and stock.financial_filter_status not in {"PASS", "TURNAROUND"}:
+            status = stock.financial_filter_status or "NOT_CHECKED"
+            reason = f"재무 필터 제외 ({status})"
+            if reason not in filter_reasons:
+                filter_reasons.append(reason)
+        return stock.model_copy(
+            update={
+                "recommendation_score": round(score, 2),
+                "recommendation_reasons": reasons,
+                "filter_reasons": filter_reasons,
+            }
+        )
+
+    def _score_recommendation_candidate(
+        self,
+        stock: GoldenCrossScanItemDTO,
+    ) -> tuple[float, list[str], list[str]]:
+        reasons: list[str] = []
+        filter_reasons: list[str] = []
+        score = 0.0
+
+        state_score = {
+            "OPTIMAL_BUY": 55.0,
+            "BUY_INTEREST": 42.0,
+            "READY_TO_BUY": 32.0,
+            "WAITING_FOR_PULLBACK": 16.0,
+            "GC_ACTIVE": 8.0,
+        }.get(stock.gc_state, 0.0)
+        score += state_score
+        if state_score:
+            reasons.append(f"{stock.gc_state} 신호 단계 ({state_score:.0f}점)")
+
+        screening = float(stock.screening_score or 0)
+        screening_score = min(max(screening, 0.0), 100.0) * 0.2
+        score += screening_score
+        if screening_score:
+            reasons.append(f"스크리닝 점수 반영 ({screening:.1f})")
+
+        if 0 <= stock.ma_gap_ratio <= 8:
+            score += 10.0
+            reasons.append(f"MA 갭 건강 ({stock.ma_gap_ratio:.1f}%)")
+        elif stock.ma_gap_ratio > 12:
+            filter_reasons.append(f"MA 갭 과대 ({stock.ma_gap_ratio:.1f}%)")
+
+        if stock.stoch_k >= 30 and stock.stoch_k > stock.stoch_d:
+            score += 10.0
+            reasons.append(f"Stoch 회복 우위 (K={stock.stoch_k:.1f} > D={stock.stoch_d:.1f})")
+        elif stock.stoch_k < 30:
+            reasons.append(f"과매도 관찰 구간 (K={stock.stoch_k:.1f})")
+
+        financial_status = stock.financial_filter_status
+        if financial_status == "PASS":
+            score += 8.0
+            reasons.append("재무 필터 통과")
+        elif financial_status == "TURNAROUND":
+            score += 5.0
+            reasons.append("턴어라운드 후보")
+        elif financial_status == "FAIL":
+            score -= 12.0
+            filter_reasons.append("재무 필터 미통과")
+        elif financial_status == "ERROR":
+            score -= 4.0
+            filter_reasons.append("재무 데이터 확인 실패")
+        elif financial_status == "PENDING":
+            filter_reasons.append("재무 필터 미조회")
+
+        return max(score, 0.0), reasons, filter_reasons
 
     @transaction
     async def analyze_sell_signal(
@@ -1186,9 +1398,7 @@ class StrategyService:
             offset=offset,
             session=session,
         )
-        total_count = await history_repo.count_by_type(
-            analysis_type, is_active, session=session
-        )
+        total_count = await history_repo.count_by_type(analysis_type, is_active, session=session)
 
         items = [self._history_to_dto(h) for h in histories]
 
@@ -1252,6 +1462,7 @@ class StrategyService:
         from src.adapters.database.repositories.analysis_history_repository import (
             AnalysisHistoryRepository,
         )
+
         return AnalysisHistoryRepository(session)
 
     def build_portfolio_cash_plan(
@@ -1385,17 +1596,15 @@ class StrategyService:
                 note = "수익 보호 단계: 현금이 필요하면 먼저 줄일 후보"
             elif profit_ratio is not None and profit_ratio <= -0.08:
                 note = "기존 손실 보전 기대보다 자본 보전 우선"
-            elif (
-                instrument_profile["is_leveraged_etf_like"]
-                and final_stage in {"REDUCE_1", "REDUCE_2"}
-            ):
+            elif instrument_profile["is_leveraged_etf_like"] and final_stage in {
+                "REDUCE_1",
+                "REDUCE_2",
+            }:
                 note = "레버리지/인버스 계열은 일반 종목보다 더 빠르게 이익 보호"
-            elif (
-                instrument_profile["is_etf_like"]
-                and final_stage in {"REDUCE_1", "REDUCE_2"}
-            ):
+            elif instrument_profile["is_etf_like"] and final_stage in {"REDUCE_1", "REDUCE_2"}:
                 note = "ETF 계열은 수익 구간에서 선제 현금화 기준을 강화"
 
+            non_negative_score = max(score, 0.0)
             scored_actions.append(
                 PortfolioCashActionDTO(
                     symbol=getattr(item, "symbol"),
@@ -1404,13 +1613,13 @@ class StrategyService:
                     action=action,
                     sell_stage=final_stage,
                     suggested_sell_ratio=round(suggested_ratio, 2),
-                    urgency_score=round(score, 2),
+                    urgency_score=round(non_negative_score, 2),
                     profit_ratio=round(profit_ratio, 4) if profit_ratio is not None else None,
                     reasons=list(dict.fromkeys(reasons))[:6],
                     note=note,
                 )
             )
-            total_score += max(score, 0)
+            total_score += non_negative_score
 
         scored_actions.sort(key=lambda x: x.urgency_score, reverse=True)
         for idx, action in enumerate(scored_actions, start=1):
@@ -1444,14 +1653,11 @@ class StrategyService:
                 summary.append("현재 현금 비중은 목표 이상으로 방어 가능")
         if winner_priority_count > 0:
             summary.append(
-                f"현금 확보는 수익 구간 종목 {winner_priority_count}개를 "
-                f"우선 활용하도록 정렬"
+                f"현금 확보는 수익 구간 종목 {winner_priority_count}개를 " f"우선 활용하도록 정렬"
             )
         if scored_actions:
             top = scored_actions[0]
-            summary.append(
-                f"최우선 정리 후보는 {top.symbol}{' ' + top.name if top.name else ''}"
-            )
+            summary.append(f"최우선 정리 후보는 {top.symbol}{' ' + top.name if top.name else ''}")
 
         return PortfolioCashPlanDTO(
             analyzed_at=datetime.now(),
@@ -1594,6 +1800,7 @@ class StrategyService:
                     from src.application.domain.strategy.sell_strategy_service import (
                         SellStrategyService,
                     )
+
                     sell_service = SellStrategyService(session)
                     # force_refresh=True로 최신 데이터 요청
                     sell_result = await sell_service.analyze_sell_signal(
@@ -1630,6 +1837,7 @@ class StrategyService:
                     from src.application.domain.strategy.buy_strategy_service import (
                         BuyStrategyService,
                     )
+
                     buy_service = BuyStrategyService(session=session)
                     # 단일 종목만 스캔 (force_refresh=True로 최신 데이터 요청)
                     scan_result = await buy_service.scan_symbols(
@@ -1729,25 +1937,31 @@ class StrategyService:
                 else sell_result.final_stage or sell_result.sell_stage
             )
             stage_info = SELL_STAGE_INFO.get(stage_value, SELL_STAGE_INFO["HOLD"])
-            dto_kwargs.update({
-                # 비중축소 분석
-                "sell_stage": stage_value,
-                "sell_stage_name": stage_info["name"],
-                "sell_ratio_min": sell_result.final_ratio_min or sell_result.sell_ratio_min,
-                "sell_ratio_max": sell_result.final_ratio_max or sell_result.sell_ratio_max,
-                # 거래량 분석
-                "volume_ratio": sell_result.volume_ratio,
-                "is_volume_spike": sell_result.is_volume_spike,
-                "is_volume_sell_signal": sell_result.is_volume_sell_signal,
-                # ADX 분석
-                "adx": sell_result.adx,
-                "plus_di": sell_result.plus_di,
-                "minus_di": sell_result.minus_di,
-                "is_strong_uptrend": sell_result.is_strong_uptrend,
-                "overbought_sell_blocked": sell_result.overbought_sell_blocked,
-                # candle_count
-                "candle_count": sell_result.candle_count,
-            })
+            dto_kwargs.update(
+                {
+                    # 비중축소 분석
+                    "sell_stage": stage_value,
+                    "sell_stage_name": stage_info["name"],
+                    "sell_ratio_min": sell_result.final_ratio_min or sell_result.sell_ratio_min,
+                    "sell_ratio_max": sell_result.final_ratio_max or sell_result.sell_ratio_max,
+                    # 거래량 분석
+                    "volume_ratio": sell_result.volume_ratio,
+                    "is_volume_spike": sell_result.is_volume_spike,
+                    "is_volume_sell_signal": sell_result.is_volume_sell_signal,
+                    # ADX 분석
+                    "adx": sell_result.adx,
+                    "plus_di": sell_result.plus_di,
+                    "minus_di": sell_result.minus_di,
+                    "is_strong_uptrend": sell_result.is_strong_uptrend,
+                    "overbought_sell_blocked": sell_result.overbought_sell_blocked,
+                    # 과열 보조지표
+                    "is_personal_buying_overheated": sell_result.is_personal_buying_overheated,
+                    "market_credit_label": sell_result.market_credit_label,
+                    "is_market_credit_overheated": sell_result.is_market_credit_overheated,
+                    # candle_count
+                    "candle_count": sell_result.candle_count,
+                }
+            )
 
         return AnalysisHistoryDTO(**dto_kwargs)
 

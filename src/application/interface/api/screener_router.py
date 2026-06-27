@@ -6,7 +6,7 @@ Screener Router - 종목 스크리닝 API 엔드포인트
 from fastapi import APIRouter, Body, Query, status
 
 from src.adapters.external.naver import get_naver_stock_client
-from src.application.common.dependencies import DatabaseSession
+from src.application.common.dependencies import AdminAccessDep, DatabaseSession
 from src.application.common.dto import ResponseDTO
 from src.application.domain.screener.dto import (
     ValueScreenerCriteria,
@@ -29,8 +29,10 @@ async def screen_value_stocks(
     session: DatabaseSession,
     criteria: ValueScreenerCriteria = Body(default_factory=ValueScreenerCriteria),
     symbols: list[str] | None = Body(default=None, description="대상 종목 목록 (없으면 전체)"),
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[ValueScreenerResultDTO]:
     """가치주 스크리닝"""
+    _ = admin_access
     naver_client = get_naver_stock_client()
     service = ValueScreenerService(naver_client, session)
 

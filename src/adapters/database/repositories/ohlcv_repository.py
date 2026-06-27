@@ -3,8 +3,10 @@
 OHLCV Repository - 캔들 데이터 캐시 저장소
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import pandas as pd
 from sqlalchemy import and_, delete, distinct, func, select
@@ -12,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.ohlcv import OHLCVModel
 from src.adapters.database.repositories.base_repository import BaseRepository
-from src.application.domain.market_data.dto import CandleDTO
+
+if TYPE_CHECKING:
+    from src.application.domain.market_data.dto import CandleDTO
 
 
 class OHLCVRepository(BaseRepository[OHLCVModel]):

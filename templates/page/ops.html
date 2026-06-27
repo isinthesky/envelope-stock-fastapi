@@ -62,9 +62,16 @@ const formatPercent = (value) => {
   return `${value.toFixed(2)}%`;
 };
 
+const esc = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
 const setList = (el, items) => {
   if (!items || !items.length) { el.innerHTML = '<li>-</li>'; return; }
-  el.innerHTML = items.map(item => `<li>${item}</li>`).join('');
+  el.innerHTML = items.map(item => `<li>${esc(item)}</li>`).join('');
 };
 
 async function loadOpsSummary() {
@@ -80,29 +87,29 @@ async function loadOpsSummary() {
     const data = payload.data;
 
     document.getElementById('service').innerHTML = `
-      <p><strong>${data.service.name}</strong> v${data.service.version}</p>
-      <p>ENV: ${data.service.env}</p>
-      <p>거래: ${data.service.trading_environment}</p>
+      <p><strong>${esc(data.service.name)}</strong> v${esc(data.service.version)}</p>
+      <p>ENV: ${esc(data.service.env)}</p>
+      <p>거래: ${esc(data.service.trading_environment)}</p>
       <p>갱신 주기: ${data.service.dashboard_refresh_interval}s</p>
     `;
     document.getElementById('health').innerHTML = `
-      <p>상태: <strong>${data.health.status}</strong></p>
-      <p>DB: ${data.health.database}</p>
-      <p>Redis: ${data.health.redis}</p>
-      <p>KIS API: ${data.health.kis_api}</p>
+      <p>상태: <strong>${esc(data.health.status)}</strong></p>
+      <p>DB: ${esc(data.health.database)}</p>
+      <p>Redis: ${esc(data.health.redis)}</p>
+      <p>KIS API: ${esc(data.health.kis_api)}</p>
     `;
     document.getElementById('token').innerHTML = data.token.is_valid === false && data.token.error ? `
       <p><strong>invalid</strong></p>
-      <p>${data.token.error}</p>
+      <p>${esc(data.token.error)}</p>
     ` : `
-      <p>유효: <strong>${data.token.is_valid}</strong></p>
-      <p>만료: ${data.token.expires_at}</p>
+      <p>유효: <strong>${esc(data.token.is_valid)}</strong></p>
+      <p>만료: ${esc(data.token.expires_at)}</p>
       <p>잔여: ${formatNumber(data.token.remaining_seconds)}s</p>
     `;
     document.getElementById('schedulers').innerHTML = `
-      <p>전략: <strong>${data.schedulers.strategy.is_running}</strong></p>
-      <p>알림: <strong>${data.schedulers.notification.is_running}</strong></p>
-      <p>텔레그램: ${data.schedulers.notification.telegram_enabled}</p>
+      <p>전략: <strong>${esc(data.schedulers.strategy.is_running)}</strong></p>
+      <p>알림: <strong>${esc(data.schedulers.notification.is_running)}</strong></p>
+      <p>텔레그램: ${esc(data.schedulers.notification.telegram_enabled)}</p>
       <p>작업 수: ${data.schedulers.notification.jobs.length}</p>
     `;
     document.getElementById('account').innerHTML = `
@@ -115,7 +122,7 @@ async function loadOpsSummary() {
     document.getElementById('orders').innerHTML = `
       <p>총 주문: ${data.orders.total_count}</p>
       <p>대기 중: ${data.orders.pending_count}</p>
-      <p>최근: ${data.orders.recent.map(item => `${item.symbol}:${item.status}`).join(', ') || '-'}</p>
+      <p>최근: ${esc(data.orders.recent.map(item => `${item.symbol}:${item.status}`).join(', ') || '-')}</p>
     `;
 
     setList(
@@ -126,13 +133,13 @@ async function loadOpsSummary() {
     document.getElementById('buy-recommendations').innerHTML = `
       <p>매수 후보: <strong>${data.buy_recommendations.buy_candidate_count}</strong></p>
       <ul>
-        ${data.buy_recommendations.top_stocks.map(item => `<li>${item.symbol} ${item.name} / score ${item.screening_score ?? '-'}</li>`).join('') || '<li>-</li>'}
+        ${data.buy_recommendations.top_stocks.map(item => `<li>${esc(item.symbol)} ${esc(item.name)} / score ${esc(item.screening_score ?? '-')}</li>`).join('') || '<li>-</li>'}
       </ul>
     `;
     document.getElementById('sell-watchlist').innerHTML = `
       <p>활성 추적: <strong>${data.sell_watchlist.active_tracking_count}</strong></p>
       <ul>
-        ${data.sell_watchlist.items.map(item => `<li>${item.symbol} ${item.name || ''} / ${item.final_stage || item.sell_stage || '-'}</li>`).join('') || '<li>-</li>'}
+        ${data.sell_watchlist.items.map(item => `<li>${esc(item.symbol)} ${esc(item.name || '')} / ${esc(item.final_stage || item.sell_stage || '-')}</li>`).join('') || '<li>-</li>'}
       </ul>
     `;
     document.getElementById('cash-plan').innerHTML = `
@@ -148,7 +155,7 @@ async function loadOpsSummary() {
   } catch (err) {
     loading.style.display = 'none';
     error.style.display = 'block';
-    error.innerHTML = `<strong>로드 실패</strong><p>${err.message}</p>`;
+    error.innerHTML = `<strong>로드 실패</strong><p>${esc(err.message)}</p>`;
   }
 }
 

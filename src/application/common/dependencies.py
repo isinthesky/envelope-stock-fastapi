@@ -289,28 +289,24 @@ BuyStrategyServiceDep = Annotated["BuyStrategyService", Depends(get_buy_strategy
 
 # ==================== Admin Access Control ====================
 
+UNSAFE_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+ADMIN_CSRF_HEADER = "x-requested-with"
+ADMIN_CSRF_HEADER_VALUE = "XMLHttpRequest"
 
-def _get_client_ip(request: Request) -> str:
+
+def _get_client_ip(request: Request, trusted_proxy_ips: list[str] | None = None) -> str:
     """클라이언트 IP 추출
 
     프록시 헤더(X-Forwarded-For/X-Real-IP)는 직접 연결 IP가
     신뢰할 수 있는 내부 네트워크(Docker bridge 등)인 경우에만 참조합니다.
     """
-    _TRUSTED_PROXIES = (
-        ipaddress.ip_network("172.16.0.0/12"),
-        ipaddress.ip_network("10.0.0.0/8"),
-        ipaddress.ip_network("192.168.0.0/16"),
-        ipaddress.ip_network("127.0.0.0/8"),
-        ipaddress.ip_network("::1/128"),
-    )
-
     direct_ip = request.client.host if request.client else None
 
     # 직접 연결 IP가 신뢰 가능한 프록시인 경우에만 헤더 참조
     if direct_ip:
         try:
             addr = ipaddress.ip_address(direct_ip)
-            is_trusted = any(addr in net for net in _TRUSTED_PROXIES)
+            is_trusted = _is_ip_allowed(str(addr), trusted_proxy_ips or [])
         except ValueError:
             is_trusted = False
 
@@ -370,12 +366,19 @@ async def verify_admin_access(request: Request) -> str:
     from src.settings.config import get_settings
 
     settings = get_settings()
-    client_ip = _get_client_ip(request)
+    client_ip = _get_client_ip(request, settings.trusted_proxy_ips)
 
     if not _is_ip_allowed(client_ip, settings.admin_allowed_ips):
         raise AuthorizationError(
             message=f"Access denied from IP: {client_ip}",
         )
+
+    if request.method.upper() in UNSAFE_HTTP_METHODS:
+        requested_with = request.headers.get(ADMIN_CSRF_HEADER)
+        if requested_with != ADMIN_CSRF_HEADER_VALUE:
+            raise AuthorizationError(
+                message="Admin write request missing CSRF guard header",
+            )
 
     return client_ip
 

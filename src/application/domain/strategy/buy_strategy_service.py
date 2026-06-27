@@ -36,6 +36,10 @@ from src.application.domain.strategy.dto import (
     MA5BreakoutScanListDTO,
 )
 from src.application.domain.strategy.ohlcv_data_loader import LoadResult, LoadType, OHLCVDataLoader
+from src.application.domain.strategy.signal_evaluator import (
+    GoldenCrossScanContext,
+    GoldenCrossSignalEvaluator,
+)
 from src.settings.config import settings
 
 
@@ -85,7 +89,7 @@ class BuyStrategyService:
     @staticmethod
     def _resolve_scan_concurrency(requested: int | None, total: int) -> int:
         """스캔 동시성 제한값 계산"""
-        base_limit = settings.scan_concurrency_limit
+        base_limit = min(settings.scan_concurrency_limit, 4)
         desired = requested or base_limit
         safe_limit = max(1, min(desired, settings.kis_api_rate_limit, total))
         if safe_limit != desired:
@@ -192,7 +196,9 @@ class BuyStrategyService:
             target["total_api_calls"] += load_result.api_calls
             target["new_candles"] += load_result.new_candles
 
-        async def worker() -> tuple[list[tuple[int, GoldenCrossScanItemDTO]], list[tuple[int, str]], dict[str, int]]:
+        async def worker() -> (
+            tuple[list[tuple[int, GoldenCrossScanItemDTO]], list[tuple[int, str]], dict[str, int]]
+        ):
             worker_results: list[tuple[int, GoldenCrossScanItemDTO]] = []
             worker_errors: list[tuple[int, str]] = []
             worker_cache_stats = {
@@ -244,10 +250,16 @@ class BuyStrategyService:
                         )
 
                         latest = df.iloc[-1]
+                        prev = df.iloc[-2] if len(df) >= 2 else None
                         ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
                         ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
                         stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
                         stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
+                        prev_stoch_k = (
+                            float(prev["stoch_k"])
+                            if prev is not None and pd.notna(prev["stoch_k"])
+                            else None
+                        )
                         close = float(latest["close"])
 
                         is_gc_active = ma_short > ma_long
@@ -263,6 +275,8 @@ class BuyStrategyService:
                             stoch_threshold=stoch_threshold,
                             stoch_d=stoch_d,
                             ma_gap_ratio=ma_gap_ratio,
+                            prev_stoch_k=prev_stoch_k,
+                            recent_oversold=self._has_recent_oversold(df, stoch_threshold),
                         )
 
                         worker_results.append(
@@ -490,10 +504,16 @@ class BuyStrategyService:
 
                 # 최신 행 추출
                 latest = df.iloc[-1]
+                prev = df.iloc[-2] if len(df) >= 2 else None
                 ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
                 ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
                 stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
                 stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
+                prev_stoch_k = (
+                    float(prev["stoch_k"])
+                    if prev is not None and pd.notna(prev["stoch_k"])
+                    else None
+                )
                 close = float(latest["close"])
 
                 # 골든크로스 상태 판정
@@ -513,6 +533,8 @@ class BuyStrategyService:
                     stoch_threshold=stoch_threshold,
                     stoch_d=stoch_d,
                     ma_gap_ratio=ma_gap_ratio,
+                    prev_stoch_k=prev_stoch_k,
+                    recent_oversold=self._has_recent_oversold(df, stoch_threshold),
                 )
 
                 # 결과 추가
@@ -589,11 +611,15 @@ class BuyStrategyService:
         stoch_threshold: float,
         stoch_d: float = 50.0,
         ma_gap_ratio: float = 0.0,
-        # 신규 파라미터 (기본값으로 하위 호환성 유지)
-        deep_oversold_threshold: float = 30.0,
-        require_momentum_turn: bool = False,
+        deep_oversold_threshold: float | None = None,
+        require_momentum_turn: bool = True,
         min_ma_gap: float = 0.0,
         max_ma_gap: float = 8.0,
+        *,
+        prev_stoch_k: float | None = None,
+        recent_oversold: bool = False,
+        recovery_threshold: float = 20.0,
+        strong_recovery_threshold: float = 30.0,
     ) -> str:
         """
         골든크로스 상태 결정
@@ -604,10 +630,14 @@ class BuyStrategyService:
             stoch_threshold: 과매도 임계값
             stoch_d: 현재 Stochastic D 값
             ma_gap_ratio: MA 갭 비율 (%)
-            deep_oversold_threshold: 깊은 과매도 기준 (기본 30, 기존 25에서 완화)
-            require_momentum_turn: K>D 조건 필수 여부 (기본 False)
+            prev_stoch_k: 이전 Stochastic K 값
+            recent_oversold: 최근 캔들에 과매도 구간이 있었는지 여부
+            recovery_threshold: 과매도 후 회복 기준
+            strong_recovery_threshold: 강한 회복 기준
+            require_momentum_turn: K>D 조건 필수 여부
             min_ma_gap: 최소 MA 갭 비율 (기본 0%)
             max_ma_gap: 최대 MA 갭 비율 (기본 8%, 기존 5에서 완화)
+            deep_oversold_threshold: 하위 호환용 인자. 현재 상태 판정에는 사용하지 않음.
 
         Returns:
             str: 상태 문자열
@@ -618,35 +648,35 @@ class BuyStrategyService:
             - GC_ACTIVE: GC 활성 (K >= 50)
             - NOT_GC: GC 비활성
         """
-        if not is_gc_active:
-            return "NOT_GC"
+        _ = deep_oversold_threshold
+        return GoldenCrossSignalEvaluator.classify_scan_state(
+            GoldenCrossScanContext(
+                is_gc_active=is_gc_active,
+                stoch_k=stoch_k,
+                stoch_d=stoch_d,
+                stoch_threshold=stoch_threshold,
+                ma_gap_ratio=ma_gap_ratio,
+                prev_stoch_k=prev_stoch_k,
+                recent_oversold=recent_oversold,
+                recovery_threshold=recovery_threshold,
+                strong_recovery_threshold=strong_recovery_threshold,
+                require_momentum_turn=require_momentum_turn,
+                min_ma_gap=min_ma_gap,
+                max_ma_gap=max_ma_gap,
+            )
+        )
 
-        # 골든크로스 활성 상태에서 Stochastic 확인
-        if stoch_k < stoch_threshold:
-            # OPTIMAL_BUY 조건 (보수적 완화 적용)
-            is_deep_oversold = stoch_k < deep_oversold_threshold
-            is_momentum_turning = (stoch_k > stoch_d) if require_momentum_turn else True
-            is_healthy_trend = min_ma_gap <= ma_gap_ratio <= max_ma_gap
-
-            conditions = [is_deep_oversold, is_momentum_turning, is_healthy_trend]
-            conditions_met = sum(conditions)
-
-            # 모든 조건 충족: 매수 적기
-            if all(conditions):
-                return "OPTIMAL_BUY"
-
-            # 2개 이상 조건 충족: 매수 관심
-            if conditions_met >= 2:
-                return "BUY_INTEREST"
-
-            # 일반 매수 준비
-            return "READY_TO_BUY"
-        elif stoch_k < 50:
-            # 중간 구간이면 눌림목 대기
-            return "WAITING_FOR_PULLBACK"
-        else:
-            # Stochastic이 높으면 일반 골든크로스 활성
-            return "GC_ACTIVE"
+    @staticmethod
+    def _has_recent_oversold(
+        df: pd.DataFrame,
+        stoch_threshold: float,
+        lookback_bars: int = 5,
+    ) -> bool:
+        """현재 캔들 전 최근 구간에서 과매도 풀백이 있었는지 확인한다."""
+        if "stoch_k" not in df.columns or len(df) < 2:
+            return False
+        recent = df["stoch_k"].iloc[-(lookback_bars + 1) : -1]
+        return bool((recent < stoch_threshold).any())
 
     # ==================== 재무 필터링 (2차 필터) ====================
 
@@ -676,10 +706,7 @@ class BuyStrategyService:
             target_states = ["OPTIMAL_BUY", "BUY_INTEREST", "READY_TO_BUY"]
 
         # 필터 대상 종목 추출
-        target_stocks = [
-            stock for stock in scan_result.stocks
-            if stock.gc_state in target_states
-        ]
+        target_stocks = [stock for stock in scan_result.stocks if stock.gc_state in target_states]
 
         if not target_stocks:
             logger.info("[Financial Filter] No target stocks to filter")
@@ -732,13 +759,15 @@ class BuyStrategyService:
                 revenue_yoy_value = (
                     float(screening.revenue_yoy) if screening.revenue_yoy is not None else None
                 )
-                updated_stock = stock.model_copy(update={
-                    "financial_filter_status": screening.filter_status,
-                    "revenue_yoy": revenue_yoy_value,
-                    "operating_margin": float(screening.latest_operating_margin),
-                    "is_consecutive_profit": screening.is_consecutive_profit,
-                    "is_turnaround": screening.is_turnaround,
-                })
+                updated_stock = stock.model_copy(
+                    update={
+                        "financial_filter_status": screening.filter_status,
+                        "revenue_yoy": revenue_yoy_value,
+                        "operating_margin": float(screening.latest_operating_margin),
+                        "is_consecutive_profit": screening.is_consecutive_profit,
+                        "is_turnaround": screening.is_turnaround,
+                    }
+                )
 
                 # 통계 업데이트
                 if screening.filter_status == "PASS":
@@ -749,15 +778,19 @@ class BuyStrategyService:
                     financial_fail += 1
             elif stock.gc_state in target_states:
                 # 조회 실패 또는 데이터 없음 (ERROR는 FAIL과 분리)
-                updated_stock = stock.model_copy(update={
-                    "financial_filter_status": "ERROR",
-                })
+                updated_stock = stock.model_copy(
+                    update={
+                        "financial_filter_status": "ERROR",
+                    }
+                )
                 financial_error += 1
             else:
                 # 필터 대상 아님
-                updated_stock = stock.model_copy(update={
-                    "financial_filter_status": "PENDING",
-                })
+                updated_stock = stock.model_copy(
+                    update={
+                        "financial_filter_status": "PENDING",
+                    }
+                )
                 pending += 1
 
             updated_stocks.append(updated_stock)
@@ -765,8 +798,12 @@ class BuyStrategyService:
         # 결과 재정렬 (재무 필터 PASS > TURNAROUND > FAIL > PENDING)
         def sort_key(stock: GoldenCrossScanItemDTO) -> tuple:
             state_order = {
-                "OPTIMAL_BUY": 0, "BUY_INTEREST": 1, "READY_TO_BUY": 2,
-                "WAITING_FOR_PULLBACK": 3, "GC_ACTIVE": 4, "NOT_GC": 5,
+                "OPTIMAL_BUY": 0,
+                "BUY_INTEREST": 1,
+                "READY_TO_BUY": 2,
+                "WAITING_FOR_PULLBACK": 3,
+                "GC_ACTIVE": 4,
+                "NOT_GC": 5,
             }
             fin_order = {"PASS": 0, "TURNAROUND": 1, "FAIL": 2, "ERROR": 3, "PENDING": 4, None: 5}
             return (
@@ -884,7 +921,9 @@ class BuyStrategyService:
             target["total_api_calls"] += load_result.api_calls
             target["new_candles"] += load_result.new_candles
 
-        async def worker() -> tuple[list[tuple[int, MA5BreakoutScanItemDTO]], list[tuple[int, str]], dict[str, int]]:
+        async def worker() -> (
+            tuple[list[tuple[int, MA5BreakoutScanItemDTO]], list[tuple[int, str]], dict[str, int]]
+        ):
             worker_results: list[tuple[int, MA5BreakoutScanItemDTO]] = []
             worker_errors: list[tuple[int, str]] = []
             worker_cache_stats = {
@@ -940,7 +979,9 @@ class BuyStrategyService:
                         ma300 = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
                         close = float(latest["close"])
                         volume = float(latest["volume"]) if pd.notna(latest["volume"]) else 0
-                        volume_ma20 = float(latest["volume_ma20"]) if pd.notna(latest["volume_ma20"]) else 1
+                        volume_ma20 = (
+                            float(latest["volume_ma20"]) if pd.notna(latest["volume_ma20"]) else 1
+                        )
 
                         prev_ma5 = float(prev["ma_short"]) if pd.notna(prev["ma_short"]) else 0
 
@@ -953,7 +994,9 @@ class BuyStrategyService:
                         prev_ma5_above_upper = prev_ma5 > (ma300 * (1 + envelope_pct / 100))
                         price_above_upper = close > upper_band
 
-                        is_breakout = ma5_above_upper and not prev_ma5_above_upper and price_above_upper
+                        is_breakout = (
+                            ma5_above_upper and not prev_ma5_above_upper and price_above_upper
+                        )
 
                         if not is_breakout:
                             continue
@@ -1029,9 +1072,7 @@ class BuyStrategyService:
 
         # 3. 결과 정렬 (BREAKOUT > ABOVE > BELOW)
         state_order = {"BREAKOUT": 0, "ABOVE": 1, "BELOW": 2}
-        results.sort(
-            key=lambda x: (state_order.get(x.ma5_state, 99), -x.gap_ratio, x.symbol)
-        )
+        results.sort(key=lambda x: (state_order.get(x.ma5_state, 99), -x.gap_ratio, x.symbol))
 
         # 4. 통계 계산
         breakout_count = sum(1 for r in results if r.ma5_state == "BREAKOUT")
@@ -1102,7 +1143,9 @@ class BuyStrategyService:
                 errors=["No symbols provided"],
             )
 
-        logger.info(f"[MA5 Scan] Scanning {len(symbols)} symbols with MA{short_period}/MA{long_period}")
+        logger.info(
+            f"[MA5 Scan] Scanning {len(symbols)} symbols with MA{short_period}/MA{long_period}"
+        )
 
         data_loader = self._get_data_loader(session)
 

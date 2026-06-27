@@ -123,8 +123,7 @@ async def test_scan_golden_cross_concurrency_keeps_results(monkeypatch: pytest.M
     )
 
     assert len(result.stocks) == len(stocks)
-    assert [item.symbol for item in result.stocks] == sorted(
-        stock.symbol for stock in stocks
-    )
+    assert [item.symbol for item in result.stocks] == sorted(stock.symbol for stock in stocks)
+    assert {item.gc_state for item in result.stocks} == {"READY_TO_BUY"}
     assert result.errors == []
     assert loader.max_active <= 2

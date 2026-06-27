@@ -1,0 +1,15 @@
+from src.application.domain.strategy.notification_scheduler import NotificationScheduler
+
+
+def test_notification_scheduler_status_includes_slots_and_runtime_state() -> None:
+    scheduler = NotificationScheduler()
+
+    status = scheduler.get_status()
+
+    assert status["is_running"] is False
+    assert status["execution_lock_locked"] is False
+    assert len(status["buy_slots"]) == 2
+    assert len(status["sell_slots"]) == 2
+    assert status["buy_slots"][0]["notify_time"] == "11:30"
+    assert status["sell_slots"][0]["notify_time"] == "09:30"
+    assert status["sell_notification_available"] is True

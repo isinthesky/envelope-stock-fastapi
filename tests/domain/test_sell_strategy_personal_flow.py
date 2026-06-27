@@ -1,6 +1,81 @@
-from src.application.domain.strategy.dto import SellStageEnum
+import pandas as pd
+import pytest
+
+from src.application.domain.strategy.dto import SellPhaseEnum, SellScoreResultDTO, SellStageEnum
 from src.application.domain.strategy.sell_strategy_service import SellStrategyService
 from src.settings.sell_score_settings import SellScoreSettings
+
+
+class _DummySellSignalDataLoader:
+    async def load_ohlcv_dataframe(self, **kwargs):
+        _ = kwargs
+        prices = [100.0] * 180
+        return pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2024-01-01", periods=len(prices), freq="D"),
+                "open": prices,
+                "high": prices,
+                "low": prices,
+                "close": prices,
+                "volume": [1000000] * len(prices),
+            }
+        )
+
+
+def _stub_neutral_sell_dependencies(
+    service: SellStrategyService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(service, "_get_data_loader", lambda: _DummySellSignalDataLoader())
+    monkeypatch.setattr(service, "_get_personal_flow_data", lambda symbol: _async_none())
+    monkeypatch.setattr(service, "_get_market_credit_trend", lambda market: _async_none())
+    monkeypatch.setattr(service, "_check_52week_high", lambda **kwargs: (False, 0.0, "", "raw"))
+    monkeypatch.setattr(
+        service,
+        "_calculate_volume_indicators",
+        lambda *args, **kwargs: {
+            "current_volume": 1000000,
+            "prev_volume": 1000000,
+            "volume_ma_20": 1000000,
+            "volume_ratio": 1.0,
+            "is_volume_spike": False,
+            "price_drop_ratio": 0.0,
+            "is_volume_sell_signal": False,
+            "volume_sell_reasons": [],
+            "is_volume_peak": False,
+            "volume_signal_type": "none",
+            "volume_peak_reasons": [],
+            "volume_peak_score": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_calculate_adx_indicators",
+        lambda *args, **kwargs: {
+            "adx": None,
+            "plus_di": None,
+            "minus_di": None,
+            "is_strong_uptrend": False,
+            "is_strong_downtrend": False,
+        },
+    )
+    monkeypatch.setattr(service, "_analyze_sell_phase", lambda **kwargs: (SellPhaseEnum.NONE, []))
+    monkeypatch.setattr(
+        service,
+        "calculate_sell_score",
+        lambda **kwargs: SellScoreResultDTO(
+            total_score=0.0,
+            normalized_score=0.0,
+            available_max=0.0,
+            score_breakdown={},
+            score_reasons=[],
+            recommended_stage=SellStageEnum.HOLD,
+        ),
+    )
+
+
+async def _async_none():
+    return None
 
 
 def test_personal_flow_overheated_when_recent_buying_is_concentrated() -> None:
@@ -106,7 +181,6 @@ def test_calculate_sell_score_adds_market_credit_and_combo_bonus() -> None:
     assert any("시장 신용" in reason for reason in result.score_reasons)
 
 
-
 def test_overlay_stage_upgrade_is_limited_to_one_step() -> None:
     service = SellStrategyService(session=None)
 
@@ -122,7 +196,6 @@ def test_overlay_stage_upgrade_is_limited_to_one_step() -> None:
     assert upgraded_stage == SellStageEnum.REDUCE_2
     assert len([reason for reason in reasons if "Stage 한 단계 강화" in reason]) == 1
     assert any("고점권" in reason for reason in reasons)
-
 
 
 def test_market_credit_alone_does_not_upgrade_stage() -> None:
@@ -141,3 +214,73 @@ def test_market_credit_alone_does_not_upgrade_stage() -> None:
 
     assert upgraded_stage == SellStageEnum.HOLD
     assert reasons == []
+
+
+def test_take_profit_trigger_upgrades_final_stage_to_reduce_2() -> None:
+    service = SellStrategyService(session=None)
+
+    stage, reasons = service._apply_position_risk_stage(
+        SellStageEnum.HOLD,
+        is_take_profit_triggered=True,
+        trailing_stop_activated=False,
+        drawdown_from_high=None,
+    )
+
+    assert stage == SellStageEnum.REDUCE_2
+    assert any("익절 목표" in reason for reason in reasons)
+
+
+def test_trailing_stop_drawdown_upgrades_final_stage_to_exit_all() -> None:
+    service = SellStrategyService(session=None)
+
+    stage, reasons = service._apply_position_risk_stage(
+        SellStageEnum.REDUCE_1,
+        is_take_profit_triggered=False,
+        trailing_stop_activated=True,
+        drawdown_from_high=0.08,
+    )
+
+    assert stage == SellStageEnum.EXIT_ALL
+    assert any("트레일링 스탑 발동" in reason for reason in reasons)
+
+
+async def test_analyze_sell_signal_reflects_take_profit_in_final_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SellStrategyService(session=None)
+    _stub_neutral_sell_dependencies(service, monkeypatch)
+
+    result = await service.analyze_sell_signal(
+        symbol="005930",
+        entry_price=80.0,
+        use_scoring=False,
+    )
+
+    assert result.is_take_profit_triggered is True
+    assert result.sell_stage == SellStageEnum.HOLD.value
+    assert result.final_stage == SellStageEnum.REDUCE_2
+    assert result.final_ratio_min == 0.3
+    assert result.final_ratio_max == 0.4
+    assert any("익절 목표" in reason for reason in result.sell_stage_reasons)
+
+
+async def test_analyze_sell_signal_reflects_trailing_stop_in_final_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SellStrategyService(session=None)
+    _stub_neutral_sell_dependencies(service, monkeypatch)
+
+    result = await service.analyze_sell_signal(
+        symbol="005930",
+        highest_price=110.0,
+        trailing_stop_activated=True,
+        use_scoring=False,
+    )
+
+    assert result.trailing_stop_activated is True
+    assert result.drawdown_from_high == 0.0909
+    assert result.sell_stage == SellStageEnum.HOLD.value
+    assert result.final_stage == SellStageEnum.EXIT_ALL
+    assert result.final_ratio_min == 1.0
+    assert result.final_ratio_max == 1.0
+    assert any("트레일링 스탑 발동" in reason for reason in result.sell_stage_reasons)

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-KIS Trading API Service - Main Application
+KIS Strategy & Alert Server - Main Application
 
 FastAPI 애플리케이션 진입점
 """
@@ -8,7 +8,7 @@ FastAPI 애플리케이션 진입점
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.settings.config import settings
@@ -32,15 +32,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     print(f"🚀 Starting {settings.app_name} v{settings.app_version}")
     print("=" * 60)
     print(f"📍 Environment: {settings.env}")
-    print(f"💰 Trading Mode: {'Paper Trading (모의투자)' if settings.is_paper_trading else 'Real Trading (실전투자)'}")
+    print(
+        f"💰 Trading Mode: {'Paper Trading (모의투자)' if settings.is_paper_trading else 'Real Trading (실전투자)'}"
+    )
     print(f"🔗 KIS API URL: {settings.kis_base_url}")
     print(f"🗄️  Database: {settings.database_url.split('@')[1]}")  # Hide credentials
-    print(f"📦 Redis: {settings.redis_url}")
+    redis_display = (
+        settings.redis_url.split("@")[-1] if "@" in settings.redis_url else settings.redis_url
+    )
+    print(f"📦 Redis: {redis_display}")
     print("=" * 60)
 
     # 1. Database 연결 확인
     try:
         from sqlalchemy import text
+
         async with engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
         print("✅ Database connection established")
@@ -210,7 +216,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="한국투자증권 Open API 기반 자동매매 서비스",
+    description="한국투자증권 Open API 기반 전략 실행 및 알림 서비스",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -222,7 +228,9 @@ from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-app.mount("/static/styles", StaticFiles(directory=str(BASE_DIR / "static" / "styles")), name="styles")
+app.mount(
+    "/static/styles", StaticFiles(directory=str(BASE_DIR / "static" / "styles")), name="styles"
+)
 app.mount("/static/js", StaticFiles(directory=str(BASE_DIR / "static" / "js")), name="js")
 
 # CORS 미들웨어 추가
@@ -236,6 +244,7 @@ app.add_middleware(
 
 # 접근 로깅 미들웨어 추가 (/page/ 경로 외부 접근 기록)
 from src.application.common.middleware import AccessLoggingMiddleware
+
 app.add_middleware(AccessLoggingMiddleware)
 
 
@@ -283,6 +292,7 @@ async def health_check() -> dict[str, str]:
     # KIS API 토큰 상태 확인
     try:
         from src.adapters.external.kis_api.auth import get_kis_auth
+
         kis_auth = get_kis_auth()
         has_token = kis_auth.token_info is not None and kis_auth.token_info.is_valid
         status_result["kis_api"] = "authenticated" if has_token else "unauthenticated"
@@ -306,20 +316,24 @@ from src.application.interface.api.account_router import router as account_route
 from src.application.interface.api.auth_router import router as auth_router
 from src.application.interface.api.backtest_router import router as backtest_router
 from src.application.interface.api.market_data_router import router as market_data_router
+
 # from src.application.interface.api.ohlcv_router import router as ohlcv_router  # TODO: apscheduler 의존성 필요
 from src.application.interface.api.order_router import router as order_router
+from src.application.interface.api.ops_router import router as ops_router
 from src.application.interface.api.screener_router import router as screener_router
 from src.application.interface.api.strategy_router import (
     router as strategy_router,
     admin_router as strategy_admin_router,
 )
 from src.application.interface.api.websocket_router import router as websocket_router
-from src.application.interface.page import page_routers
+from src.application.common.dependencies import verify_admin_access
+from src.application.interface.page import mypage_routers, public_page_routers
 
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(market_data_router, prefix="/api/v1/market", tags=["MarketData"])
 app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
 app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
+app.include_router(ops_router)
 app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
 
 # 전략 생성/수정/삭제 같은 관리자 전용 라우트는 기본 비활성(완전 비노출)
@@ -336,8 +350,11 @@ app.include_router(backtest_router)  # 내부 prefix: /api/v1/backtest
 app.include_router(access_log_router)  # 내부 prefix: /api/v1/access-logs
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 
-# Page routers (각 라우터는 자체 prefix 포함)
-for page_router in page_routers:
+# /mypage/* admin pages are IP-gated at include time so individual page routers stay simple/testable.
+for page_router in mypage_routers:
+    app.include_router(page_router, dependencies=[Depends(verify_admin_access)])
+
+for page_router in public_page_routers:
     app.include_router(page_router)
 
 

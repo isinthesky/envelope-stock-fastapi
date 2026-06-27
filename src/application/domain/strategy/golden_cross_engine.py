@@ -13,6 +13,7 @@ Golden Cross Engine - 골든크로스 전략 실행 엔진
 
 import json
 import logging
+from types import SimpleNamespace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Sequence
@@ -148,7 +149,9 @@ class GoldenCrossEngine:
             existing_symbols = set(strategy.symbol_list)
             all_symbols = list(set(candidates) | existing_symbols)
 
-            logger.info(f"[GC Engine] Processing {len(all_symbols)} symbols for strategy {strategy_id}")
+            logger.info(
+                f"[GC Engine] Processing {len(all_symbols)} symbols for strategy {strategy_id}"
+            )
 
             # 6. 종목별 처리
             for symbol in all_symbols:
@@ -178,12 +181,12 @@ class GoldenCrossEngine:
                     logger.error(f"[GC Engine] {error_msg}")
                     errors.append(error_msg)
 
-            # 7. 전략 실행 통계 업데이트
-            await self.strategy_repo.update_execution_stats(
-                strategy_id, success=len(errors) == 0
-            )
-
-            await self.session.commit()
+            if not dry_run:
+                # 7. 전략 실행 통계 업데이트
+                await self.strategy_repo.update_execution_stats(
+                    strategy_id, success=len(errors) == 0
+                )
+                await self.session.commit()
 
         except Exception as e:
             error_msg = f"Strategy execution failed: {str(e)}"
@@ -195,7 +198,7 @@ class GoldenCrossEngine:
             strategy_id,
             executed_at,
             dry_run,
-            len(all_symbols) if 'all_symbols' in locals() else 0,
+            len(all_symbols) if "all_symbols" in locals() else 0,
             buy_count,
             sell_count,
             orders_created,
@@ -252,18 +255,27 @@ class GoldenCrossEngine:
         prev_snapshot = self._create_snapshot(prev_row)
 
         # 4. 현재 상태 조회 (없으면 생성)
-        state = await self.symbol_state_repo.get_by_strategy_and_symbol(
-            strategy.id, symbol
-        )
+        state = await self.symbol_state_repo.get_by_strategy_and_symbol(strategy.id, symbol)
 
         if not state:
             # 초기 상태 결정
             initial_state = state_machine.get_initial_state(current_snapshot)
-            state = await self.symbol_state_repo.upsert(
-                strategy_id=strategy.id,
-                symbol=symbol,
-                state=initial_state.value,
-            )
+            if dry_run:
+                state = SimpleNamespace(
+                    state=initial_state.value,
+                    gc_date=None,
+                    pullback_date=None,
+                    entry_price=None,
+                    entry_date=None,
+                    highest_price=None,
+                    trailing_stop_activated=False,
+                )
+            else:
+                state = await self.symbol_state_repo.upsert(
+                    strategy_id=strategy.id,
+                    symbol=symbol,
+                    state=initial_state.value,
+                )
 
         # 5. 상태 머신 처리
         transition = state_machine.process(
@@ -278,19 +290,20 @@ class GoldenCrossEngine:
             trailing_stop_activated=state.trailing_stop_activated,
         )
 
-        # 6. 지표 스냅샷 업데이트
-        await self.symbol_state_repo.update_indicators(
-            strategy_id=strategy.id,
-            symbol=symbol,
-            ma_short=Decimal(str(current_snapshot.ma_short)),
-            ma_long=Decimal(str(current_snapshot.ma_long)),
-            stoch_k=Decimal(str(current_snapshot.stoch_k)),
-            stoch_d=Decimal(str(current_snapshot.stoch_d)),
-            close=current_snapshot.close,
-        )
+        if not dry_run:
+            # 6. 지표 스냅샷 업데이트
+            await self.symbol_state_repo.update_indicators(
+                strategy_id=strategy.id,
+                symbol=symbol,
+                ma_short=Decimal(str(current_snapshot.ma_short)),
+                ma_long=Decimal(str(current_snapshot.ma_long)),
+                stoch_k=Decimal(str(current_snapshot.stoch_k)),
+                stoch_d=Decimal(str(current_snapshot.stoch_d)),
+                close=current_snapshot.close,
+            )
 
         # 6-1. 포지션 보유 중이면 highest_price 업데이트
-        if state.state == SymbolState.IN_POSITION.value:
+        if not dry_run and state.state == SymbolState.IN_POSITION.value:
             current_highest = state.highest_price or Decimal("0")
             if current_snapshot.close > current_highest:
                 await self.symbol_state_repo.update_highest_price(
@@ -301,9 +314,7 @@ class GoldenCrossEngine:
 
             # 트레일링 스탑 활성화 체크
             if state.entry_price and state.entry_price > 0:
-                pnl_ratio = float(
-                    (current_snapshot.close - state.entry_price) / state.entry_price
-                )
+                pnl_ratio = float((current_snapshot.close - state.entry_price) / state.entry_price)
                 activation_threshold = config.risk_config.trailing_stop_activation
                 if pnl_ratio >= activation_threshold and not state.trailing_stop_activated:
                     await self.symbol_state_repo.activate_trailing_stop(
@@ -314,7 +325,7 @@ class GoldenCrossEngine:
         # 7. 시그널 처리
         if transition.signal == Signal.HOLD:
             # 상태만 업데이트
-            if state.state != transition.new_state.value:
+            if not dry_run and state.state != transition.new_state.value:
                 await self.symbol_state_repo.update_state(
                     strategy_id=strategy.id,
                     symbol=symbol,
@@ -350,9 +361,20 @@ class GoldenCrossEngine:
         """
         시그널 처리 (매수/매도)
         """
-        signal_type = (
-            SignalType.BUY if transition.signal == Signal.BUY else SignalType.SELL
-        )
+        signal_type = SignalType.BUY if transition.signal == Signal.BUY else SignalType.SELL
+
+        if dry_run:
+            logger.info(
+                f"[GC Engine DRY RUN] {symbol} {signal_type.value.upper()} @ {current_snapshot.close}"
+            )
+            return self._create_dry_run_signal_dto(
+                strategy_id=strategy.id,
+                symbol=symbol,
+                signal_type=signal_type,
+                transition=transition,
+                current_snapshot=current_snapshot,
+                prev_state=state.state,
+            )
 
         # 시그널 저장
         signal_model = await self.signal_repo.create_signal(
@@ -369,20 +391,6 @@ class GoldenCrossEngine:
             note=transition.reason,
         )
 
-        if dry_run:
-            # Dry Run: 상태만 업데이트
-            logger.info(
-                f"[GC Engine DRY RUN] {symbol} {signal_type.value.upper()} @ {current_snapshot.close}"
-            )
-            await self._update_state_after_signal(
-                strategy.id, symbol, transition, current_snapshot
-            )
-            await self.signal_repo.update_execution(
-                signal_model.id,
-                status=SignalStatus.SKIPPED,
-            )
-            return self._model_to_dto(signal_model)
-
         # SafetyGuard 체크
         can_trade, block_reason, block_message = safety_guard.can_trade()
         if not can_trade:
@@ -396,7 +404,9 @@ class GoldenCrossEngine:
             # 매도 차단: 상태는 IN_POSITION 유지 (다음 기회에 재시도)
             if signal_type == SignalType.BUY:
                 await self.symbol_state_repo.reset_to_waiting(strategy.id, symbol)
-                logger.info(f"[GC Engine] {symbol} state reset to WAITING_FOR_GC after SafetyGuard block")
+                logger.info(
+                    f"[GC Engine] {symbol} state reset to WAITING_FOR_GC after SafetyGuard block"
+                )
             return self._model_to_dto(signal_model)
 
         # 실제 주문 실행
@@ -410,9 +420,7 @@ class GoldenCrossEngine:
                     strategy, symbol, current_snapshot.close, state, signal_model
                 )
 
-            await self._update_state_after_signal(
-                strategy.id, symbol, transition, current_snapshot
-            )
+            await self._update_state_after_signal(strategy.id, symbol, transition, current_snapshot)
 
         except Exception as e:
             logger.error(f"[GC Engine] Order execution failed: {e}")
@@ -565,14 +573,16 @@ class GoldenCrossEngine:
             # DataFrame 변환
             records = []
             for candle in chart_data.candles:
-                records.append({
-                    "timestamp": candle.timestamp,
-                    "open": float(candle.open),
-                    "high": float(candle.high),
-                    "low": float(candle.low),
-                    "close": float(candle.close),
-                    "volume": candle.volume,
-                })
+                records.append(
+                    {
+                        "timestamp": candle.timestamp,
+                        "open": float(candle.open),
+                        "high": float(candle.high),
+                        "low": float(candle.low),
+                        "close": float(candle.close),
+                        "volume": candle.volume,
+                    }
+                )
 
             df = pd.DataFrame(records)
             df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -587,7 +597,11 @@ class GoldenCrossEngine:
     def _create_snapshot(self, row: pd.Series) -> IndicatorSnapshot:
         """데이터프레임 행을 IndicatorSnapshot으로 변환"""
         return IndicatorSnapshot(
-            timestamp=row["timestamp"].to_pydatetime() if hasattr(row["timestamp"], "to_pydatetime") else row["timestamp"],
+            timestamp=(
+                row["timestamp"].to_pydatetime()
+                if hasattr(row["timestamp"], "to_pydatetime")
+                else row["timestamp"]
+            ),
             close=Decimal(str(row["close"])),
             ma_short=Decimal(str(row["ma_short"])) if pd.notna(row["ma_short"]) else Decimal("0"),
             ma_long=Decimal(str(row["ma_long"])) if pd.notna(row["ma_long"]) else Decimal("0"),
@@ -613,6 +627,42 @@ class GoldenCrossEngine:
             initial_capital = Decimal("10_000_000")
 
         return SafetyGuard(initial_capital=initial_capital)
+
+    def _create_dry_run_signal_dto(
+        self,
+        strategy_id: int,
+        symbol: str,
+        signal_type: SignalType,
+        transition,
+        current_snapshot: IndicatorSnapshot,
+        prev_state: str,
+    ) -> StrategySignalDTO:
+        """Dry-run 시그널을 DB 저장 없이 DTO로 생성"""
+        now = datetime.now()
+        return StrategySignalDTO(
+            id=0,
+            strategy_id=strategy_id,
+            symbol=symbol,
+            signal_type=signal_type.value,
+            signal_status=SignalStatus.SKIPPED.value,
+            signal_price=current_snapshot.close,
+            target_quantity=None,
+            executed_price=None,
+            executed_quantity=None,
+            exit_reason=None,
+            realized_pnl=None,
+            realized_pnl_ratio=None,
+            ma_short=current_snapshot.ma_short,
+            ma_long=current_snapshot.ma_long,
+            stoch_k=Decimal(str(current_snapshot.stoch_k)),
+            stoch_d=Decimal(str(current_snapshot.stoch_d)),
+            prev_state=prev_state,
+            new_state=transition.new_state.value,
+            note=transition.reason,
+            signal_at=now,
+            executed_at=None,
+            created_at=now,
+        )
 
     def _model_to_dto(self, model) -> StrategySignalDTO:
         """모델을 DTO로 변환"""

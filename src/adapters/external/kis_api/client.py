@@ -144,32 +144,47 @@ class KISAPIClient:
             started_at = loop.time()
             await self.rate_limiter.acquire()
             url = f"{self.base_url}{path}"
-            auth_headers = await self.auth.get_auth_headers()
-
-            if headers:
-                auth_headers.update(headers)
-
             client = await self._get_client()
-            try:
-                response = await client.get(
-                    url,
-                    params=params,
-                    headers=auth_headers,
-                    timeout=timeout,  # None이면 클라이언트 기본값 사용
-                )
-                data = self._handle_response(response)
-                await self._record_metrics(loop.time() - started_at, success=True)
-                await self._reset_backoff()
-                return data
-            except httpx.HTTPStatusError as e:
-                mapped_error = self._map_http_error(e)
-                await self._record_metrics(loop.time() - started_at, success=False)
-                await self._handle_backoff(mapped_error)
-                raise mapped_error
-            except KISAPIError as e:
-                await self._record_metrics(loop.time() - started_at, success=False)
-                await self._handle_backoff(e)
-                raise
+
+            for attempt in range(2):
+                auth_headers = await self.auth.get_auth_headers(force_refresh=(attempt == 1))
+                if headers:
+                    auth_headers.update(headers)
+
+                try:
+                    response = await client.get(
+                        url,
+                        params=params,
+                        headers=auth_headers,
+                        timeout=timeout,  # None이면 클라이언트 기본값 사용
+                    )
+                    data = self._handle_response(response)
+                    await self._record_metrics(loop.time() - started_at, success=True)
+                    await self._reset_backoff()
+                    return data
+                except httpx.HTTPStatusError as e:
+                    mapped_error = self._map_http_error(e)
+                    if self._should_retry_with_token_refresh(mapped_error, attempt):
+                        await self.auth.refresh_token()
+                        continue
+                    if self._should_retry_rate_limited(mapped_error, attempt):
+                        await asyncio.sleep(0.6)
+                        continue
+                    await self._record_metrics(loop.time() - started_at, success=False)
+                    await self._handle_backoff(mapped_error)
+                    raise mapped_error
+                except KISAPIError as e:
+                    if self._should_retry_with_token_refresh(e, attempt):
+                        await self.auth.refresh_token()
+                        continue
+                    if self._should_retry_rate_limited(e, attempt):
+                        await asyncio.sleep(0.6)
+                        continue
+                    await self._record_metrics(loop.time() - started_at, success=False)
+                    await self._handle_backoff(e)
+                    raise
+
+            raise KISAuthError("Authentication failed after token refresh retry")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -182,6 +197,7 @@ class KISAPIClient:
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout: float | None = None,
+        retry_transport_errors: bool = True,
     ) -> dict[str, Any]:
         """
         POST 요청
@@ -191,6 +207,7 @@ class KISAPIClient:
             json: JSON 바디
             headers: 추가 헤더
             timeout: 요청 타임아웃 (초), None이면 기본값 사용
+            retry_transport_errors: True면 타임아웃/네트워크 오류를 재시도
 
         Returns:
             dict[str, Any]: API 응답 데이터
@@ -203,32 +220,58 @@ class KISAPIClient:
             started_at = loop.time()
             await self.rate_limiter.acquire()
             url = f"{self.base_url}{path}"
-            auth_headers = await self.auth.get_auth_headers()
-
-            if headers:
-                auth_headers.update(headers)
-
             client = await self._get_client()
-            try:
-                response = await client.post(
-                    url,
-                    json=json,
-                    headers=auth_headers,
-                    timeout=timeout,  # None이면 클라이언트 기본값 사용
-                )
-                data = self._handle_response(response)
-                await self._record_metrics(loop.time() - started_at, success=True)
-                await self._reset_backoff()
-                return data
-            except httpx.HTTPStatusError as e:
-                mapped_error = self._map_http_error(e)
-                await self._record_metrics(loop.time() - started_at, success=False)
-                await self._handle_backoff(mapped_error)
-                raise mapped_error
-            except KISAPIError as e:
-                await self._record_metrics(loop.time() - started_at, success=False)
-                await self._handle_backoff(e)
-                raise
+
+            for attempt in range(2):
+                auth_headers = await self.auth.get_auth_headers(force_refresh=(attempt == 1))
+                if headers:
+                    auth_headers.update(headers)
+
+                try:
+                    response = await client.post(
+                        url,
+                        json=json,
+                        headers=auth_headers,
+                        timeout=timeout,  # None이면 클라이언트 기본값 사용
+                    )
+                    data = self._handle_response(response)
+                    await self._record_metrics(loop.time() - started_at, success=True)
+                    await self._reset_backoff()
+                    return data
+                except httpx.HTTPStatusError as e:
+                    mapped_error = self._map_http_error(e)
+                    if self._should_retry_with_token_refresh(mapped_error, attempt):
+                        await self.auth.refresh_token()
+                        continue
+                    if self._should_retry_rate_limited(mapped_error, attempt):
+                        await asyncio.sleep(0.6)
+                        continue
+                    await self._record_metrics(loop.time() - started_at, success=False)
+                    await self._handle_backoff(mapped_error)
+                    raise mapped_error
+                except KISAPIError as e:
+                    if self._should_retry_with_token_refresh(e, attempt):
+                        await self.auth.refresh_token()
+                        continue
+                    if self._should_retry_rate_limited(e, attempt):
+                        await asyncio.sleep(0.6)
+                        continue
+                    await self._record_metrics(loop.time() - started_at, success=False)
+                    await self._handle_backoff(e)
+                    raise
+                except (httpx.TimeoutException, httpx.NetworkError) as e:
+                    await self._record_metrics(loop.time() - started_at, success=False)
+                    if retry_transport_errors:
+                        raise
+                    raise KISAPIError(
+                        message=(
+                            "POST request outcome is unknown after transport error; "
+                            "not retrying non-idempotent request"
+                        ),
+                        error_code="POST_OUTCOME_UNKNOWN",
+                    ) from e
+
+            raise KISAuthError("Authentication failed after token refresh retry")
 
     # ==================== 응답 처리 ====================
 
@@ -261,6 +304,34 @@ class KISAPIClient:
             )
 
         return data
+
+    def _should_retry_with_token_refresh(self, error: KISAPIError, attempt: int) -> bool:
+        """토큰 만료(EGW00123/401) 계열 오류는 1회 강제 refresh 후 재시도"""
+        if attempt >= 1:
+            return False
+
+        error_code = getattr(error, "error_code", None)
+        response_data = getattr(error, "response_data", None) or {}
+        msg_cd = response_data.get("msg_cd") if isinstance(response_data, dict) else None
+        msg1 = response_data.get("msg1", "") if isinstance(response_data, dict) else ""
+
+        return (
+            isinstance(error, KISAuthError)
+            or error_code in {"401", "EGW00123"}
+            or msg_cd == "EGW00123"
+            or "기간이 만료된 token" in msg1
+        )
+
+    def _should_retry_rate_limited(self, error: KISAPIError, attempt: int) -> bool:
+        """초당 거래건수 초과(EGW00201)는 1회 짧게 대기 후 재시도"""
+        if attempt >= 1:
+            return False
+
+        error_code = getattr(error, "error_code", None)
+        response_data = getattr(error, "response_data", None) or {}
+        msg_cd = response_data.get("msg_cd") if isinstance(response_data, dict) else None
+        msg1 = response_data.get("msg1", "") if isinstance(response_data, dict) else ""
+        return error_code == "EGW00201" or msg_cd == "EGW00201" or "초당 거래건수를 초과" in msg1
 
     def _map_http_error(self, error: httpx.HTTPStatusError) -> KISAPIError:
         """
@@ -308,11 +379,7 @@ class KISAPIClient:
         async with self._backoff_lock:
             backoff_seq = settings.kis_api_backoff_sequence
             self._consecutive_backoff_errors += 1
-            if (
-                self._consecutive_backoff_errors
-                % settings.kis_api_backoff_trigger_errors
-                != 0
-            ):
+            if self._consecutive_backoff_errors % settings.kis_api_backoff_trigger_errors != 0:
                 return 0.0
 
             delay = backoff_seq[min(self._backoff_stage, len(backoff_seq) - 1)]

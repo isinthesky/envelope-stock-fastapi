@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Sequence
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.strategy_symbol_state import (
@@ -55,6 +56,28 @@ class StrategySymbolStateRepository(BaseRepository[StrategySymbolStateModel]):
         result = await db.execute(stmt)
         return result.scalars().all()
 
+    async def get_all_by_strategy_ids(
+        self,
+        strategy_ids: list[int],
+        symbols: list[str] | None = None,
+        session: AsyncSession | None = None,
+    ) -> Sequence[StrategySymbolStateModel]:
+        """여러 전략의 종목 상태를 한 번에 조회
+
+        Args:
+            strategy_ids: 전략 ID 목록
+            symbols: 조회 대상 심볼 목록 (None이면 전체)
+        """
+        if not strategy_ids:
+            return []
+        db = self._get_session(session)
+        conditions = [self.model.strategy_id.in_(strategy_ids)]
+        if symbols:
+            conditions.append(self.model.symbol.in_(symbols))
+        stmt = select(self.model).where(*conditions).order_by(self.model.symbol)
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
     async def get_by_state(
         self,
         strategy_id: int,
@@ -93,7 +116,10 @@ class StrategySymbolStateRepository(BaseRepository[StrategySymbolStateModel]):
         session: AsyncSession | None = None,
         **kwargs,
     ) -> StrategySymbolStateModel:
-        """상태 Upsert (없으면 생성, 있으면 업데이트)"""
+        """상태 Upsert (없으면 생성, 있으면 업데이트)
+
+        동시 요청에 의한 race condition 방어: create 실패 시 재조회 후 업데이트
+        """
         db = self._get_session(session)
         existing = await self.get_by_strategy_and_symbol(strategy_id, symbol, session=db)
 
@@ -104,12 +130,24 @@ class StrategySymbolStateRepository(BaseRepository[StrategySymbolStateModel]):
             await db.refresh(existing)
             return existing
         else:
-            return await self.create(
-                session=db,
-                strategy_id=strategy_id,
-                symbol=symbol,
-                **kwargs,
-            )
+            try:
+                async with db.begin_nested():
+                    return await self.create(
+                        session=db,
+                        strategy_id=strategy_id,
+                        symbol=symbol,
+                        **kwargs,
+                    )
+            except IntegrityError:
+                # SAVEPOINT 롤백만 발생, 외부 트랜잭션은 유지됨
+                existing = await self.get_by_strategy_and_symbol(strategy_id, symbol, session=db)
+                if existing:
+                    for key, value in kwargs.items():
+                        setattr(existing, key, value)
+                    await db.flush()
+                    await db.refresh(existing)
+                    return existing
+                raise
 
     async def update_state(
         self,

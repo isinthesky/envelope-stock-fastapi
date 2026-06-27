@@ -44,6 +44,12 @@ class WebSocketManager:
             client_id: 클라이언트 ID
             websocket: WebSocket 연결
         """
+        from src.settings.config import settings
+        max_conn = settings.ws_max_connections
+        if max_conn and len(self.active_connections) >= max_conn:
+            await websocket.close(code=4429, reason="Too many connections")
+            return
+
         await websocket.accept()
         self.active_connections[client_id] = websocket
 
@@ -111,7 +117,7 @@ class WebSocketManager:
 
             # 구독자가 없으면 KIS WebSocket 구독 해지
             if not self.subscriptions[subscription_key]:
-                await self._unsubscribe_kis(tr_key)
+                await self._unsubscribe_kis(subscription_key)
                 del self.subscriptions[subscription_key]
 
     # ==================== KIS WebSocket 관리 ====================

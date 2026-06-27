@@ -38,87 +38,115 @@ class TestDetermineGCState:
         )
         assert result == "WAITING_FOR_PULLBACK"
 
-    def test_optimal_buy_all_conditions_met(self):
-        """모든 조건 충족 시 OPTIMAL_BUY 반환"""
-        result = BuyStrategyService._determine_gc_state(
-            is_gc_active=True,
-            stoch_k=25.0,  # < deep_oversold_threshold(30)
-            stoch_threshold=30.0,
-            stoch_d=30.0,  # K > D 조건은 require_momentum_turn=False라 무시됨
-            ma_gap_ratio=5.0,  # 0 <= gap <= 8
-            deep_oversold_threshold=30.0,
-            require_momentum_turn=False,
-            min_ma_gap=0.0,
-            max_ma_gap=8.0,
-        )
-        assert result == "OPTIMAL_BUY"
-
-    def test_optimal_buy_with_momentum_turn_required(self):
-        """K>D 조건 필수일 때 모든 조건 충족 시 OPTIMAL_BUY"""
+    def test_oversold_is_ready_not_optimal(self):
+        """과매도 자체는 매수 적기가 아니라 매수 준비 상태"""
         result = BuyStrategyService._determine_gc_state(
             is_gc_active=True,
             stoch_k=25.0,
             stoch_threshold=30.0,
-            stoch_d=20.0,  # K(25) > D(20), 조건 충족
+            stoch_d=30.0,
             ma_gap_ratio=5.0,
             deep_oversold_threshold=30.0,
-            require_momentum_turn=True,  # K>D 필수
+            require_momentum_turn=False,
+            min_ma_gap=0.0,
+            max_ma_gap=8.0,
+        )
+        assert result == "READY_TO_BUY"
+
+    def test_optimal_buy_after_pullback_recovery(self):
+        """최근 과매도 이후 K 회복 + K>D + 건강한 MA 갭이면 OPTIMAL_BUY"""
+        result = BuyStrategyService._determine_gc_state(
+            is_gc_active=True,
+            stoch_k=35.0,
+            stoch_threshold=30.0,
+            stoch_d=25.0,
+            ma_gap_ratio=5.0,
+            prev_stoch_k=25.0,
+            recent_oversold=True,
+            require_momentum_turn=True,
             min_ma_gap=0.0,
             max_ma_gap=8.0,
         )
         assert result == "OPTIMAL_BUY"
 
-    def test_buy_interest_two_conditions_met(self):
-        """2개 조건 충족 시 BUY_INTEREST 반환"""
-        # is_deep_oversold=True, is_momentum_turning=True (require=False), is_healthy_trend=False
+    def test_no_optimal_without_recent_oversold(self):
+        """최근 과매도 이력이 없으면 중간 구간은 눌림목 대기"""
         result = BuyStrategyService._determine_gc_state(
             is_gc_active=True,
-            stoch_k=25.0,  # < 30, 조건 충족
+            stoch_k=35.0,
             stoch_threshold=30.0,
-            stoch_d=30.0,
-            ma_gap_ratio=15.0,  # > 8, MA갭 조건 미충족
-            deep_oversold_threshold=30.0,
-            require_momentum_turn=False,
+            stoch_d=25.0,
+            ma_gap_ratio=5.0,
+            prev_stoch_k=25.0,
+            recent_oversold=False,
             min_ma_gap=0.0,
             max_ma_gap=8.0,
         )
-        # is_deep_oversold=True, is_momentum_turning=True, is_healthy_trend=False
-        # 2개 조건 충족 -> BUY_INTEREST
-        assert result == "BUY_INTEREST"
+        assert result == "WAITING_FOR_PULLBACK"
 
     def test_buy_interest_with_momentum_turn_failed(self):
-        """K>D 필수일 때 K<D이면 2개 조건으로 BUY_INTEREST"""
+        """회복 중이지만 K>D 조건이 미충족이면 BUY_INTEREST"""
         result = BuyStrategyService._determine_gc_state(
             is_gc_active=True,
-            stoch_k=25.0,  # < 30, 조건 충족
+            stoch_k=35.0,
             stoch_threshold=30.0,
-            stoch_d=30.0,  # K(25) < D(30), 조건 미충족
-            ma_gap_ratio=5.0,  # 조건 충족
-            deep_oversold_threshold=30.0,
-            require_momentum_turn=True,  # K>D 필수
+            stoch_d=40.0,
+            ma_gap_ratio=5.0,
+            prev_stoch_k=25.0,
+            recent_oversold=True,
+            require_momentum_turn=True,
             min_ma_gap=0.0,
             max_ma_gap=8.0,
         )
-        # is_deep_oversold=True, is_momentum_turning=False, is_healthy_trend=True
-        # 2개 조건 충족 -> BUY_INTEREST
         assert result == "BUY_INTEREST"
 
-    def test_ready_to_buy_one_condition_met(self):
-        """1개 조건만 충족 시 READY_TO_BUY 반환"""
+    def test_falling_strong_recovery_is_not_optimal_buy(self):
+        """강한 회복 구간이어도 K가 하락 중이면 OPTIMAL_BUY가 아님"""
         result = BuyStrategyService._determine_gc_state(
             is_gc_active=True,
-            stoch_k=28.0,  # < 30, 과매도 구간이지만
+            stoch_k=35.0,
+            stoch_threshold=30.0,
+            stoch_d=30.0,
+            ma_gap_ratio=5.0,
+            prev_stoch_k=45.0,
+            recent_oversold=True,
+            require_momentum_turn=True,
+            min_ma_gap=0.0,
+            max_ma_gap=8.0,
+        )
+        assert result == "BUY_INTEREST"
+
+    def test_ready_to_buy_when_still_oversold(self):
+        """아직 과매도 구간이면 READY_TO_BUY 반환"""
+        result = BuyStrategyService._determine_gc_state(
+            is_gc_active=True,
+            stoch_k=28.0,
             stoch_threshold=30.0,
             stoch_d=20.0,
-            ma_gap_ratio=15.0,  # > 8, MA갭 조건 미충족
-            deep_oversold_threshold=25.0,  # K(28) > 25, deep oversold 미충족
+            ma_gap_ratio=15.0,
+            deep_oversold_threshold=25.0,
             require_momentum_turn=False,
             min_ma_gap=0.0,
             max_ma_gap=8.0,
         )
-        # is_deep_oversold=False, is_momentum_turning=True, is_healthy_trend=False
-        # 1개 조건 충족 -> READY_TO_BUY
         assert result == "READY_TO_BUY"
+
+    def test_legacy_positional_arguments_keep_meaning(self):
+        """기존 positional 호출에서 deep/require/gap 인자 의미가 보존됨"""
+        result = BuyStrategyService._determine_gc_state(
+            True,
+            35.0,
+            30.0,
+            25.0,
+            5.0,
+            30.0,
+            True,
+            0.0,
+            8.0,
+            prev_stoch_k=25.0,
+            recent_oversold=True,
+        )
+        assert result == "OPTIMAL_BUY"
 
     def test_relaxed_conditions_vs_strict(self):
         """완화된 조건 vs 엄격한 조건 비교"""
@@ -135,25 +163,23 @@ class TestDetermineGCState:
             max_ma_gap=5.0,  # 엄격
         )
 
-        # 완화된 조건 (새 기본값)
+        # 회복 돌파 조건
         relaxed_result = BuyStrategyService._determine_gc_state(
             is_gc_active=True,
-            stoch_k=27.0,
+            stoch_k=35.0,
             stoch_threshold=30.0,
             stoch_d=30.0,
             ma_gap_ratio=6.0,
-            deep_oversold_threshold=30.0,  # 완화
-            require_momentum_turn=False,  # K>D 선택적
-            min_ma_gap=0.0,
+            prev_stoch_k=27.0,
+            recent_oversold=True,
+            require_momentum_turn=True,
             max_ma_gap=8.0,  # 완화
         )
 
-        # 엄격한 조건: K(27) > 25 (미충족), K(27) < D(30) (미충족), gap(6) > 5 (미충족)
-        # -> READY_TO_BUY
+        # 엄격한 조건: 아직 과매도 구간이므로 READY_TO_BUY
         assert strict_result == "READY_TO_BUY"
 
-        # 완화된 조건: K(27) < 30 (충족), K>D 무시 (충족), gap(6) < 8 (충족)
-        # -> OPTIMAL_BUY
+        # 회복 돌파: 최근 과매도 이후 K 상승, K>D, gap(6) < 8
         assert relaxed_result == "OPTIMAL_BUY"
 
     def test_default_parameters_backward_compatible(self):
@@ -166,9 +192,7 @@ class TestDetermineGCState:
             stoch_d=20.0,
             ma_gap_ratio=5.0,
         )
-        # 기본값: deep_oversold=30, require_momentum=False, max_ma_gap=8
-        # 모든 조건 충족 -> OPTIMAL_BUY
-        assert result == "OPTIMAL_BUY"
+        assert result == "READY_TO_BUY"
 
     def test_ma_gap_out_of_range_negative(self):
         """MA갭이 음수일 때 (MA55 < MA165인 상태에서 GC 활성화된 특수 케이스)"""
@@ -183,6 +207,4 @@ class TestDetermineGCState:
             min_ma_gap=0.0,
             max_ma_gap=8.0,
         )
-        # is_healthy_trend = 0 <= -2 <= 8 -> False
-        # 2개 조건 충족 -> BUY_INTEREST
-        assert result == "BUY_INTEREST"
+        assert result == "READY_TO_BUY"

@@ -5,7 +5,7 @@ Order Router - 주문 관리 API 엔드포인트
 
 from fastapi import APIRouter, Query, status
 
-from src.application.common.dependencies import DatabaseSession, KISClientDep
+from src.application.common.dependencies import AdminAccessDep, DatabaseSession, KISClientDep
 from src.application.common.dto import ResponseDTO
 from src.application.domain.order.dto import (
     OrderCancelRequestDTO,
@@ -29,6 +29,7 @@ router = APIRouter()
 async def create_order(
     request: OrderCreateRequestDTO,
     kis_client: KISClientDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[OrderCreateResponseDTO]:
     """주문 생성"""
     service = OrderService(kis_client)
@@ -47,6 +48,7 @@ async def get_order_status(
     order_id: str,
     session: DatabaseSession,
     kis_client: KISClientDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[OrderStatusResponseDTO]:
     """주문 상태 조회"""
     service = OrderService(kis_client, session)
@@ -66,6 +68,7 @@ async def get_order_list(
     status_filter: str | None = Query(default=None, description="주문 상태 필터"),
     session: DatabaseSession = None,
     kis_client: KISClientDep = None,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[OrderListResponseDTO]:
     """주문 목록 조회"""
     service = OrderService(kis_client, session)
@@ -84,6 +87,7 @@ async def cancel_order(
     order_id: str,
     request: OrderCancelRequestDTO,
     kis_client: KISClientDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[OrderStatusResponseDTO]:
     """주문 취소"""
     service = OrderService(kis_client)
@@ -105,6 +109,7 @@ async def modify_order(
     new_price: float | None = Query(default=None, description="변경할 가격"),
     new_quantity: int | None = Query(default=None, description="변경할 수량"),
     kis_client: KISClientDep = None,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[OrderStatusResponseDTO]:
     """주문 정정"""
     from decimal import Decimal
@@ -126,6 +131,7 @@ async def modify_order(
 async def refresh_order_status(
     order_id: str,
     kis_client: KISClientDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[OrderStatusResponseDTO]:
     """체결 상태 업데이트"""
     service = OrderService(kis_client)

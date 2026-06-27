@@ -41,9 +41,7 @@ class OrderService:
     _last_order_at_by_symbol: dict[str, float] = {}
     _amend_counts: dict[str, int] = {}
 
-    def __init__(
-        self, kis_client: KISAPIClient, session: AsyncSession | None = None
-    ) -> None:
+    def __init__(self, kis_client: KISAPIClient, session: AsyncSession | None = None) -> None:
         self.kis_client = kis_client
         self.session = session
         if session:
@@ -75,10 +73,10 @@ class OrderService:
 
             # 주문 구분 코드 매핑
             ord_dvsn_map = {
-                ("buy", "market"): "01",    # 시장가 매수
-                ("buy", "limit"): "00",     # 지정가 매수
-                ("sell", "market"): "01",   # 시장가 매도
-                ("sell", "limit"): "00",    # 지정가 매도
+                ("buy", "market"): "01",  # 시장가 매수
+                ("buy", "limit"): "00",  # 지정가 매수
+                ("sell", "market"): "01",  # 시장가 매도
+                ("sell", "limit"): "00",  # 지정가 매도
             }
             ord_dvsn = ord_dvsn_map.get((request.order_type, request.price_type), "00")
 
@@ -88,17 +86,17 @@ class OrderService:
                 "PDNO": request.symbol,
                 "ORD_DVSN": ord_dvsn,
                 "ORD_QTY": str(request.quantity),
-                "ORD_UNPR": "0"
-                if request.price_type == PriceType.MARKET.value
-                else str(int(request.price)),
+                "ORD_UNPR": (
+                    "0" if request.price_type == PriceType.MARKET.value else str(int(request.price))
+                ),
             }
 
             # TR ID 매핑 (실전/모의, 매수/매도)
             tr_id_map = {
-                (False, "buy"): "TTTC0802U",   # 실전 매수
+                (False, "buy"): "TTTC0802U",  # 실전 매수
                 (False, "sell"): "TTTC0801U",  # 실전 매도
-                (True, "buy"): "VTTC0802U",    # 모의 매수
-                (True, "sell"): "VTTC0801U",   # 모의 매도
+                (True, "buy"): "VTTC0802U",  # 모의 매수
+                (True, "sell"): "VTTC0801U",  # 모의 매도
             }
             tr_id = tr_id_map.get((settings.is_paper_trading, request.order_type))
 
@@ -291,9 +289,11 @@ class OrderService:
                 "ORD_DVSN": ord_dvsn,
                 "RVSE_CNCL_DVSN_CD": "01",  # 01: 정정
                 "ORD_QTY": str(new_quantity or order.order_quantity),
-                "ORD_UNPR": "0"
-                if order.price_type == PriceType.MARKET.value
-                else str(int(new_price or order.order_price)),
+                "ORD_UNPR": (
+                    "0"
+                    if order.price_type == PriceType.MARKET.value
+                    else str(int(new_price or order.order_price))
+                ),
             }
 
             # TR ID 매핑
@@ -498,15 +498,11 @@ class OrderService:
             async with cls._order_lock:
                 now = loop.time()
                 wait_global = (
-                    (cls._last_order_at + min_gap - now)
-                    if cls._last_order_at is not None
-                    else 0
+                    (cls._last_order_at + min_gap - now) if cls._last_order_at is not None else 0
                 )
                 last_symbol_at = cls._last_order_at_by_symbol.get(symbol)
                 wait_symbol = (
-                    (last_symbol_at + same_symbol_gap - now)
-                    if last_symbol_at is not None
-                    else 0
+                    (last_symbol_at + same_symbol_gap - now) if last_symbol_at is not None else 0
                 )
 
                 wait_for = max(wait_global, wait_symbol, 0)
@@ -529,7 +525,10 @@ class OrderService:
         self, path: str, payload: dict[str, str], headers: dict[str, str]
     ) -> dict[str, Any]:
         """
-        주문/정정/취소 요청용 POST 래퍼 (타임아웃 단축 + 1회 재시도)
+        주문/정정/취소 요청용 POST 래퍼.
+
+        주문 POST는 타임아웃 시 서버 수신 여부를 알 수 없어 중복 주문 위험이 있으므로
+        transport timeout/network error는 재시도하지 않는다. 명확한 rate limit/5xx 응답만 1회 재시도한다.
         """
         try:
             return await self.kis_client.post(
@@ -537,6 +536,7 @@ class OrderService:
                 json=payload,
                 headers=headers,
                 timeout=settings.order_response_timeout,
+                retry_transport_errors=False,
             )
         except Exception as e:
             if not self._is_retryable_order_error(e):
@@ -547,15 +547,14 @@ class OrderService:
                 json=payload,
                 headers=headers,
                 timeout=settings.order_response_timeout,
+                retry_transport_errors=False,
             )
 
     def _is_retryable_order_error(self, error: Exception) -> bool:
         """주문 재시도 대상 오류인지 판정한다."""
-        if isinstance(error, (asyncio.TimeoutError, httpx.TimeoutException, KISRateLimitError)):
+        if isinstance(error, KISRateLimitError):
             return True
         if isinstance(error, KISAPIError) and error.error_code:
-            if error.error_code.isdigit() and int(error.error_code) >= 500:
-                return True
             if error.error_code == "429":
                 return True
         return False

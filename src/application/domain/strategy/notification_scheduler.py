@@ -14,8 +14,10 @@ APScheduler 기반 스케줄링:
 """
 
 import asyncio
+import hashlib
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -28,15 +30,10 @@ from src.adapters.database.repositories.analysis_history_repository import (
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
 )
-from src.adapters.database.repositories.strategy_repository import StrategyRepository
-from src.adapters.database.repositories.strategy_symbol_state_repository import (
-    StrategySymbolStateRepository,
-)
 from src.adapters.external.kofia_client import get_kofia_client
 from src.adapters.external.naver.stock_client import get_naver_stock_client
 from src.adapters.external.telegram import get_telegram_notifier
 from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
-from src.application.domain.strategy.sell_strategy_service import SellStrategyService
 from src.application.domain.strategy.strategy_service import StrategyService
 
 
@@ -44,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 # 한국 시간대
 KST = ZoneInfo("Asia/Seoul")
+NOTIFICATION_UPDATE_MAX_AGE = timedelta(minutes=20)
+NOTIFICATION_DEDUPE_TTL = timedelta(hours=6)
 
 
 class NotificationScheduler:
@@ -55,6 +54,13 @@ class NotificationScheduler:
     - 11:30 / 14:30: 골든크로스 추천 종목 알림
     - 각 알림 10분 전 현재가/추천 계산용 데이터 재갱신
     """
+
+    ETF_LEADER_MAP: dict[str, tuple[str, str]] = {
+        "396500": ("005930", "000660"),
+        "466920": ("329180", "042660"),
+        "270810": ("196170", "247540"),
+        "0117V0": ("298040", "267260"),
+    }
 
     BUY_SLOTS: tuple[tuple[int, int, int, int, str], ...] = (
         (11, 20, 11, 30, "11:30"),
@@ -70,6 +76,301 @@ class NotificationScheduler:
         self.is_running = False
         self.scheduler = None
         self._execution_lock = asyncio.Lock()
+        self._last_job_results: dict[str, dict] = {}
+        self._notification_delivery_cache: dict[str, datetime] = {}
+
+    @classmethod
+    def _build_etf_leader_summary(
+        cls, symbol: str, analyzed_results: dict[str, dict]
+    ) -> str | None:
+        """ETF 본체 알림에 붙일 대장주 보조 판정 요약 생성"""
+        leader_symbols = cls.ETF_LEADER_MAP.get(symbol)
+        if not leader_symbols:
+            return None
+
+        analyzed_leaders = [analyzed_results.get(leader_symbol) for leader_symbol in leader_symbols]
+        analyzed_leaders = [item for item in analyzed_leaders if item]
+        if not analyzed_leaders:
+            return None
+
+        weak_count = 0
+        strong_sell_count = 0
+        parts: list[str] = []
+        for item in analyzed_leaders:
+            final_stage = str(item.get("final_stage") or "")
+            name = item.get("name") or item.get("symbol") or "-"
+            parts.append(f"{name}:{final_stage or '-'}")
+            if final_stage in {"REDUCE_1", "REDUCE_2", "EXIT_ALL"}:
+                weak_count += 1
+            if final_stage in {"REDUCE_2", "EXIT_ALL"}:
+                strong_sell_count += 1
+
+        return (
+            f"대장주 확인: {weak_count}/{len(analyzed_leaders)} 약세"
+            f" (강매도 {strong_sell_count}) | " + ", ".join(parts)
+        )
+
+    @classmethod
+    def _filter_duplicate_leader_alerts(cls, pending_sell_alerts: list[dict]) -> list[dict]:
+        """ETF 본체가 알림 대상이면 해당 대장주 개별 알림은 숨긴다."""
+        etf_alert_symbols = {
+            item.get("symbol")
+            for item in pending_sell_alerts
+            if item.get("symbol") in cls.ETF_LEADER_MAP
+        }
+        hidden_leader_symbols = {
+            leader_symbol
+            for etf_symbol in etf_alert_symbols
+            for leader_symbol in cls.ETF_LEADER_MAP.get(etf_symbol, ())
+        }
+
+        return [
+            item for item in pending_sell_alerts if item.get("symbol") not in hidden_leader_symbols
+        ]
+
+    @staticmethod
+    def _sanitize_result(value):
+        if isinstance(value, dict):
+            return {k: NotificationScheduler._sanitize_result(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [NotificationScheduler._sanitize_result(v) for v in value[:10]]
+        if isinstance(value, tuple):
+            return [NotificationScheduler._sanitize_result(v) for v in value[:10]]
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if hasattr(value, "value"):
+            return value.value
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    @staticmethod
+    def _slot_definitions(
+        slots: tuple[tuple[int, int, int, int, str], ...], kind: str
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "kind": kind,
+                "update_time": f"{update_hour:02d}:{update_minute:02d}",
+                "notify_time": f"{notify_hour:02d}:{notify_minute:02d}",
+                "label": label,
+            }
+            for update_hour, update_minute, notify_hour, notify_minute, label in slots
+        ]
+
+    def _record_job_result(
+        self,
+        job_type: str,
+        slot_label: str,
+        result: dict | None = None,
+        error: str | None = None,
+    ) -> None:
+        key = f"{job_type}:{slot_label}"
+        payload = {
+            "job_type": job_type,
+            "slot_label": slot_label,
+            "recorded_at": datetime.now(KST).isoformat(),
+            "success": bool(result and result.get("success", True)) if error is None else False,
+        }
+        if result:
+            payload["result"] = self._sanitize_result(result)
+        if error:
+            payload["error"] = error
+        self._last_job_results[key] = payload
+
+    def _get_notification_freshness(
+        self,
+        notification_type: str,
+        slot_label: str,
+        now: datetime | None = None,
+    ) -> dict[str, object]:
+        """예약 알림이 직전 데이터 업데이트 결과를 사용할 수 있는지 확인한다."""
+        if slot_label in {"manual", "-"}:
+            return {
+                "fresh": True,
+                "required": False,
+                "status": "manual",
+                "message": "manual execution does not require a scheduled update result",
+            }
+
+        now = now or datetime.now(KST)
+        key = f"{notification_type}_data_update:{slot_label}"
+        update_result = self._last_job_results.get(key)
+        if not update_result:
+            return {
+                "fresh": False,
+                "required": True,
+                "status": "missing",
+                "message": f"No {notification_type} data update result for {slot_label}",
+            }
+
+        if not update_result.get("success", False):
+            return {
+                "fresh": False,
+                "required": True,
+                "status": "failed",
+                "message": update_result.get("error") or "Previous data update failed",
+            }
+
+        recorded_at_raw = update_result.get("recorded_at")
+        try:
+            recorded_at = datetime.fromisoformat(str(recorded_at_raw))
+        except ValueError:
+            return {
+                "fresh": False,
+                "required": True,
+                "status": "invalid_timestamp",
+                "message": f"Invalid data update timestamp: {recorded_at_raw}",
+            }
+
+        if recorded_at.tzinfo is None:
+            recorded_at = recorded_at.replace(tzinfo=KST)
+        age_seconds = max((now - recorded_at).total_seconds(), 0.0)
+        if age_seconds > NOTIFICATION_UPDATE_MAX_AGE.total_seconds():
+            return {
+                "fresh": False,
+                "required": True,
+                "status": "stale",
+                "age_seconds": round(age_seconds, 1),
+                "message": (
+                    f"Data update for {slot_label} is stale " f"({int(age_seconds // 60)}m old)"
+                ),
+            }
+
+        return {
+            "fresh": True,
+            "required": True,
+            "status": "fresh",
+            "age_seconds": round(age_seconds, 1),
+            "message": "data update is fresh",
+        }
+
+    def _build_notification_signature(self, payload: object) -> str:
+        normalized = self._normalize_signature_payload(payload)
+        encoded = json.dumps(normalized, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _normalize_signature_payload(value: object):
+        if isinstance(value, dict):
+            return {
+                str(k): NotificationScheduler._normalize_signature_payload(v)
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [NotificationScheduler._normalize_signature_payload(v) for v in value]
+        if isinstance(value, tuple):
+            return [NotificationScheduler._normalize_signature_payload(v) for v in value]
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if hasattr(value, "value"):
+            return value.value
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    def _is_duplicate_notification(
+        self,
+        notification_type: str,
+        slot_label: str,
+        signature: str,
+        now: datetime | None = None,
+    ) -> bool:
+        if slot_label in {"manual", "-"}:
+            return False
+        now = now or datetime.now(KST)
+        self._prune_notification_delivery_cache(now)
+        key = self._notification_cache_key(notification_type, slot_label, signature, now)
+        return key in self._notification_delivery_cache
+
+    def _mark_notification_sent(
+        self,
+        notification_type: str,
+        slot_label: str,
+        signature: str,
+        now: datetime | None = None,
+    ) -> None:
+        if slot_label in {"manual", "-"}:
+            return
+        now = now or datetime.now(KST)
+        self._prune_notification_delivery_cache(now)
+        key = self._notification_cache_key(notification_type, slot_label, signature, now)
+        self._notification_delivery_cache[key] = now
+
+    @staticmethod
+    def _notification_cache_key(
+        notification_type: str,
+        slot_label: str,
+        signature: str,
+        now: datetime,
+    ) -> str:
+        return f"{notification_type}:{slot_label}:{now.date().isoformat()}:{signature}"
+
+    def _prune_notification_delivery_cache(self, now: datetime) -> None:
+        expired_keys = [
+            key
+            for key, sent_at in self._notification_delivery_cache.items()
+            if now - sent_at > NOTIFICATION_DEDUPE_TTL
+        ]
+        for key in expired_keys:
+            self._notification_delivery_cache.pop(key, None)
+
+    def _build_skipped_notification_result(
+        self,
+        notification_type: str,
+        slot_label: str,
+        freshness: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "success": False,
+            "executed": False,
+            "notification_type": notification_type,
+            "slot": slot_label,
+            "sent": False,
+            "skipped": True,
+            "skip_reason": freshness.get("message"),
+            "freshness": freshness,
+        }
+
+    @staticmethod
+    def _warmup_success(result: object) -> bool:
+        return int(getattr(result, "failed_count", 0) or 0) == 0
+
+    @staticmethod
+    def _warmup_errors(result: object) -> list[str]:
+        return list(getattr(result, "errors", None) or [])
+
+    def get_status(self) -> dict[str, object]:
+        jobs: list[dict[str, object]] = []
+        if self.scheduler:
+            for job in sorted(self.scheduler.get_jobs(), key=lambda item: item.id):
+                jobs.append(
+                    {
+                        "id": job.id,
+                        "name": job.name,
+                        "next_run_time": (
+                            job.next_run_time.isoformat() if job.next_run_time else None
+                        ),
+                        "pending": getattr(job, "pending", False),
+                    }
+                )
+
+        notifier = get_telegram_notifier()
+        return {
+            "is_running": self.is_running,
+            "timezone": str(KST),
+            "telegram_enabled": bool(getattr(notifier, "enabled", False)),
+            "execution_lock_locked": self._execution_lock.locked(),
+            "buy_slots": self._slot_definitions(self.BUY_SLOTS, "buy"),
+            "sell_slots": self._slot_definitions(self.SELL_SLOTS, "sell"),
+            "jobs": jobs,
+            "last_job_results": sorted(
+                self._last_job_results.values(),
+                key=lambda item: item.get("recorded_at", ""),
+                reverse=True,
+            )[:8],
+            "sell_notification_available": True,
+        }
 
     async def start(self) -> None:
         """스케줄러 시작"""
@@ -185,24 +486,34 @@ class NotificationScheduler:
                 history_repo = AnalysisHistoryRepository(session)
                 active_items = await history_repo.get_active_symbols_with_names("sell")
             naver_client = get_naver_stock_client()
-            for item in active_items:
-                symbol = item.get("symbol")
-                if not symbol:
-                    continue
-                try:
-                    await naver_client.refresh_personal_flow_cache(symbol)
+            symbols = list(
+                dict.fromkeys(item.get("symbol") for item in active_items if item.get("symbol"))
+            )
+
+            sem = asyncio.Semaphore(5)
+
+            async def _refresh_one(sym: str) -> bool:
+                async with sem:
+                    try:
+                        await naver_client.refresh_personal_flow_cache(sym)
+                        return True
+                    except Exception as e:
+                        logger.warning(
+                            f"[NotificationScheduler] Personal flow cache refresh failed for {sym}: {e}"
+                        )
+                        return False
+
+            results_list = await asyncio.gather(*[_refresh_one(s) for s in symbols])
+            for sym, ok in zip(symbols, results_list):
+                if ok:
                     result["personal_flow_refreshed"] += 1
-                    result["personal_flow_symbols"].append(symbol)
-                except Exception as e:
-                    logger.warning(
-                        f"[NotificationScheduler] Personal flow cache refresh failed for {symbol}: {e}"
-                    )
+                    result["personal_flow_symbols"].append(sym)
         except Exception as e:
             logger.warning(f"[NotificationScheduler] Personal flow refresh batch failed: {e}")
 
         return result
 
-    async def _buy_data_update_job(self, slot_label: str = "-") -> None:
+    async def _buy_data_update_job(self, slot_label: str = "-") -> dict:
         """
         매수 알림용 데이터 업데이트 Job
 
@@ -221,19 +532,43 @@ class NotificationScheduler:
                     concurrency=5,
                 )
                 risk_cache_result = await self._refresh_external_risk_caches()
+                warmup_success = self._warmup_success(result)
+                warmup_errors = self._warmup_errors(result)
 
+                payload = {
+                    "success": warmup_success,
+                    "slot": slot_label,
+                    "updated_count": result.success_count,
+                    "failed_count": int(getattr(result, "failed_count", 0) or 0),
+                    "errors": warmup_errors[:5],
+                    "api_calls_made": result.api_calls_made,
+                    "duration_seconds": result.duration_seconds,
+                    "risk_cache": risk_cache_result,
+                }
                 logger.info(
                     f"[NotificationScheduler] Buy data update completed for {slot_label}: "
-                    f"{result.success_count} updated, {result.api_calls_made} API calls, "
+                    f"{result.success_count} updated, "
+                    f"{getattr(result, 'failed_count', 0)} failed, "
+                    f"{result.api_calls_made} API calls, "
                     f"{result.duration_seconds}s, risk_cache={risk_cache_result}"
                 )
+                self._record_job_result(
+                    "buy_data_update",
+                    slot_label,
+                    result=payload,
+                    error=(
+                        None if warmup_success else "; ".join(warmup_errors[:3]) or "Warmup failed"
+                    ),
+                )
+                return payload
 
         except Exception as e:
-            logger.error(
-                f"[NotificationScheduler] Buy data update error for {slot_label}: {e}"
-            )
+            logger.error(f"[NotificationScheduler] Buy data update error for {slot_label}: {e}")
+            payload = {"success": False, "slot": slot_label, "error": str(e)}
+            self._record_job_result("buy_data_update", slot_label, result=payload, error=str(e))
+            return payload
 
-    async def _sell_data_update_job(self, slot_label: str = "-") -> None:
+    async def _sell_data_update_job(self, slot_label: str = "-") -> dict:
         """
         매도 알림용 데이터 업데이트 Job
 
@@ -249,15 +584,29 @@ class NotificationScheduler:
                 active_items = await history_repo.get_active_symbols_with_names("sell")
 
                 if not active_items:
-                    logger.info(
-                        "[NotificationScheduler] No active sell tracking items to update"
-                    )
-                    return
+                    logger.info("[NotificationScheduler] No active sell tracking items to update")
+                    payload = {
+                        "success": True,
+                        "slot": slot_label,
+                        "updated_count": 0,
+                        "tracked_count": 0,
+                    }
+                    self._record_job_result("sell_data_update", slot_label, result=payload)
+                    return payload
 
-                symbols = [item["symbol"] for item in active_items if item["symbol"]]
+                symbols = list(
+                    dict.fromkeys(item["symbol"] for item in active_items if item["symbol"])
+                )
                 if not symbols:
                     logger.info("[NotificationScheduler] No valid symbols to update")
-                    return
+                    payload = {
+                        "success": True,
+                        "slot": slot_label,
+                        "updated_count": 0,
+                        "tracked_count": 0,
+                    }
+                    self._record_job_result("sell_data_update", slot_label, result=payload)
+                    return payload
                 logger.info(
                     f"[NotificationScheduler] Updating {len(symbols)} sell tracking symbols "
                     f"for {slot_label} alert"
@@ -275,17 +624,42 @@ class NotificationScheduler:
 
                 result = await warmup_service.warmup_symbols(request, concurrency=5)
                 risk_cache_result = await self._refresh_external_risk_caches()
+                warmup_success = self._warmup_success(result)
+                warmup_errors = self._warmup_errors(result)
 
+                payload = {
+                    "success": warmup_success,
+                    "slot": slot_label,
+                    "tracked_count": len(symbols),
+                    "updated_count": result.success_count,
+                    "failed_count": int(getattr(result, "failed_count", 0) or 0),
+                    "errors": warmup_errors[:5],
+                    "api_calls_made": result.api_calls_made,
+                    "duration_seconds": result.duration_seconds,
+                    "risk_cache": risk_cache_result,
+                }
                 logger.info(
                     f"[NotificationScheduler] Sell data update completed for {slot_label}: "
-                    f"{result.success_count} updated, {result.api_calls_made} API calls, "
+                    f"{result.success_count} updated, "
+                    f"{getattr(result, 'failed_count', 0)} failed, "
+                    f"{result.api_calls_made} API calls, "
                     f"{result.duration_seconds}s, risk_cache={risk_cache_result}"
                 )
+                self._record_job_result(
+                    "sell_data_update",
+                    slot_label,
+                    result=payload,
+                    error=(
+                        None if warmup_success else "; ".join(warmup_errors[:3]) or "Warmup failed"
+                    ),
+                )
+                return payload
 
         except Exception as e:
-            logger.error(
-                f"[NotificationScheduler] Sell data update error for {slot_label}: {e}"
-            )
+            logger.error(f"[NotificationScheduler] Sell data update error for {slot_label}: {e}")
+            payload = {"success": False, "slot": slot_label, "error": str(e)}
+            self._record_job_result("sell_data_update", slot_label, result=payload, error=str(e))
+            return payload
 
     # ==================== 매수 알림 Job ====================
 
@@ -307,7 +681,9 @@ class NotificationScheduler:
         async with get_async_session() as session:
             valid_symbols: list[str] = []
             for symbol in symbols:
-                stmt = select(func.count()).select_from(OHLCVModel).where(OHLCVModel.symbol == symbol)
+                stmt = (
+                    select(func.count()).select_from(OHLCVModel).where(OHLCVModel.symbol == symbol)
+                )
                 count = (await session.execute(stmt)).scalar_one()
                 if count == 0:
                     valid_symbols.append(symbol)
@@ -350,11 +726,20 @@ class NotificationScheduler:
         실행 시점은 11:30 / 14:30이며, 각 10분 전에 데이터 갱신 Job이 선행됩니다.
         """
         async with self._execution_lock:
-            logger.info(
-                f"[NotificationScheduler] Running buy notification job for {slot_label}..."
-            )
+            logger.info(f"[NotificationScheduler] Running buy notification job for {slot_label}...")
 
             try:
+                freshness = self._get_notification_freshness("buy", slot_label)
+                if not freshness["fresh"]:
+                    result = self._build_skipped_notification_result("buy", slot_label, freshness)
+                    self._record_job_result(
+                        "buy_notification",
+                        slot_label,
+                        result=result,
+                        error=str(freshness.get("message")),
+                    )
+                    return result
+
                 service = StrategyService()
 
                 recommendations = await service.get_golden_cross_recommendations(
@@ -368,20 +753,52 @@ class NotificationScheduler:
                     top_industries_n=3,
                 )
 
+                notification_payload = recommendations.model_dump(mode="json")
+                signature = self._build_notification_signature(
+                    {
+                        "top_stocks": notification_payload.get("top_stocks", []),
+                        "top_industries": notification_payload.get("top_industries", []),
+                        "buy_candidate_count": notification_payload.get("buy_candidate_count"),
+                        "errors": notification_payload.get("errors", []),
+                    }
+                )
+                if self._is_duplicate_notification("buy", slot_label, signature):
+                    result = {
+                        "success": True,
+                        "executed": True,
+                        "slot": slot_label,
+                        "sent": False,
+                        "duplicate_skipped": True,
+                        "dedupe_signature": signature,
+                        "freshness": freshness,
+                        "buy_candidate_count": recommendations.buy_candidate_count,
+                        "top_stock_count": len(recommendations.top_stocks),
+                        "top_industry_count": len(recommendations.top_industries),
+                        "warning_count": len(recommendations.errors),
+                        "warnings": recommendations.errors[:5],
+                    }
+                    self._record_job_result("buy_notification", slot_label, result=result)
+                    return result
+
                 notifier = get_telegram_notifier()
                 sent = await notifier.send_golden_cross_recommendations_summary(
-                    recommendations.model_dump(mode="json"),
+                    notification_payload,
                     slot_label=slot_label,
                 )
+                if sent:
+                    self._mark_notification_sent("buy", slot_label, signature)
 
                 auto_excluded_symbols = await self._auto_exclude_symbols_with_missing_candles(
                     recommendations.errors
                 )
 
                 result = {
-                    "success": True,
+                    "success": bool(sent),
+                    "executed": True,
                     "slot": slot_label,
-                    "sent": sent,
+                    "sent": bool(sent),
+                    "dedupe_signature": signature,
+                    "freshness": freshness,
                     "buy_candidate_count": recommendations.buy_candidate_count,
                     "top_stock_count": len(recommendations.top_stocks),
                     "top_industry_count": len(recommendations.top_industries),
@@ -404,18 +821,26 @@ class NotificationScheduler:
                         "[NotificationScheduler] Telegram disabled or not configured, skipping DM"
                     )
 
+                self._record_job_result(
+                    "buy_notification",
+                    slot_label,
+                    result=result,
+                    error=None if sent else "Telegram delivery skipped or failed",
+                )
                 return result
 
             except Exception as e:
                 logger.error(
                     f"[NotificationScheduler] Buy notification error for {slot_label}: {e}"
                 )
-                return {
+                result = {
                     "success": False,
                     "slot": slot_label,
                     "sent": False,
                     "error": str(e),
                 }
+                self._record_job_result("buy_notification", slot_label, result=result, error=str(e))
+                return result
 
     # ==================== 매도 알림 Job ====================
 
@@ -423,8 +848,8 @@ class NotificationScheduler:
         """
         매도 알림 Job
 
-        분석 이력에서 활성 추적 종목을 갱신하고,
-        SELL/STRONG_SELL 종목을 Telegram으로 알립니다.
+        분석 이력의 활성 추적 종목을 최신 상태로 재분석하고,
+        강한 매도 단계(REDUCE_2/EXIT_ALL) 또는 상위 매도 Phase 종목을 Telegram으로 알립니다.
         실행 시점은 09:30 / 12:30이며, 각 10분 전에 데이터 갱신 Job이 선행됩니다.
         """
         async with self._execution_lock:
@@ -433,169 +858,266 @@ class NotificationScheduler:
             )
 
             try:
+                freshness = self._get_notification_freshness("sell", slot_label)
+                if not freshness["fresh"]:
+                    result = self._build_skipped_notification_result("sell", slot_label, freshness)
+                    self._record_job_result(
+                        "sell_notification",
+                        slot_label,
+                        result=result,
+                        error=str(freshness.get("message")),
+                    )
+                    return result
+
                 async with get_async_session() as session:
                     history_repo = AnalysisHistoryRepository(session)
                     active_items = await history_repo.get_active_symbols_with_names("sell")
 
-                    if not active_items:
-                        logger.info("[NotificationScheduler] No active sell tracking items")
-                        return {
+                tracked_symbols = list(
+                    dict.fromkeys(item.get("symbol") for item in active_items if item.get("symbol"))
+                )
+                notifier = get_telegram_notifier()
+                if not tracked_symbols:
+                    no_tracking_status = ["활성 매도 추적 종목이 없습니다."]
+                    signature = self._build_notification_signature(
+                        {
+                            "no_tracked_sell_symbols": True,
+                            "status_summary": no_tracking_status,
+                        }
+                    )
+                    if self._is_duplicate_notification("sell", slot_label, signature):
+                        result = {
                             "success": True,
+                            "executed": True,
                             "slot": slot_label,
                             "sent": False,
+                            "duplicate_skipped": True,
+                            "dedupe_signature": signature,
+                            "freshness": freshness,
                             "tracked_count": 0,
-                            "sell_alert_count": 0,
-                            "warnings": [],
+                            "analyzed_count": 0,
+                            "alert_count": 0,
+                            "failed_count": 0,
+                            "status_summary": no_tracking_status,
+                            "message": "No active sell tracking symbols",
                         }
+                        self._record_job_result("sell_notification", slot_label, result=result)
+                        return result
 
-                    logger.info(
-                        f"[NotificationScheduler] Refreshing {len(active_items)} sell items "
-                        f"for {slot_label}"
+                    sent = await notifier.send_no_sell_signals_alert(
+                        total_tracked=0,
+                        slot_label=slot_label,
+                        failed_count=0,
+                        failed_summary=None,
+                        status_summary=no_tracking_status,
+                    )
+                    if sent:
+                        self._mark_notification_sent("sell", slot_label, signature)
+                    result = {
+                        "success": bool(sent),
+                        "executed": True,
+                        "slot": slot_label,
+                        "sent": bool(sent),
+                        "dedupe_signature": signature,
+                        "freshness": freshness,
+                        "tracked_count": 0,
+                        "analyzed_count": 0,
+                        "alert_count": 0,
+                        "failed_count": 0,
+                        "status_summary": no_tracking_status,
+                        "message": "No active sell tracking symbols",
+                    }
+                    self._record_job_result(
+                        "sell_notification",
+                        slot_label,
+                        result=result,
+                        error=None if sent else "Telegram delivery skipped or failed",
+                    )
+                    return result
+
+                refresh_result = await StrategyService().refresh_analysis_history("sell")
+                analyzed_items = refresh_result.items
+                errors = refresh_result.errors
+
+                pending_sell_alerts: list[dict] = []
+                analyzed_results: dict[str, dict] = {}
+                status_summary: list[str] = []
+
+                for item in analyzed_items:
+                    stage_value = str(item.sell_stage or "HOLD")
+                    analyzed_results[item.symbol] = {
+                        "symbol": item.symbol,
+                        "name": item.name,
+                        "final_stage": stage_value,
+                    }
+
+                    stage_name = item.sell_stage_name or stage_value
+                    if len(status_summary) < 4:
+                        status_summary.append(f"{item.name or item.symbol}: {stage_name}")
+
+                    qualifies = stage_value in {"REDUCE_2", "EXIT_ALL"} or item.sell_phase in {
+                        "PHASE_4",
+                        "PHASE_5",
+                    }
+                    if not qualifies:
+                        continue
+
+                    pending_sell_alerts.append(
+                        {
+                            "symbol": item.symbol,
+                            "name": item.name,
+                            "current_price": float(item.current_price),
+                            "sell_phase": item.sell_phase,
+                            "sell_reasons": item.sell_reasons or [],
+                            "final_stage": stage_value,
+                            "sell_stage_name": item.sell_stage_name,
+                            "volume_ratio": item.volume_ratio,
+                            "is_volume_sell_signal": bool(item.is_volume_sell_signal),
+                            "is_volume_spike": bool(item.is_volume_spike),
+                            "is_volume_peak": False,
+                            "is_personal_buying_overheated": bool(
+                                getattr(item, "is_personal_buying_overheated", False)
+                            ),
+                            "market_credit_label": getattr(item, "market_credit_label", None),
+                            "is_market_credit_overheated": bool(
+                                getattr(item, "is_market_credit_overheated", False)
+                            ),
+                        }
                     )
 
-                    symbol_name_map = {
-                        item["symbol"]: item["name"] for item in active_items
+                pending_sell_alerts = self._filter_duplicate_leader_alerts(pending_sell_alerts)
+                for alert in pending_sell_alerts:
+                    leader_summary = self._build_etf_leader_summary(
+                        alert["symbol"], analyzed_results
+                    )
+                    if leader_summary:
+                        alert["leader_summary"] = leader_summary
+
+                if pending_sell_alerts:
+                    notification_signature_payload: object = {
+                        "alerts": pending_sell_alerts,
+                        "status_summary": status_summary,
+                        "errors": errors[:3],
                     }
+                    signature = self._build_notification_signature(notification_signature_payload)
+                    if self._is_duplicate_notification("sell", slot_label, signature):
+                        result = {
+                            "success": True,
+                            "executed": True,
+                            "slot": slot_label,
+                            "sent": False,
+                            "duplicate_skipped": True,
+                            "dedupe_signature": signature,
+                            "freshness": freshness,
+                            "tracked_count": len(tracked_symbols),
+                            "analyzed_count": len(analyzed_items),
+                            "alert_count": len(pending_sell_alerts),
+                            "failed_count": len(errors),
+                            "failed_summary": errors[:3],
+                            "top_alert_symbols": [
+                                item["symbol"] for item in pending_sell_alerts[:5]
+                            ],
+                            "status_summary": status_summary,
+                        }
+                        self._record_job_result("sell_notification", slot_label, result=result)
+                        return result
 
-                    sell_service = SellStrategyService(session)
-                    sell_alerts: list[dict] = []
-                    warnings: list[str] = []
-
-                    # 활성 전략의 보유 종목 진입가/최고가 조회 (페이지 API와 동일한 파라미터 적용)
-                    symbol_state_map: dict[str, dict] = {}
-                    try:
-                        strategy_repo = StrategyRepository(session)
-                        state_repo = StrategySymbolStateRepository(session)
-                        active_strategies = await strategy_repo.get_active_strategies(session=session)
-                        for strategy in active_strategies:
-                            states = await state_repo.get_all_by_strategy(strategy.id, session=session)
-                            for state in states:
-                                sym = state.symbol
-                                if sym and state.entry_price:
-                                    new_entry = float(state.entry_price)
-                                    existing = symbol_state_map.get(sym)
-                                    # 다중 전략 보유 시 가장 낮은 진입가(보수적) 채택
-                                    if existing is None or new_entry < existing["entry_price"]:
-                                        symbol_state_map[sym] = {
-                                            "entry_price": new_entry,
-                                            "highest_price": float(state.highest_price) if state.highest_price else None,
-                                            "trailing_stop_activated": state.trailing_stop_activated or False,
-                                        }
-                    except Exception as e:
-                        logger.warning(f"[NotificationScheduler] Failed to load symbol states: {e}")
-
-                    for item in active_items:
-                        symbol = item["symbol"]
-                        if not symbol:
-                            continue
-                        try:
-                            # 보유 종목 상태에서 진입가/최고가 조회 (페이지 API와 동일)
-                            state_info = symbol_state_map.get(symbol, {})
-
-                            result = await sell_service.analyze_sell_signal(
-                                symbol,
-                                name=item.get("name"),
-                                market=item.get("market"),
-                                entry_price=state_info.get("entry_price"),
-                                highest_price=state_info.get("highest_price"),
-                                trailing_stop_activated=state_info.get("trailing_stop_activated", False),
-                            )
-
-                            # Phase 기반 OR final_stage 기반 강한 매도 판단 시 알림
-                            is_phase_alert = result.sell_phase in ["PHASE_4", "PHASE_5"]
-                            is_stage_alert = result.final_stage in ["REDUCE_2", "EXIT_ALL"]
-                            if is_phase_alert or is_stage_alert:
-                                stock_name = result.name or symbol_name_map.get(symbol)
-                                sell_alerts.append(
-                                    {
-                                        "symbol": result.symbol,
-                                        "name": stock_name,
-                                        "current_price": float(result.current_price),
-                                        "sell_phase": result.sell_phase,
-                                        "sell_phase_name": result.sell_phase_name,
-                                        "sell_phase_action": result.sell_phase_action,
-                                        "sell_stage": result.sell_stage,
-                                        "sell_stage_name": result.sell_stage_name,
-                                        "final_stage": result.final_stage,
-                                        "is_personal_buying_overheated": result.is_personal_buying_overheated,
-                                        "is_market_credit_overheated": result.is_market_credit_overheated,
-                                        "market_credit_label": result.market_credit_label,
-                                        "sell_reasons": result.sell_reasons,
-                                    }
-                                )
-
-                            await asyncio.sleep(0.1)
-
-                        except Exception as e:
-                            warning = f"{symbol}: {e}"
-                            warnings.append(warning)
-                            logger.warning(
-                                f"[NotificationScheduler] Failed to analyze {symbol}: {e}"
-                            )
-
-                    notifier = get_telegram_notifier()
-                    if sell_alerts:
-                        sent = await notifier.send_sell_signals_summary(
-                            sell_alerts,
-                            slot_label=slot_label,
-                        )
-                        logger.info(
-                            "[NotificationScheduler] Sent sell notification "
-                            f"for {len(sell_alerts)} stocks at {slot_label}"
-                        )
-                    else:
-                        sent = await notifier.send_no_sell_signals_alert(
-                            total_tracked=len(active_items),
-                            slot_label=slot_label,
-                        )
-                        logger.info(
-                            "[NotificationScheduler] No sell alert stocks found "
-                            f"(PHASE_4/5 or REDUCE_2/EXIT_ALL), sent empty alert for {slot_label}"
-                        )
-
-                    return {
-                        "success": True,
-                        "slot": slot_label,
-                        "sent": sent,
-                        "tracked_count": len(active_items),
-                        "sell_alert_count": len(sell_alerts),
-                        "warning_count": len(warnings),
-                        "warnings": warnings[:5],
+                    sent = await notifier.send_sell_signals_summary(
+                        pending_sell_alerts,
+                        slot_label=slot_label,
+                        status_summary=status_summary,
+                    )
+                else:
+                    notification_signature_payload = {
+                        "no_sell_signals": True,
+                        "tracked_count": len(tracked_symbols),
+                        "failed_count": len(errors),
+                        "failed_summary": errors[:3],
+                        "status_summary": status_summary,
                     }
+                    signature = self._build_notification_signature(notification_signature_payload)
+                    if self._is_duplicate_notification("sell", slot_label, signature):
+                        result = {
+                            "success": True,
+                            "executed": True,
+                            "slot": slot_label,
+                            "sent": False,
+                            "duplicate_skipped": True,
+                            "dedupe_signature": signature,
+                            "freshness": freshness,
+                            "tracked_count": len(tracked_symbols),
+                            "analyzed_count": len(analyzed_items),
+                            "alert_count": 0,
+                            "failed_count": len(errors),
+                            "failed_summary": errors[:3],
+                            "top_alert_symbols": [],
+                            "status_summary": status_summary,
+                        }
+                        self._record_job_result("sell_notification", slot_label, result=result)
+                        return result
+
+                    sent = await notifier.send_no_sell_signals_alert(
+                        total_tracked=len(tracked_symbols),
+                        slot_label=slot_label,
+                        failed_count=len(errors),
+                        failed_summary=errors[:3],
+                        status_summary=status_summary,
+                    )
+                if sent:
+                    self._mark_notification_sent("sell", slot_label, signature)
+
+                result = {
+                    "success": bool(sent),
+                    "executed": True,
+                    "slot": slot_label,
+                    "sent": bool(sent),
+                    "dedupe_signature": signature,
+                    "freshness": freshness,
+                    "tracked_count": len(tracked_symbols),
+                    "analyzed_count": len(analyzed_items),
+                    "alert_count": len(pending_sell_alerts),
+                    "failed_count": len(errors),
+                    "failed_summary": errors[:3],
+                    "top_alert_symbols": [item["symbol"] for item in pending_sell_alerts[:5]],
+                    "status_summary": status_summary,
+                }
+                self._record_job_result(
+                    "sell_notification",
+                    slot_label,
+                    result=result,
+                    error=None if sent else "Telegram delivery skipped or failed",
+                )
+                return result
 
             except Exception as e:
                 logger.error(
                     f"[NotificationScheduler] Sell notification error for {slot_label}: {e}"
                 )
-                return {
+                result = {
                     "success": False,
                     "slot": slot_label,
                     "sent": False,
                     "error": str(e),
                 }
+                self._record_job_result(
+                    "sell_notification", slot_label, result=result, error=str(e)
+                )
+                return result
 
-    # ==================== 수동 실행 ====================
-
-    async def execute_buy_notification_now(self) -> dict:
+    async def execute_buy_notification_now(self, slot_label: str = "manual") -> dict:
         """매수 알림 수동 실행"""
-        return await self._buy_notification_job(slot_label="manual")
+        return await self._buy_notification_job(slot_label=slot_label)
 
-    async def execute_sell_notification_now(self) -> dict:
+    async def execute_sell_notification_now(self, slot_label: str = "manual") -> dict:
         """매도 알림 수동 실행"""
-        return await self._sell_notification_job(slot_label="manual")
+        return await self._sell_notification_job(slot_label=slot_label)
 
 
-_notification_scheduler_instance: NotificationScheduler | None = None
+_notification_scheduler: NotificationScheduler | None = None
 
 
 def get_notification_scheduler() -> NotificationScheduler:
-    """
-    NotificationScheduler 싱글톤 인스턴스 반환
-
-    Returns:
-        NotificationScheduler: 알림 스케줄러 인스턴스
-    """
-    global _notification_scheduler_instance
-    if _notification_scheduler_instance is None:
-        _notification_scheduler_instance = NotificationScheduler()
-    return _notification_scheduler_instance
+    global _notification_scheduler
+    if _notification_scheduler is None:
+        _notification_scheduler = NotificationScheduler()
+    return _notification_scheduler

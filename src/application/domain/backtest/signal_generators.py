@@ -13,7 +13,12 @@ from src.application.common.indicators import TechnicalIndicators
 
 class BaseSignalGenerator(ABC):
     @abstractmethod
-    def generate_signal(self, price_history: list[float], current_price: Decimal) -> str:
+    def generate_signal(
+        self,
+        price_history: list[float],
+        current_price: Decimal,
+        **kwargs: object,
+    ) -> str:
         pass
 
     @property
@@ -26,7 +31,14 @@ class BaseSignalGenerator(ABC):
 
 
 class BollingerEnvelopeSignalGenerator(BaseSignalGenerator):
-    def __init__(self, bb_period: int = 20, bb_std_multiplier: float = 2.0, env_period: int = 20, env_percentage: float = 2.0, use_strict_mode: bool = True):
+    def __init__(
+        self,
+        bb_period: int = 20,
+        bb_std_multiplier: float = 2.0,
+        env_period: int = 20,
+        env_percentage: float = 2.0,
+        use_strict_mode: bool = True,
+    ):
         self.bb_period = bb_period
         self.bb_std_multiplier = bb_std_multiplier
         self.env_period = env_period
@@ -37,18 +49,46 @@ class BollingerEnvelopeSignalGenerator(BaseSignalGenerator):
     def min_period(self) -> int:
         return max(self.bb_period, self.env_period)
 
-    def generate_signal(self, price_history: list[float], current_price: Decimal) -> str:
+    def generate_signal(
+        self,
+        price_history: list[float],
+        current_price: Decimal,
+        **kwargs: object,
+    ) -> str:
         if len(price_history) < self.min_period:
             return "hold"
-        bb_bands = TechnicalIndicators.calculate_bollinger_bands(price_history, period=self.bb_period, std_multiplier=self.bb_std_multiplier)
-        env_bands = TechnicalIndicators.calculate_envelope(price_history, period=self.env_period, percentage=self.env_percentage)
-        return TechnicalIndicators.generate_combined_signal(current_price=float(current_price), bb_bands=bb_bands, envelope_bands=env_bands, use_strict_mode=self.use_strict_mode)
+        bb_bands = TechnicalIndicators.calculate_bollinger_bands(
+            price_history, period=self.bb_period, std_multiplier=self.bb_std_multiplier
+        )
+        env_bands = TechnicalIndicators.calculate_envelope(
+            price_history, period=self.env_period, percentage=self.env_percentage
+        )
+        return TechnicalIndicators.generate_combined_signal(
+            current_price=float(current_price),
+            bb_bands=bb_bands,
+            envelope_bands=env_bands,
+            use_strict_mode=self.use_strict_mode,
+        )
 
 
 class GoldenCrossSignalGenerator(BaseSignalGenerator):
     """스윙형 골든크로스 시그널 생성기"""
 
-    def __init__(self, short_period: int = 55, long_period: int = 165, stoch_k_period: int = 14, stoch_d_period: int = 3, stoch_oversold: float = 30.0, stoch_overbought: float = 70.0, require_k_above_d_for_buy: bool = False, require_k_below_d_for_sell: bool = False, buy_recovery_threshold: float = 35.0, min_pullback_bars: int = 2, min_reentry_cooldown_bars: int = 5, disable_stoch_overbought_sell: bool = True):
+    def __init__(
+        self,
+        short_period: int = 55,
+        long_period: int = 165,
+        stoch_k_period: int = 14,
+        stoch_d_period: int = 3,
+        stoch_oversold: float = 30.0,
+        stoch_overbought: float = 70.0,
+        require_k_above_d_for_buy: bool = False,
+        require_k_below_d_for_sell: bool = False,
+        buy_recovery_threshold: float = 35.0,
+        min_pullback_bars: int = 2,
+        min_reentry_cooldown_bars: int = 5,
+        disable_stoch_overbought_sell: bool = True,
+    ):
         self.short_period = short_period
         self.long_period = long_period
         self.stoch_k_period = stoch_k_period
@@ -71,13 +111,25 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
     def min_period(self) -> int:
         return self.long_period
 
-    def generate_signal(self, price_history: list[float], current_price: Decimal) -> str:
+    def generate_signal(
+        self,
+        price_history: list[float],
+        current_price: Decimal,
+        high_history: list[float] | None = None,
+        low_history: list[float] | None = None,
+        close_history: list[float] | None = None,
+        **kwargs: object,
+    ) -> str:
         if len(price_history) < self.min_period:
             return "hold"
         self._bars_since_exit += 1
         ma_short = self._calculate_sma(price_history, self.short_period)
         ma_long = self._calculate_sma(price_history, self.long_period)
-        stoch_k, stoch_d = self._calculate_stochastic(price_history)
+        stoch_k, stoch_d = self._calculate_stochastic(
+            close_history or price_history,
+            high_history=high_history,
+            low_history=low_history,
+        )
         is_gc_active = ma_short > ma_long
         is_death_cross = ma_short < ma_long
         if stoch_k < self.stoch_oversold:
@@ -134,15 +186,37 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
             return 0.0
         return sum(prices[-period:]) / period
 
-    def _calculate_stochastic(self, prices: list[float]) -> tuple[float, float]:
+    def _calculate_stochastic(
+        self,
+        prices: list[float],
+        high_history: list[float] | None = None,
+        low_history: list[float] | None = None,
+    ) -> tuple[float, float]:
         period = self.stoch_k_period
         d_period = self.stoch_d_period
         if len(prices) < period + d_period:
             return 50.0, 50.0
+
+        if (
+            high_history is not None
+            and low_history is not None
+            and len(high_history) >= len(prices)
+            and len(low_history) >= len(prices)
+        ):
+            stoch_k, stoch_d = TechnicalIndicators.calculate_stochastic_from_prices(
+                closes=prices,
+                highs=high_history[-len(prices) :],
+                lows=low_history[-len(prices) :],
+                k_period=period,
+                d_period=d_period,
+            )
+            if stoch_k is not None and stoch_d is not None:
+                return float(stoch_k), float(stoch_d)
+
         k_values = []
         for i in range(d_period):
             idx = len(prices) - d_period + i
-            window = prices[idx - period + 1:idx + 1]
+            window = prices[idx - period + 1 : idx + 1]
             high = max(window)
             low = min(window)
             k_values.append(50.0 if high == low else (prices[idx] - low) / (high - low) * 100)
@@ -157,7 +231,17 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
 
 
 class MA5BreakoutSignalGenerator(BaseSignalGenerator):
-    def __init__(self, short_ma_period: int = 5, long_ma_period: int = 300, envelope_percentage: float = 0.7, secondary_ma_period: int = 400, secondary_envelope_percentage: float = 0.7, volume_ma_period: int = 20, volume_ratio_threshold: float = 1.0, use_volume_filter: bool = True):
+    def __init__(
+        self,
+        short_ma_period: int = 5,
+        long_ma_period: int = 300,
+        envelope_percentage: float = 0.7,
+        secondary_ma_period: int = 400,
+        secondary_envelope_percentage: float = 0.7,
+        volume_ma_period: int = 20,
+        volume_ratio_threshold: float = 1.0,
+        use_volume_filter: bool = True,
+    ):
         self.short_ma_period = short_ma_period
         self.long_ma_period = long_ma_period
         self.envelope_percentage = envelope_percentage
@@ -174,7 +258,13 @@ class MA5BreakoutSignalGenerator(BaseSignalGenerator):
     def min_period(self) -> int:
         return max(self.long_ma_period, self.secondary_ma_period, self.volume_ma_period)
 
-    def generate_signal(self, price_history: list[float], current_price: Decimal, volume: float | None = None) -> str:
+    def generate_signal(
+        self,
+        price_history: list[float],
+        current_price: Decimal,
+        volume: float | None = None,
+        **kwargs: object,
+    ) -> str:
         if len(price_history) < self.min_period:
             return "hold"
         if volume is not None:
@@ -207,7 +297,7 @@ class MA5BreakoutSignalGenerator(BaseSignalGenerator):
     def _check_volume_condition(self) -> bool:
         if len(self._volume_history) < self.volume_ma_period:
             return True
-        avg_volume = sum(self._volume_history[-self.volume_ma_period:]) / self.volume_ma_period
+        avg_volume = sum(self._volume_history[-self.volume_ma_period :]) / self.volume_ma_period
         current_volume = self._volume_history[-1] if self._volume_history else 0
         return current_volume >= avg_volume * self.volume_ratio_threshold
 

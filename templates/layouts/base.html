@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Stock API Admin{% endblock %}</title>
-    <link rel="stylesheet" href="/static/styles/mypage.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231e3a5f'/%3E%3Cpath d='M14 42 L26 30 L36 38 L50 20' fill='none' stroke='%237dd3fc' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/styles/mypage.css" />
     {% block extra_css_links %}{% endblock %}
   <style>
     {% block extra_styles %}{% endblock %}
@@ -22,6 +23,32 @@
   </div>
   <script>
     const SIDEBAR_STORAGE_KEY = "sidebarHidden";
+    const ADMIN_CSRF_HEADER = "X-Requested-With";
+    const ADMIN_CSRF_HEADER_VALUE = "XMLHttpRequest";
+    const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+    const nativeFetch = window.fetch.bind(window);
+
+    const isSameOriginUrl = (input) => {
+      const url = typeof input === "string" ? input : input?.url;
+      if (!url) return true;
+      try {
+        return new URL(url, window.location.origin).origin === window.location.origin;
+      } catch (e) {
+        return false;
+      }
+    };
+
+    window.fetch = (input, init = {}) => {
+      const method = (init.method || (typeof input !== "string" ? input?.method : "GET") || "GET").toUpperCase();
+      if (!UNSAFE_METHODS.has(method) || !isSameOriginUrl(input)) {
+        return nativeFetch(input, init);
+      }
+
+      const headers = new Headers(init.headers || (typeof input !== "string" ? input?.headers : undefined) || {});
+      headers.set(ADMIN_CSRF_HEADER, ADMIN_CSRF_HEADER_VALUE);
+      return nativeFetch(input, { ...init, headers });
+    };
+
     const parseJson = (text) => {
       try { return JSON.parse(text); } catch (e) { return text; }
     };

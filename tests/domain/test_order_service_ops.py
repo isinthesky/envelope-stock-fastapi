@@ -180,44 +180,40 @@ class TestPostWithRetry:
         assert service.kis_client.post.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_timeout_retry_success(self, service):
-        """타임아웃 후 재시도 성공"""
-        expected_result = {"rt_cd": "0", "output": {"ODNO": "12345"}}
+    async def test_timeout_does_not_retry_to_avoid_duplicate_order(self, service):
+        """타임아웃은 결과 불명이라 중복 주문 방지를 위해 재시도하지 않음"""
         service.kis_client.post.side_effect = [
             asyncio.TimeoutError(),
-            expected_result,
+            {"rt_cd": "0", "output": {"ODNO": "12345"}},
         ]
 
         with patch("src.application.domain.order.service.settings") as mock_settings:
             mock_settings.order_response_timeout = 2.5
             mock_settings.order_retry_delay_seconds = 0.01  # 테스트용 짧은 대기
 
-            result = await service._post_with_retry(
-                "/api/order", {"symbol": "005930"}, {"tr_id": "TTTC0802U"}
-            )
+            with pytest.raises(asyncio.TimeoutError):
+                await service._post_with_retry(
+                    "/api/order", {"symbol": "005930"}, {"tr_id": "TTTC0802U"}
+                )
 
-        assert result == expected_result
-        assert service.kis_client.post.call_count == 2
+        assert service.kis_client.post.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_httpx_timeout_retry(self, service):
-        """httpx 타임아웃 재시도"""
-        expected_result = {"rt_cd": "0"}
+    async def test_httpx_timeout_does_not_retry_to_avoid_duplicate_order(self, service):
+        """httpx 타임아웃도 결과 불명이라 재시도하지 않음"""
         service.kis_client.post.side_effect = [
             httpx.TimeoutException("Connection timeout"),
-            expected_result,
+            {"rt_cd": "0"},
         ]
 
         with patch("src.application.domain.order.service.settings") as mock_settings:
             mock_settings.order_response_timeout = 2.5
             mock_settings.order_retry_delay_seconds = 0.01
 
-            result = await service._post_with_retry(
-                "/api/order", {}, {}
-            )
+            with pytest.raises(httpx.TimeoutException):
+                await service._post_with_retry("/api/order", {}, {})
 
-        assert result == expected_result
-        assert service.kis_client.post.call_count == 2
+        assert service.kis_client.post.call_count == 1
 
     @pytest.mark.asyncio
     async def test_rate_limit_retry(self, service):
@@ -232,30 +228,43 @@ class TestPostWithRetry:
             mock_settings.order_response_timeout = 2.5
             mock_settings.order_retry_delay_seconds = 0.01
 
-            result = await service._post_with_retry(
-                "/api/order", {}, {}
-            )
+            result = await service._post_with_retry("/api/order", {}, {})
 
         assert result == expected_result
 
     @pytest.mark.asyncio
-    async def test_server_error_retry(self, service):
-        """서버 에러(5xx) 재시도"""
-        expected_result = {"rt_cd": "0"}
+    async def test_server_error_does_not_retry_to_avoid_duplicate_order(self, service):
+        """서버 에러(5xx)는 주문 수신 여부가 불명확해 재시도하지 않음"""
         service.kis_client.post.side_effect = [
             KISAPIError(message="Internal Server Error", error_code="500"),
-            expected_result,
+            {"rt_cd": "0"},
         ]
 
         with patch("src.application.domain.order.service.settings") as mock_settings:
             mock_settings.order_response_timeout = 2.5
             mock_settings.order_retry_delay_seconds = 0.01
 
-            result = await service._post_with_retry(
-                "/api/order", {}, {}
-            )
+            with pytest.raises(KISAPIError):
+                await service._post_with_retry("/api/order", {}, {})
 
-        assert result == expected_result
+        assert service.kis_client.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_post_outcome_does_not_retry(self, service):
+        """KIS client가 감싼 결과 불명 POST 오류는 재시도하지 않음"""
+        service.kis_client.post.side_effect = [
+            KISAPIError(message="ambiguous", error_code="POST_OUTCOME_UNKNOWN"),
+            {"rt_cd": "0"},
+        ]
+
+        with patch("src.application.domain.order.service.settings") as mock_settings:
+            mock_settings.order_response_timeout = 2.5
+            mock_settings.order_retry_delay_seconds = 0.01
+
+            with pytest.raises(KISAPIError):
+                await service._post_with_retry("/api/order", {}, {})
+
+        assert service.kis_client.post.call_count == 1
 
     @pytest.mark.asyncio
     async def test_non_retryable_error_no_retry(self, service):
@@ -272,17 +281,17 @@ class TestPostWithRetry:
 
     @pytest.mark.asyncio
     async def test_retry_also_fails(self, service):
-        """재시도도 실패하면 예외 발생"""
+        """rate limit이 재시도에서도 실패하면 예외 발생"""
         service.kis_client.post.side_effect = [
-            asyncio.TimeoutError(),
-            asyncio.TimeoutError(),
+            KISRateLimitError("rate limit"),
+            KISRateLimitError("rate limit"),
         ]
 
         with patch("src.application.domain.order.service.settings") as mock_settings:
             mock_settings.order_response_timeout = 2.5
             mock_settings.order_retry_delay_seconds = 0.01
 
-            with pytest.raises(asyncio.TimeoutError):
+            with pytest.raises(KISRateLimitError):
                 await service._post_with_retry("/api/order", {}, {})
 
         # 최초 1회 + 재시도 1회 = 2회
@@ -297,13 +306,12 @@ class TestPostWithRetry:
             mock_settings.order_response_timeout = 2.5
             mock_settings.order_retry_delay_seconds = 5.0
 
-            await service._post_with_retry(
-                "/api/order", {"data": "test"}, {"header": "value"}
-            )
+            await service._post_with_retry("/api/order", {"data": "test"}, {"header": "value"})
 
         # timeout 파라미터 확인
         call_kwargs = service.kis_client.post.call_args
         assert call_kwargs.kwargs["timeout"] == 2.5
+        assert call_kwargs.kwargs["retry_transport_errors"] is False
 
 
 class TestIsRetryableOrderError:
@@ -316,14 +324,14 @@ class TestIsRetryableOrderError:
         return OrderService(kis_client=mock_kis_client, session=None)
 
     def test_asyncio_timeout_is_retryable(self, service):
-        """asyncio.TimeoutError는 재시도 가능"""
+        """asyncio.TimeoutError는 중복 주문 방지를 위해 재시도하지 않음"""
         error = asyncio.TimeoutError()
-        assert service._is_retryable_order_error(error) is True
+        assert service._is_retryable_order_error(error) is False
 
     def test_httpx_timeout_is_retryable(self, service):
-        """httpx.TimeoutException은 재시도 가능"""
+        """httpx.TimeoutException은 중복 주문 방지를 위해 재시도하지 않음"""
         error = httpx.TimeoutException("timeout")
-        assert service._is_retryable_order_error(error) is True
+        assert service._is_retryable_order_error(error) is False
 
     def test_rate_limit_error_is_retryable(self, service):
         """KISRateLimitError는 재시도 가능"""
@@ -331,14 +339,14 @@ class TestIsRetryableOrderError:
         assert service._is_retryable_order_error(error) is True
 
     def test_server_error_500_is_retryable(self, service):
-        """500 에러는 재시도 가능"""
+        """500 에러는 주문 수신 여부가 불명확해 재시도하지 않음"""
         error = KISAPIError(message="Internal Error", error_code="500")
-        assert service._is_retryable_order_error(error) is True
+        assert service._is_retryable_order_error(error) is False
 
     def test_server_error_503_is_retryable(self, service):
-        """503 에러는 재시도 가능"""
+        """503 에러는 주문 수신 여부가 불명확해 재시도하지 않음"""
         error = KISAPIError(message="Service Unavailable", error_code="503")
-        assert service._is_retryable_order_error(error) is True
+        assert service._is_retryable_order_error(error) is False
 
     def test_error_code_429_is_retryable(self, service):
         """429 에러 코드는 재시도 가능"""

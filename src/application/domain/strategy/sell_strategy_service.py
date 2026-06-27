@@ -76,7 +76,9 @@ class SellStrategyService:
         try:
             return await get_naver_stock_client().get_personal_flow_data(symbol)
         except Exception:
-            logger.debug("[Sell Signal] failed to fetch personal flow for %s", symbol, exc_info=True)
+            logger.debug(
+                "[Sell Signal] failed to fetch personal flow for %s", symbol, exc_info=True
+            )
             return None
 
     async def _get_market_credit_trend(
@@ -103,7 +105,9 @@ class SellStrategyService:
             self._market_credit_cache[cache_key] = result
             return result
         except Exception:
-            logger.debug("[Sell Signal] failed to fetch market credit trend for %s", market, exc_info=True)
+            logger.debug(
+                "[Sell Signal] failed to fetch market credit trend for %s", market, exc_info=True
+            )
             self._market_credit_cache[cache_key] = None
             return None
 
@@ -216,9 +220,7 @@ class SellStrategyService:
         )
         etf_keywords = ("ETF", "ETN")
 
-        is_leveraged_etf_like = any(
-            keyword in normalized_name for keyword in leveraged_keywords
-        )
+        is_leveraged_etf_like = any(keyword in normalized_name for keyword in leveraged_keywords)
         is_etf_like = (
             normalized_market == "ETF"
             or any(keyword in normalized_name for keyword in etf_keywords)
@@ -546,9 +548,7 @@ class SellStrategyService:
 
         # 3-3. 시장 신용 과열 체크 (KOFIA)
         market_credit_data = await self._get_market_credit_trend(market)
-        is_market_credit_overheated = bool(
-            market_credit_data and market_credit_data.is_overheated
-        )
+        is_market_credit_overheated = bool(market_credit_data and market_credit_data.is_overheated)
         market_credit_reasons = market_credit_data.reasons if market_credit_data else []
         overlay_signals = SellPeakRuleResearchService.evaluate_peak_rule_inputs(
             personal_buy_days_5d=(
@@ -677,12 +677,24 @@ class SellStrategyService:
             risk_combo_extreme=bool(overlay_signals["risk_combo_extreme"]),
         )
 
+        drawdown_from_high: float | None = None
+        if highest_price is not None and highest_price > 0:
+            drawdown_from_high = (highest_price - close) / highest_price
+
         final_stage = self.determine_final_stage(
             rule_stage=sell_stage,
             score_stage=sell_score_result.recommended_stage,
             use_scoring=use_scoring,
             merge_strategy=merge_strategy,
         )
+        final_stage, position_stage_reasons = self._apply_position_risk_stage(
+            final_stage,
+            is_take_profit_triggered=is_take_profit_triggered,
+            trailing_stop_activated=trailing_stop_activated,
+            drawdown_from_high=drawdown_from_high,
+        )
+        stage_reasons.extend(position_stage_reasons)
+
         final_stage, final_overlay_stage_reasons = self._apply_overlay_stage_upgrade(
             final_stage,
             is_personal_buying_overheated=is_personal_buying_overheated,
@@ -733,11 +745,6 @@ class SellStrategyService:
         if not sell_reasons:
             sell_reasons.append("현재 매도 시그널 없음 - 보유 유지")
 
-        # 트레일링 스탑 관련 계산
-        drawdown_from_high: float | None = None
-        if highest_price is not None and highest_price > 0:
-            drawdown_from_high = (highest_price - close) / highest_price
-
         # Phase 정보
         phase_info = SELL_PHASE_INFO.get(sell_phase.value, SELL_PHASE_INFO["NONE"])
 
@@ -770,7 +777,9 @@ class SellStrategyService:
             # 52주 신고가 관련
             is_52week_high=is_52week_high,
             high_52week=Decimal(str(high_52week_value)) if high_52week_value is not None else None,
-            high_52week_ratio=round(high_52week_ratio, 4) if high_52week_ratio is not None else None,
+            high_52week_ratio=(
+                round(high_52week_ratio, 4) if high_52week_ratio is not None else None
+            ),
             high_52week_data_note=high_52week_note,
             # Phase 기반 매도 시그널
             sell_phase=sell_phase.value,
@@ -787,7 +796,9 @@ class SellStrategyService:
             is_take_profit_triggered=is_take_profit_triggered,
             # 트레일링 스탑 관련
             highest_price=Decimal(str(highest_price)) if highest_price else None,
-            drawdown_from_high=round(drawdown_from_high, 4) if drawdown_from_high is not None else None,
+            drawdown_from_high=(
+                round(drawdown_from_high, 4) if drawdown_from_high is not None else None
+            ),
             trailing_stop_activated=trailing_stop_activated,
             # === 비중축소 관련 신규 필드 ===
             sell_stage=sell_stage.value,
@@ -841,12 +852,15 @@ class SellStrategyService:
             ),
             personal_buy_ratio_5d_to_volume=(
                 round(personal_flow_data.recent_5d_buy_ratio_to_volume, 4)
-                if personal_flow_data and personal_flow_data.recent_5d_buy_ratio_to_volume is not None
+                if personal_flow_data
+                and personal_flow_data.recent_5d_buy_ratio_to_volume is not None
                 else None
             ),
             is_personal_buying_overheated=is_personal_buying_overheated,
             market_credit_label=(market_credit_data.market_label if market_credit_data else None),
-            market_credit_balance_million=(market_credit_data.latest_balance_million if market_credit_data else None),
+            market_credit_balance_million=(
+                market_credit_data.latest_balance_million if market_credit_data else None
+            ),
             market_credit_change_ratio=(
                 round(market_credit_data.balance_change_ratio, 4)
                 if market_credit_data and market_credit_data.balance_change_ratio is not None
@@ -986,9 +1000,7 @@ class SellStrategyService:
                 and personal_buy_ratio_5d_to_volume >= config.personal_buy_ratio_high
             ):
                 personal_flow_score = config.personal_flow_weight
-                score_reasons.append(
-                    "개인 수급 과열 강함 (연속 순매수 + 거래량 대비 비중 높음)"
-                )
+                score_reasons.append("개인 수급 과열 강함 (연속 순매수 + 거래량 대비 비중 높음)")
             elif (
                 personal_buy_ratio_5d_to_volume is not None
                 and personal_buy_days_5d >= config.personal_buy_days_threshold
@@ -1002,10 +1014,7 @@ class SellStrategyService:
         total_score += personal_flow_score
 
         market_credit_score = 0.0
-        if (
-            market_credit_change_ratio is not None
-            and market_credit_recent_high_ratio is not None
-        ):
+        if market_credit_change_ratio is not None and market_credit_recent_high_ratio is not None:
             if market_credit_change_ratio >= 0.01 and market_credit_recent_high_ratio >= 0.995:
                 market_credit_score = config.market_credit_weight
                 score_reasons.append("시장 신용 과열 강함 (일간 증가율 + 고점권)")
@@ -1222,6 +1231,45 @@ class SellStrategyService:
         ]
         return max(rule_stage, score_stage, key=lambda s: stage_order.index(s))
 
+    def _apply_position_risk_stage(
+        self,
+        stage: SellStageEnum,
+        *,
+        is_take_profit_triggered: bool,
+        trailing_stop_activated: bool,
+        drawdown_from_high: float | None,
+        trailing_stop_distance: float = 0.07,
+    ) -> tuple[SellStageEnum, list[str]]:
+        """익절/트레일링 상태를 최종 Stage에 반영한다."""
+        reasons: list[str] = []
+
+        if (
+            trailing_stop_activated
+            and drawdown_from_high is not None
+            and drawdown_from_high >= trailing_stop_distance
+        ):
+            if stage != SellStageEnum.EXIT_ALL:
+                reasons.append(
+                    f"트레일링 스탑 발동: 고점 대비 {drawdown_from_high * 100:.1f}% 하락"
+                )
+            return SellStageEnum.EXIT_ALL, reasons
+
+        if not is_take_profit_triggered:
+            return stage, reasons
+
+        stage_order = [
+            SellStageEnum.HOLD,
+            SellStageEnum.REDUCE_1,
+            SellStageEnum.REDUCE_2,
+            SellStageEnum.EXIT_ALL,
+        ]
+        target_stage = SellStageEnum.REDUCE_2
+        if stage_order.index(stage) < stage_order.index(target_stage):
+            reasons.append("익절 목표 도달로 최종 Stage를 2차 비중 축소로 강화")
+            return target_stage, reasons
+
+        return stage, reasons
+
     def _collect_sharp_top_signals(
         self,
         stoch_k: float,
@@ -1322,9 +1370,7 @@ class SellStrategyService:
                 f"(수익률 {profit_ratio * 100:.1f}%)"
             )
             if is_etf_like:
-                reasons.append(
-                    "[sharp v1] ETF/레버리지 계열은 이익 보호 기준을 더 엄격하게 적용"
-                )
+                reasons.append("[sharp v1] ETF/레버리지 계열은 이익 보호 기준을 더 엄격하게 적용")
             reasons.extend(top_signals[:4])
             return SellStageEnum.REDUCE_2, reasons
 
@@ -1334,9 +1380,7 @@ class SellStrategyService:
                 f"(수익률 {profit_ratio * 100:.1f}%)"
             )
             if is_etf_like:
-                reasons.append(
-                    "[sharp v1] ETF/레버리지 계열은 수익 종목 우선 현금화 대상"
-                )
+                reasons.append("[sharp v1] ETF/레버리지 계열은 수익 종목 우선 현금화 대상")
             reasons.extend(top_signals[:4])
             return SellStageEnum.REDUCE_1, reasons
 
@@ -1398,7 +1442,9 @@ class SellStrategyService:
 
         # PHASE_5: 데드크로스 + 극단적 과열
         if is_death_cross and stoch_k > 90 and rsi > 85:
-            reasons.append(f"[Phase 5] 데드크로스 + 극단적 과열 (Stoch {stoch_k:.1f}, RSI {rsi:.1f})")
+            reasons.append(
+                f"[Phase 5] 데드크로스 + 극단적 과열 (Stoch {stoch_k:.1f}, RSI {rsi:.1f})"
+            )
             return SellPhaseEnum.PHASE_5, reasons
 
         # PHASE_4: 데드크로스 + 강한 과열
@@ -1418,7 +1464,9 @@ class SellStrategyService:
 
         # PHASE_1: GC 유지 + 극심한 과열 (수익 보호)
         if is_gc_active and stoch_k > 85 and rsi > 80:
-            reasons.append(f"[Phase 1] 골든크로스 유지 + 극심한 과열 (Stoch {stoch_k:.1f}, RSI {rsi:.1f})")
+            reasons.append(
+                f"[Phase 1] 골든크로스 유지 + 극심한 과열 (Stoch {stoch_k:.1f}, RSI {rsi:.1f})"
+            )
             return SellPhaseEnum.PHASE_1, reasons
 
         return SellPhaseEnum.NONE, reasons
@@ -1552,9 +1600,7 @@ class SellStrategyService:
             result["prev_volume"] = prev_volume
             return result
 
-        volume_ma_20 = TechnicalIndicators.calculate_volume_ma(
-            valid_volumes, period=20
-        )
+        volume_ma_20 = TechnicalIndicators.calculate_volume_ma(valid_volumes, period=20)
 
         if volume_ma_20 is None or volume_ma_20 <= 0:
             result["current_volume"] = current_volume
@@ -1562,9 +1608,7 @@ class SellStrategyService:
             return result
 
         # 거래량 비율 및 급증 여부
-        volume_ratio = TechnicalIndicators.calculate_volume_ratio(
-            current_volume, volume_ma_20
-        )
+        volume_ratio = TechnicalIndicators.calculate_volume_ratio(current_volume, volume_ma_20)
         is_volume_spike = TechnicalIndicators.is_volume_spike(
             current_volume, volume_ma_20, threshold=1.3
         )

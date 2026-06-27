@@ -13,7 +13,7 @@ NOTE: 라우터 순서 중요!
 
 from datetime import datetime
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Request, status
 
 from src.application.common.exceptions import ServiceUnavailableError
 
@@ -29,6 +29,7 @@ from src.application.common.dependencies import (
     StrategyServiceDep,
     StrategySymbolStateRepositoryDep,
     StockUniverseRepositoryDep,
+    verify_admin_access,
 )
 from src.application.common.dto import ResponseDTO
 from src.application.domain.strategy.dto import (
@@ -117,7 +118,9 @@ async def get_universe(
     service: StrategyServiceDep,
     market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ)"),
     eligible_only: bool = Query(default=True, description="스크리닝 통과 종목만"),
-    limit: int = Query(default=1000, ge=1, le=5000, description="(eligible_only=true일 때) 최대 조회 개수"),
+    limit: int = Query(
+        default=1000, ge=1, le=5000, description="(eligible_only=true일 때) 최대 조회 개수"
+    ),
 ) -> ResponseDTO[StockUniverseListDTO]:
     """종목 유니버스 조회 - @transaction이 세션을 관리"""
     universe = await service.get_stock_universe(market, eligible_only, limit=limit)
@@ -134,6 +137,7 @@ async def get_universe(
 async def refresh_universe(
     service: StrategyServiceDep,
     market_data_service: MarketDataServiceDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[UniverseRefreshResultDTO]:
     """유니버스 갱신 - @transaction이 세션을 관리"""
     if not market_data_service.has_valid_credentials():
@@ -142,7 +146,9 @@ async def refresh_universe(
     result = await service.refresh_universe()
     dto = UniverseRefreshResultDTO(**result)
     # ResponseDTO.success는 작업 결과(dto.success)와 일치시키는 것이 운영/클라이언트 측에서 혼동이 적음
-    message = "Universe refresh completed" if dto.success else (dto.message or "Universe refresh failed")
+    message = (
+        "Universe refresh completed" if dto.success else (dto.message or "Universe refresh failed")
+    )
     error = None if dto.success else {"timed_out": dto.timed_out, "message": dto.message}
     return ResponseDTO(success=dto.success, message=message, data=dto, error=error)
 
@@ -157,7 +163,9 @@ async def refresh_universe(
 async def scan_golden_cross(
     service: StrategyServiceDep,
     market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
-    stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
+    stoch_threshold: float = Query(
+        default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"
+    ),
     gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
     include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
     limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
@@ -172,8 +180,9 @@ async def scan_golden_cross(
     골든크로스 전략 조건에 따라 종목을 필터링합니다.
 
     상태:
-    - OPTIMAL_BUY: K<25, K>D, MA갭 0~5% (매수 적기)
-    - READY_TO_BUY: 골든크로스 활성 + Stochastic 과매도 (매수 준비)
+    - OPTIMAL_BUY: 최근 과매도 이후 K 회복/상승 + K>D + 건강한 MA갭 (매수 적기)
+    - BUY_INTEREST: 회복 흐름 일부 충족, 추가 확인 필요
+    - READY_TO_BUY: 골든크로스 활성 + 현재 Stochastic 과매도 (매수 준비)
     - WAITING_FOR_PULLBACK: 골든크로스 활성 + Stochastic 중간 (눌림목 대기)
     - GC_ACTIVE: 골든크로스 활성 + Stochastic 과매수 (대기)
     - NOT_GC: 골든크로스 비활성 (MA55 < MA165)
@@ -199,16 +208,33 @@ async def scan_golden_cross(
     description="골든크로스 스캔 결과를 기반으로 Top 종목 + Top 업종을 요약해서 반환",
 )
 async def golden_cross_recommendations(
+    request: Request,
     service: StrategyServiceDep,
     market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
-    stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
+    stoch_threshold: float = Query(
+        default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"
+    ),
     gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
     include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
     limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
     max_concurrent: int | None = Query(default=None, ge=1, le=50, description="동시 처리 수"),
     top_n: int = Query(default=5, ge=1, le=50, description="Top 종목 개수"),
     top_industries_n: int = Query(default=3, ge=1, le=20, description="Top 업종 개수"),
+    target_states: list[str] | None = Query(
+        default=None,
+        description="추천 대상 상태 목록 (기본: OPTIMAL_BUY)",
+    ),
+    min_recommendation_score: float = Query(
+        default=0.0, ge=0.0, le=100.0, description="최소 추천 점수"
+    ),
+    apply_financial_filter: bool = Query(default=False, description="DART 재무 필터 적용"),
+    financial_filter_max_concurrent: int = Query(
+        default=3, ge=1, le=10, description="재무 필터 DART 동시 처리 수"
+    ),
 ) -> ResponseDTO[GoldenCrossRecommendationDTO]:
+    if apply_financial_filter:
+        await verify_admin_access(request)
+
     result = await service.get_golden_cross_recommendations(
         market=market,
         stoch_threshold=stoch_threshold,
@@ -218,6 +244,10 @@ async def golden_cross_recommendations(
         max_concurrent=max_concurrent,
         top_n=top_n,
         top_industries_n=top_industries_n,
+        target_states=target_states,
+        min_recommendation_score=min_recommendation_score,
+        apply_financial_filter=apply_financial_filter,
+        financial_filter_max_concurrent=financial_filter_max_concurrent,
     )
     return ResponseDTO.success_response(result, "Golden cross recommendations generated")
 
@@ -231,15 +261,30 @@ async def golden_cross_recommendations(
 )
 async def notify_golden_cross_recommendations(
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep = None,
     market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
-    stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
+    stoch_threshold: float = Query(
+        default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"
+    ),
     gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
     include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
     limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
     max_concurrent: int | None = Query(default=None, ge=1, le=50, description="동시 처리 수"),
     top_n: int = Query(default=5, ge=1, le=50, description="Top 종목 개수"),
     top_industries_n: int = Query(default=3, ge=1, le=20, description="Top 업종 개수"),
+    target_states: list[str] | None = Query(
+        default=None,
+        description="추천 대상 상태 목록 (기본: OPTIMAL_BUY)",
+    ),
+    min_recommendation_score: float = Query(
+        default=0.0, ge=0.0, le=100.0, description="최소 추천 점수"
+    ),
+    apply_financial_filter: bool = Query(default=False, description="DART 재무 필터 적용"),
+    financial_filter_max_concurrent: int = Query(
+        default=3, ge=1, le=10, description="재무 필터 DART 동시 처리 수"
+    ),
 ) -> ResponseDTO[GoldenCrossRecommendationDTO]:
+    _ = admin_access
     result = await service.get_golden_cross_recommendations(
         market=market,
         stoch_threshold=stoch_threshold,
@@ -249,12 +294,14 @@ async def notify_golden_cross_recommendations(
         max_concurrent=max_concurrent,
         top_n=top_n,
         top_industries_n=top_industries_n,
+        target_states=target_states,
+        min_recommendation_score=min_recommendation_score,
+        apply_financial_filter=apply_financial_filter,
+        financial_filter_max_concurrent=financial_filter_max_concurrent,
     )
 
     notifier = get_telegram_notifier()
-    sent = await notifier.send_golden_cross_recommendations_summary(
-        result.model_dump(mode="json")
-    )
+    sent = await notifier.send_golden_cross_recommendations_summary(result.model_dump(mode="json"))
 
     msg = "Golden cross recommendations generated"
     if sent:
@@ -275,7 +322,9 @@ async def notify_golden_cross_recommendations(
 async def scan_golden_cross_symbols(
     symbols: list[dict],
     buy_service: BuyStrategyServiceDep,
-    stoch_threshold: float = Query(default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"),
+    stoch_threshold: float = Query(
+        default=30.0, ge=10.0, le=50.0, description="Stochastic 과매도 임계값"
+    ),
     gc_only: bool = Query(default=True, description="골든크로스 활성 종목만 반환"),
 ) -> ResponseDTO[GoldenCrossScanListDTO]:
     """
@@ -391,9 +440,10 @@ async def scan_ma5_breakout_symbols(
 async def apply_financial_filter(
     scan_result: GoldenCrossScanListDTO,
     buy_service: BuyStrategyServiceDep,
+    admin_access: AdminAccessDep = None,
     target_states: list[str] | None = Query(
         default=None,
-        description="필터 적용 대상 상태 (기본: OPTIMAL_BUY, BUY_INTEREST, READY_TO_BUY)"
+        description="필터 적용 대상 상태 (기본: OPTIMAL_BUY, BUY_INTEREST, READY_TO_BUY)",
     ),
 ) -> ResponseDTO[GoldenCrossScanListDTO]:
     """
@@ -415,6 +465,7 @@ async def apply_financial_filter(
 
     주의: DART API 일일 호출 한도(10,000건)가 있으므로 과도한 요청 주의
     """
+    _ = admin_access
     result = await buy_service.apply_financial_filter(
         scan_result=scan_result,
         target_states=target_states,
@@ -435,10 +486,16 @@ async def analyze_sell_signal(
     market_data_service: MarketDataServiceDep,
     state_repo: StrategySymbolStateRepositoryDep,
     universe_repo: StockUniverseRepositoryDep,
-    stoch_overbought: float = Query(default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값"),
+    stoch_overbought: float = Query(
+        default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값"
+    ),
     rsi_overbought: float = Query(default=70.0, ge=50.0, le=90.0, description="RSI 과매수 임계값"),
-    entry_price: float | None = Query(default=None, ge=0.0, description="진입가 (수익률 기반 동적 임계값 적용)"),
-    strategy_id: int | None = Query(default=None, ge=1, description="전략 ID (보유 종목 진입가 자동 조회)"),
+    entry_price: float | None = Query(
+        default=None, ge=0.0, description="진입가 (수익률 기반 동적 임계값 적용)"
+    ),
+    strategy_id: int | None = Query(
+        default=None, ge=1, description="전략 ID (보유 종목 진입가 자동 조회)"
+    ),
 ) -> ResponseDTO[SellSignalAnalysisDTO]:
     """
     매도 시그널 분석 - @transaction이 세션을 관리
@@ -525,6 +582,7 @@ async def analyze_sell_signal(
 async def create_analysis_history(
     request: AnalysisHistoryCreateDTO,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[AnalysisHistoryDTO]:
     """분석 이력 저장 - @transaction이 세션을 관리"""
     history = await service.save_analysis_history(request)
@@ -552,7 +610,9 @@ async def get_analysis_history_list(
         limit=limit,
         offset=offset,
     )
-    return ResponseDTO.success_response(history_list, "Analysis history list retrieved successfully")
+    return ResponseDTO.success_response(
+        history_list, "Analysis history list retrieved successfully"
+    )
 
 
 @router.get(
@@ -582,6 +642,7 @@ async def refresh_analysis_history(
     service: StrategyServiceDep,
     market_data_service: MarketDataServiceDep,
     analysis_type: str = Query(..., description="분석 유형 (buy/sell)"),
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[AnalysisHistoryRefreshResultDTO]:
     """분석 이력 일괄 갱신 - @transaction이 세션을 관리"""
     result = await service.refresh_analysis_history(analysis_type, market_data_service)
@@ -598,7 +659,9 @@ async def refresh_analysis_history(
 async def get_portfolio_cash_plan(
     service: StrategyServiceDep,
     target_cash_ratio: float = Query(default=0.30, ge=0.0, le=1.0, description="목표 현금 비중"),
-    current_cash_ratio: float | None = Query(default=None, ge=0.0, le=1.0, description="현재 현금 비중"),
+    current_cash_ratio: float | None = Query(
+        default=None, ge=0.0, le=1.0, description="현재 현금 비중"
+    ),
 ) -> ResponseDTO[PortfolioCashPlanDTO]:
     result = await service.get_portfolio_cash_plan(
         target_cash_ratio=target_cash_ratio,
@@ -618,6 +681,7 @@ async def update_analysis_history_active(
     history_id: int,
     service: StrategyServiceDep,
     is_active: bool = Query(..., description="활성 추적 여부"),
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[AnalysisHistoryDTO]:
     """활성 추적 상태 변경 - @transaction이 세션을 관리"""
     history = await service.set_analysis_history_active(history_id, is_active)
@@ -635,6 +699,7 @@ async def update_analysis_history(
     history_id: int,
     request: AnalysisHistoryUpdateDTO,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[AnalysisHistoryDTO]:
     """분석 이력 수정 - @transaction이 세션을 관리"""
     history = await service.update_analysis_history(
@@ -654,6 +719,7 @@ async def update_analysis_history(
 async def delete_analysis_history(
     history_id: int,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep = None,
 ) -> None:
     """분석 이력 삭제 - @transaction이 세션을 관리"""
     await service.delete_analysis_history(history_id)
@@ -688,6 +754,7 @@ async def activate_preset(
     preset_id: str,
     service: StrategyServiceDep,
     request: PresetActivateRequestDTO | None = None,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """프리셋 활성화 - 기존 create_strategy 재사용"""
     req = request or PresetActivateRequestDTO()
@@ -925,6 +992,7 @@ async def delete_strategy(
 async def start_strategy(
     strategy_id: int,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 시작 - @transaction이 세션을 관리"""
     strategy_data = await service.start_strategy(strategy_id)
@@ -941,6 +1009,7 @@ async def start_strategy(
 async def pause_strategy(
     strategy_id: int,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 일시정지 - @transaction이 세션을 관리"""
     strategy_data = await service.pause_strategy(strategy_id)
@@ -957,6 +1026,7 @@ async def pause_strategy(
 async def stop_strategy(
     strategy_id: int,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[StrategyDetailResponseDTO]:
     """전략 중지 - @transaction이 세션을 관리"""
     strategy_data = await service.stop_strategy(strategy_id)
@@ -993,6 +1063,7 @@ async def update_strategy_config(
     strategy_id: int,
     config: GoldenCrossConfigDTO,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[GoldenCrossConfigDTO]:
     """전략 설정 수정 - @transaction이 세션을 관리"""
     updated_config = await service.update_golden_cross_config(strategy_id, config)
@@ -1061,6 +1132,7 @@ async def execute_strategy(
     strategy_id: int,
     request: StrategyExecuteRequestDTO,
     service: StrategyServiceDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[StrategyExecuteResultDTO]:
     """전략 수동 실행 - @transaction이 세션을 관리"""
     result = await service.execute_golden_cross(

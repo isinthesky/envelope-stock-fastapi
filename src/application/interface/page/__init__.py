@@ -21,6 +21,7 @@ from src.application.interface.page.market_data_page_router import (
 )
 from src.application.interface.page.ohlcv_page_router import router as ohlcv_page_router
 from src.application.interface.page.order_page_router import router as order_page_router
+from src.application.interface.page.ops_page_router import router as ops_page_router
 from src.application.interface.page.public_strategy_page_router import (
     router as public_strategy_page_router,
 )
@@ -42,6 +43,7 @@ mypage_routers = [
     account_page_router,
     market_data_page_router,
     order_page_router,
+    ops_page_router,
     strategy_page_router,
     strategy_dashboard_page_router,
     sell_strategy_page_router,

@@ -2,7 +2,8 @@
 """
 KOFIA Client - 금융투자협회 통계 API 클라이언트
 
-현재는 신용공여 잔고 추이 조회에 필요한 최소 기능만 제공합니다.
+FreeSIS 화면에서 사용하는 메타/실데이터 조회 패턴을 그대로 따라
+시장 신용공여 잔고 추이를 조회합니다.
 """
 
 from __future__ import annotations
@@ -21,6 +22,16 @@ from src.adapters.database.repositories.market_credit_snapshot_repository import
 )
 
 
+@dataclass(frozen=True)
+class KofiaServiceMeta:
+    """FreeSIS 서비스 메타데이터"""
+
+    service_id: str
+    obj_name: str
+    unit_value: str
+    latest_daily_date: str | None
+
+
 @dataclass
 class MarketCreditTrendData:
     """시장 신용공여 잔고 추이 데이터"""
@@ -37,16 +48,27 @@ class MarketCreditTrendData:
 
 
 class KofiaClient:
-    BASE_URL = "https://freesis.kofia.or.kr/meta/getMetaDataList.do"
+    PAGE_URL_TEMPLATE = (
+        "https://freesis.kofia.or.kr/stat/FreeSIS.do?parentDivId=MSIS10000000000000&serviceId={service_id}"
+    )
+    META_URL = "https://freesis.kofia.or.kr/meta/getSrvData.do"
+    DATA_URL = "https://freesis.kofia.or.kr/meta/getMetaDataList.do"
+    MARKET_CREDIT_SERVICE_ID = "STATSCU0100000070"
 
     MARKET_LABELS: tuple[str, ...] = ("전체", "유가증권", "코스닥")
     CACHE_MIN_ROWS = 2
     BACKFILL_CHUNK_DAYS = 180
+    DEFAULT_UNIT_SCALE = "1"
+    DEFAULT_UNIT_FLAG = "1"
 
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
+        self._page_prime_lock = asyncio.Lock()
+        self._service_meta_lock = asyncio.Lock()
         self._rate_limit = asyncio.Semaphore(2)
+        self._primed_service_ids: set[str] = set()
+        self._service_meta_cache: dict[str, KofiaServiceMeta] = {}
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -55,6 +77,7 @@ class KofiaClient:
                     self._client = httpx.AsyncClient(
                         timeout=15.0,
                         headers={"User-Agent": "Mozilla/5.0"},
+                        follow_redirects=True,
                     )
         return self._client
 
@@ -62,67 +85,212 @@ class KofiaClient:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        self._primed_service_ids.clear()
+        self._service_meta_cache.clear()
+
+    @staticmethod
+    def _build_page_url(service_id: str) -> str:
+        return KofiaClient.PAGE_URL_TEMPLATE.format(service_id=service_id)
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
         retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
     )
-    async def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post_json(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        *,
+        referer: str | None = None,
+    ) -> dict[str, Any]:
         async with self._rate_limit:
             client = await self._get_client()
-            response = await client.post(
-                self.BASE_URL,
-                json=payload,
-                headers={"Content-Type": "application/json; charset=UTF-8"},
-            )
+            headers = {"Content-Type": "application/json; charset=UTF-8"}
+            if referer:
+                headers["Referer"] = referer
+                headers["Origin"] = "https://freesis.kofia.or.kr"
+                headers["X-Requested-With"] = "XMLHttpRequest"
+
+            response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as exc:
+                snippet = response.text[:300].replace("\n", " ")
+                raise RuntimeError(f"KOFIA JSON 응답 파싱 실패: {snippet}") from exc
+
+    async def _prime_service_page(self, service_id: str) -> str:
+        page_url = self._build_page_url(service_id)
+        if service_id in self._primed_service_ids:
+            return page_url
+
+        async with self._page_prime_lock:
+            if service_id in self._primed_service_ids:
+                return page_url
+
+            client = await self._get_client()
+            async with self._rate_limit:
+                response = await client.get(page_url)
+                response.raise_for_status()
+            self._primed_service_ids.add(service_id)
+            return page_url
+
+    async def _get_service_meta(self, service_id: str) -> KofiaServiceMeta:
+        cached = self._service_meta_cache.get(service_id)
+        if cached is not None:
+            return cached
+
+        async with self._service_meta_lock:
+            cached = self._service_meta_cache.get(service_id)
+            if cached is not None:
+                return cached
+
+            page_url = await self._prime_service_page(service_id)
+            payload = {
+                "dmSearchData": {
+                    "strSvrId": service_id,
+                    "app_peron_yn": "Y",
+                    "language_gb": "KOR",
+                    "strGetCode": "Y",
+                }
+            }
+            data = await self._post_json(self.META_URL, payload, referer=page_url)
+
+            grid_servlet = data.get("dsGridServlet") or []
+            grid_sql = data.get("dsGridSQL") or []
+            grid_info = data.get("dsGridInfo") or []
+            search_cd_list = data.get("dsSearchCdList") or []
+            list_app_dates = data.get("dsListAppDt") or []
+
+            obj_name = (
+                (grid_servlet[0].get("OBJ_NM") if grid_servlet else None)
+                or (grid_sql[0].get("OBJ_NM") if grid_sql else None)
+            )
+            if not obj_name:
+                raise RuntimeError(f"KOFIA OBJ_NM 조회 실패: service_id={service_id}")
+
+            basic_unit = grid_info[0].get("BASIC_UNIT") if grid_info else None
+            unit_value = self._resolve_unit_value(basic_unit, search_cd_list)
+            latest_daily_date = list_app_dates[0].get("TMPV1") if list_app_dates else None
+
+            meta = KofiaServiceMeta(
+                service_id=service_id,
+                obj_name=str(obj_name),
+                unit_value=unit_value,
+                latest_daily_date=str(latest_daily_date) if latest_daily_date else None,
+            )
+            self._service_meta_cache[service_id] = meta
+            return meta
+
+    @classmethod
+    def _resolve_unit_value(
+        cls,
+        basic_unit: str | None,
+        search_cd_list: list[dict[str, Any]],
+    ) -> str:
+        if not basic_unit:
+            return cls.DEFAULT_UNIT_SCALE
+
+        group_cd, _, common_cd = basic_unit.partition("^")
+        if not group_cd or not common_cd:
+            return cls.DEFAULT_UNIT_SCALE
+
+        for row in search_cd_list:
+            if row.get("GROUP_CD") == group_cd and row.get("COMMON_CD") == common_cd:
+                resolved = row.get("CODE_ENGNM") or row.get("CODE_NM")
+                if resolved not in (None, ""):
+                    return str(resolved)
+        return cls.DEFAULT_UNIT_SCALE
+
+    async def _fetch_service_rows(
+        self,
+        service_id: str,
+        start_date: str,
+        end_date: str,
+        cycle: str = "D",
+    ) -> list[dict[str, Any]]:
+        page_url = await self._prime_service_page(service_id)
+        meta = await self._get_service_meta(service_id)
+
+        payload = {
+            "dmSearch": {
+                "OBJ_NM": meta.obj_name,
+                "tmpV40": meta.unit_value,
+                "tmpV41": self.DEFAULT_UNIT_FLAG,
+                "tmpV1": cycle,
+                "tmpV45": start_date,
+                "tmpV46": end_date,
+            }
+        }
+        data = await self._post_json(self.DATA_URL, payload, referer=page_url)
+        rows = data.get("ds1") or []
+        return rows if isinstance(rows, list) else []
+
+    @classmethod
+    def _build_market_credit_snapshots(
+        cls,
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        mapped_rows: list[dict[str, Any]] = []
+        column_map = {
+            "전체": ("TMPV2", "TMPV5"),
+            "유가증권": ("TMPV3", "TMPV6"),
+            "코스닥": ("TMPV4", "TMPV7"),
+        }
+
+        for row in rows:
+            biz_date = str(row.get("TMPV1") or "")
+            if not biz_date.isdigit():
+                continue
+
+            for market_label, (balance_col, short_col) in column_map.items():
+                balance_million = cls._to_int(row.get(balance_col))
+                short_balance_million = cls._to_int(row.get(short_col))
+                if balance_million is None and short_balance_million is None:
+                    continue
+
+                mapped_rows.append(
+                    {
+                        "market_label": market_label,
+                        "biz_date": biz_date,
+                        "trading_volume": None,
+                        "balance_million": balance_million,
+                        "short_balance_million": short_balance_million,
+                    }
+                )
+
+        return mapped_rows
 
     async def _fetch_and_cache_snapshots(
         self,
         start_date: str,
         end_date: str,
     ) -> dict[str, int]:
-        payload = {
-            "dmSearch": {
-                "OBJ_NM": "STATSCU0100000140BO",
-                "tmpV1": "D",
-                "tmpV40": "1000000",
-                "tmpV41": "1",
-                "tmpV45": start_date,
-                "tmpV46": end_date,
-                "tmpV72": "",
-            }
-        }
+        rows = await self._fetch_service_rows(
+            service_id=self.MARKET_CREDIT_SERVICE_ID,
+            start_date=start_date,
+            end_date=end_date,
+            cycle="D",
+        )
+        snapshot_rows = self._build_market_credit_snapshots(rows)
 
-        data = await self._post_json(payload)
-        rows = data.get("ds1") or []
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        valid_labels = set(self.MARKET_LABELS)
-        for row in rows:
-            label = row.get("TMPV2")
-            biz_date = str(row.get("TMPV1") or "")
-            if not label or label not in valid_labels:
-                continue
-            if not biz_date.isdigit():
-                continue
-            grouped.setdefault(label, []).append(row)
-
+        counts = {label: 0 for label in self.MARKET_LABELS}
         async with get_async_session() as session:
             repo = MarketCreditSnapshotRepository(session)
             await repo.delete_invalid_labels(list(self.MARKET_LABELS), session=session)
-            for label, label_rows in grouped.items():
-                for row in label_rows:
-                    await repo.upsert_snapshot(
-                        market_label=label,
-                        biz_date=str(row.get("TMPV1")),
-                        trading_volume=self._to_int(row.get("TMPV3")),
-                        balance_million=self._to_int(row.get("TMPV5")),
-                        short_balance_million=self._to_int(row.get("TMPV6")),
-                        session=session,
-                    )
-        return {label: len(label_rows) for label, label_rows in grouped.items()}
+            for snapshot in snapshot_rows:
+                await repo.upsert_snapshot(
+                    market_label=snapshot["market_label"],
+                    biz_date=snapshot["biz_date"],
+                    trading_volume=snapshot["trading_volume"],
+                    balance_million=snapshot["balance_million"],
+                    short_balance_million=snapshot["short_balance_million"],
+                    session=session,
+                )
+                counts[snapshot["market_label"]] = counts.get(snapshot["market_label"], 0) + 1
+
+        return {label: count for label, count in counts.items() if count > 0}
 
     @staticmethod
     def _iter_date_chunks(

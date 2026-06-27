@@ -5,7 +5,7 @@ Auth Router - 인증 API 엔드포인트
 
 from fastapi import APIRouter, status
 
-from src.application.common.dependencies import KISAuthDep
+from src.application.common.dependencies import AdminAccessDep, KISAuthDep
 from src.application.common.dto import ResponseDTO
 from src.application.domain.auth.dto import (
     TokenRefreshRequestDTO,
@@ -26,7 +26,7 @@ router = APIRouter()
     description="KIS API 액세스 토큰 발급",
 )
 async def get_token(
-    request: TokenRefreshRequestDTO, kis_auth: KISAuthDep
+    request: TokenRefreshRequestDTO, kis_auth: KISAuthDep, admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[TokenResponseDTO]:
     """액세스 토큰 발급"""
     service = AuthService(kis_auth)
@@ -41,7 +41,7 @@ async def get_token(
     summary="토큰 갱신",
     description="액세스 토큰 갱신",
 )
-async def refresh_token(kis_auth: KISAuthDep) -> ResponseDTO[TokenResponseDTO]:
+async def refresh_token(kis_auth: KISAuthDep, admin_access: AdminAccessDep = None) -> ResponseDTO[TokenResponseDTO]:
     """토큰 갱신"""
     service = AuthService(kis_auth)
     token_data = await service.refresh_token()
@@ -55,7 +55,7 @@ async def refresh_token(kis_auth: KISAuthDep) -> ResponseDTO[TokenResponseDTO]:
     summary="토큰 상태 조회",
     description="현재 토큰의 유효성 및 만료 시간 조회",
 )
-async def get_token_status(kis_auth: KISAuthDep) -> ResponseDTO[TokenStatusDTO]:
+async def get_token_status(kis_auth: KISAuthDep, admin_access: AdminAccessDep = None) -> ResponseDTO[TokenStatusDTO]:
     """토큰 상태 조회"""
     service = AuthService(kis_auth)
     status_data = await service.get_token_status()
@@ -71,6 +71,7 @@ async def get_token_status(kis_auth: KISAuthDep) -> ResponseDTO[TokenStatusDTO]:
 )
 async def get_websocket_approval(
     kis_auth: KISAuthDep,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[WebSocketAuthResponseDTO]:
     """WebSocket 승인 키 발급"""
     service = AuthService(kis_auth)
@@ -87,7 +88,7 @@ async def get_websocket_approval(
     summary="거래 환경 조회",
     description="현재 거래 환경 (실전/모의) 조회",
 )
-async def get_environment(kis_auth: KISAuthDep) -> ResponseDTO[dict[str, str]]:
+async def get_environment(kis_auth: KISAuthDep, admin_access: AdminAccessDep = None) -> ResponseDTO[dict[str, str]]:
     """거래 환경 조회"""
     service = AuthService(kis_auth)
     env_data = {

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     # ==================== 애플리케이션 설정 ====================
-    app_name: str = Field(default="KIS Trading API Service", description="애플리케이션 이름")
+    app_name: str = Field(default="KIS Strategy & Alert Server", description="애플리케이션 이름")
     app_version: str = Field(default="0.1.0", description="애플리케이션 버전")
     env: Literal["development", "staging", "production"] = Field(
         default="development", description="실행 환경"
@@ -45,9 +45,7 @@ class Settings(BaseSettings):
     # ==================== Redis 설정 ====================
     redis_url: str = Field(default="redis://localhost:6379/0", description="Redis 연결 URL")
     redis_password: str | None = Field(default=None, description="Redis 비밀번호")
-    redis_max_connections: int = Field(
-        default=50, ge=1, le=1000, description="Redis 최대 연결 수"
-    )
+    redis_max_connections: int = Field(default=50, ge=1, le=1000, description="Redis 최대 연결 수")
 
     # ==================== 캐시 TTL ====================
     cache_ttl_market_data: int = Field(default=5, ge=1, description="시세 데이터 캐시 TTL (초)")
@@ -57,9 +55,7 @@ class Settings(BaseSettings):
     cache_ttl_daily_candles: int = Field(
         default=86400, ge=1, description="일봉/주봉/월봉 캐시 TTL (초)"
     )
-    cache_ttl_intraday_candles: int = Field(
-        default=900, ge=1, description="분봉 캐시 TTL (초)"
-    )
+    cache_ttl_intraday_candles: int = Field(default=900, ge=1, description="분봉 캐시 TTL (초)")
     cache_ttl_account: int = Field(default=30, ge=1, description="계좌 정보 캐시 TTL (초)")
     cache_ttl_token: int = Field(default=86400, ge=1, description="토큰 캐시 TTL (초)")
     cache_retention_ticks_days: int = Field(
@@ -151,9 +147,7 @@ class Settings(BaseSettings):
     kis_api_backoff_cycles_before_cooldown: int = Field(
         default=3, ge=1, description="쿨다운 전 backoff 시퀀스 반복 횟수"
     )
-    order_min_interval_ms: int = Field(
-        default=150, ge=0, description="주문 간 최소 간격 (ms)"
-    )
+    order_min_interval_ms: int = Field(default=150, ge=0, description="주문 간 최소 간격 (ms)")
     order_same_symbol_interval_ms: int = Field(
         default=300, ge=0, description="동일 종목 연속 주문 최소 간격 (ms)"
     )
@@ -231,8 +225,16 @@ class Settings(BaseSettings):
 
     # ==================== 관리자 접근 제어 ====================
     admin_allowed_ips: list[str] = Field(
-        default=["127.0.0.1", "::1", "172.17.0.1", "192.168.0.0/16", "10.0.0.0/8"],
-        description="관리자 API 허용 IP 목록 (CIDR 표기 지원)",
+        default=["127.0.0.1", "::1"],
+        description=(
+            "관리자 API 허용 IP 목록 (CIDR 표기 지원). 기본값은 localhost만 허용하며, "
+            "환경 변수로 더 좁게/넓게 조정할 수 있습니다."
+        ),
+    )
+
+    trusted_proxy_ips: list[str] = Field(
+        default=["127.0.0.0/8", "::1/128"],
+        description="X-Forwarded-For/X-Real-IP를 신뢰할 reverse proxy IP/CIDR 목록",
     )
 
     enable_admin_strategy_routes: bool = Field(
@@ -259,9 +261,7 @@ class Settings(BaseSettings):
     dart_api_base_url: str = Field(
         default="https://opendart.fss.or.kr", description="DART API Base URL"
     )
-    dart_api_rate_limit: int = Field(
-        default=10000, ge=1, description="DART API 일일 호출 제한"
-    )
+    dart_api_rate_limit: int = Field(default=10000, ge=1, description="DART API 일일 호출 제한")
     dart_api_timeout: int = Field(default=30, ge=1, description="DART API 타임아웃 (초)")
 
     # ==================== Computed Properties ====================
@@ -309,13 +309,15 @@ class Settings(BaseSettings):
     # ==================== Validators ====================
 
     @model_validator(mode="after")
-    def warn_insecure_jwt_secret(self) -> "Settings":
-        """운영 환경에서 기본 JWT 시크릿 사용 시 경고"""
-        if self.env == "production" and self.jwt_secret_key == "your-secret-key-here-change-in-production":
-            warnings.warn(
-                "JWT_SECRET_KEY가 기본값입니다. 운영 환경에서는 반드시 변경하세요.",
-                UserWarning,
-                stacklevel=2,
+    def validate_jwt_secret(self) -> "Settings":
+        """운영 환경에서 기본 JWT 시크릿 사용 시 차단"""
+        if (
+            self.env == "production"
+            and self.jwt_secret_key == "your-secret-key-here-change-in-production"
+        ):
+            raise ValueError(
+                "JWT_SECRET_KEY가 기본값입니다. 운영 환경에서는 반드시 변경하세요. "
+                "환경 변수 JWT_SECRET_KEY를 설정해주세요."
             )
         return self
 

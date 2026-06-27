@@ -5,7 +5,7 @@ Account Router - 계좌 관리 API 엔드포인트
 
 from fastapi import APIRouter, Query, status
 
-from src.application.common.dependencies import KISClientDep, RedisDep
+from src.application.common.dependencies import AdminAccessDep, KISClientDep, RedisDep
 from src.application.common.dto import ResponseDTO
 from src.application.domain.account.dto import (
     AccountBalanceResponseDTO,
@@ -28,6 +28,7 @@ async def get_account_balance(
     use_cache: bool = Query(default=True, description="캐시 사용 여부"),
     kis_client: KISClientDep = None,
     redis: RedisDep = None,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[AccountBalanceResponseDTO]:
     """계좌 잔고 조회"""
     service = AccountService(kis_client, redis)
@@ -46,6 +47,7 @@ async def get_position_list(
     account_no: str | None = Query(default=None, description="계좌번호"),
     kis_client: KISClientDep = None,
     redis: RedisDep = None,
+    admin_access: AdminAccessDep = None,
 ) -> ResponseDTO[PositionListResponseDTO]:
     """포지션 목록 조회"""
     service = AccountService(kis_client, redis)

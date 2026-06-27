@@ -68,37 +68,41 @@ class RiskManagementConfig(BaseDTO):
     trailing_stop_ratio: float | None = Field(
         default=None, description="Trailing Stop 비율", ge=0.01, le=0.2
     )
-    use_reverse_signal_exit: bool = Field(
-        default=True, description="반대 시그널 발생 시 청산"
-    )
+    use_reverse_signal_exit: bool = Field(default=True, description="반대 시그널 발생 시 청산")
     # ATR 기반 동적 손절/트레일링
     use_atr_stop_loss: bool = Field(default=False, description="ATR 기반 손절 사용 여부")
     atr_stop_loss_multiplier: float = Field(
         default=2.0, description="ATR 손절 배수 (예: 2.0 = 진입가 - 2*ATR에서 손절)", ge=0.5, le=5.0
     )
-    use_atr_trailing_stop: bool = Field(default=False, description="ATR 기반 트레일링 스톱 사용 여부")
+    use_atr_trailing_stop: bool = Field(
+        default=False, description="ATR 기반 트레일링 스톱 사용 여부"
+    )
     atr_trailing_multiplier: float = Field(
-        default=2.0, description="ATR 트레일링 배수 (예: 2.0 = 최고가 - 2*ATR에서 청산)", ge=0.5, le=5.0
+        default=2.0,
+        description="ATR 트레일링 배수 (예: 2.0 = 최고가 - 2*ATR에서 청산)",
+        ge=0.5,
+        le=5.0,
     )
     atr_period: int = Field(default=14, description="ATR 계산 기간", ge=5, le=50)
 
 
 class BaseStrategyConfig(BaseDTO):
     """기본 전략 설정"""
+
     pass
 
 
 class BollingerStrategyConfigDTO(BaseStrategyConfig):
     """볼린저 밴드/엔벨로프 전략 설정 (기존 StrategyConfigDTO)"""
 
-    strategy_type: Literal["mean_reversion"] = Field(default="mean_reversion", description="전략 유형")
+    strategy_type: Literal["mean_reversion"] = Field(
+        default="mean_reversion", description="전략 유형"
+    )
     bollinger_band: BollingerBandConfig = Field(default_factory=BollingerBandConfig)
     envelope: EnvelopeConfig = Field(default_factory=EnvelopeConfig)
     position: PositionConfig = Field(default_factory=PositionConfig)
     risk_management: RiskManagementConfig = Field(default_factory=RiskManagementConfig)
-    check_interval: int = Field(
-        default=60, description="체크 주기 (초)", ge=10, le=3600
-    )
+    check_interval: int = Field(default=60, description="체크 주기 (초)", ge=10, le=3600)
 
 
 # ==================== Golden Cross Strategy DTOs ====================
@@ -118,7 +122,9 @@ class StochasticConfig(BaseDTO):
     d_period: int = Field(default=3, description="%D 기간", ge=2, le=10)
     oversold_threshold: float = Field(default=25.0, description="과매도 기준", ge=10, le=40)
     recovery_threshold: float = Field(default=20.0, description="회복 기준", ge=10, le=40)
-    strong_recovery_threshold: float = Field(default=30.0, description="강한 회복 기준", ge=20, le=50)
+    strong_recovery_threshold: float = Field(
+        default=30.0, description="강한 회복 기준", ge=20, le=50
+    )
 
     # OPTIMAL_BUY 조건용 (보수적 완화)
     deep_oversold_threshold: float = Field(
@@ -169,8 +175,12 @@ class GoldenCrossRiskConfig(BaseDTO):
 
     # 트레일링 스탑
     use_trailing_stop: bool = Field(default=True, description="트레일링 스탑 사용")
-    trailing_stop_activation: float = Field(default=0.15, description="활성화 수익률", ge=0.05, le=0.30)
-    trailing_stop_distance: float = Field(default=0.07, description="트레일링 거리", ge=0.03, le=0.15)
+    trailing_stop_activation: float = Field(
+        default=0.15, description="활성화 수익률", ge=0.05, le=0.30
+    )
+    trailing_stop_distance: float = Field(
+        default=0.07, description="트레일링 거리", ge=0.03, le=0.15
+    )
 
     # 보유 기간
     max_hold_days: int = Field(default=60, description="최대 보유 기간 (일)", ge=10, le=180)
@@ -226,9 +236,7 @@ class StockScreenerConfigDTO(BaseDTO):
     max_price: int = Field(default=500_000, description="최대 주가 (원)", le=10_000_000)
 
     # 제외 섹터
-    excluded_sectors: list[str] = Field(
-        default_factory=list, description="제외 섹터 목록"
-    )
+    excluded_sectors: list[str] = Field(default_factory=list, description="제외 섹터 목록")
 
     # 최대 종목 수
     max_stocks: int = Field(default=500, description="최대 종목 수", ge=10, le=500)
@@ -263,8 +271,7 @@ class GoldenCrossConfigDTO(BaseStrategyConfig):
 
 # 다형성을 위한 Union 타입
 StrategyConfigUnion = Annotated[
-    Union[BollingerStrategyConfigDTO, GoldenCrossConfigDTO],
-    Field(discriminator="strategy_type")
+    Union[BollingerStrategyConfigDTO, GoldenCrossConfigDTO], Field(discriminator="strategy_type")
 ]
 
 # 구버전 호환성을 위한 별칭
@@ -292,7 +299,9 @@ class StrategyPresetListDTO(BaseDTO):
 class PresetActivateRequestDTO(BaseDTO):
     """프리셋 활성화 요청 DTO"""
 
-    symbols: list[str] | None = Field(default=None, description="대상 종목 리스트 (미지정 시 유니버스 전체)")
+    symbols: list[str] | None = Field(
+        default=None, description="대상 종목 리스트 (미지정 시 유니버스 전체)"
+    )
     name_override: str | None = Field(default=None, description="전략명 오버라이드", max_length=100)
 
 
@@ -308,12 +317,12 @@ class StrategyCreateRequestDTO(BaseDTO):
     )
     account_no: str | None = Field(default=None, description="계좌번호")
     symbols: list[str] = Field(description="대상 종목 리스트", min_length=1)
-    
+
     # 통합 설정 필드 (다형성 지원)
     config: StrategyConfigUnion | None = Field(
         default=None, description="전략 설정 (유형에 따라 자동 매핑)"
     )
-    
+
     # 하위 호환성 유지 (Deprecated)
     golden_cross_config: GoldenCrossConfigDTO | None = Field(
         default=None, description="골든크로스 전략 설정 (Deprecated: config 사용 권장)"
@@ -334,12 +343,12 @@ class StrategyUpdateRequestDTO(BaseDTO):
     name: str | None = Field(default=None, description="전략명", min_length=1, max_length=100)
     description: str | None = Field(default=None, description="전략 설명")
     symbols: list[str] | None = Field(default=None, description="대상 종목 리스트")
-    
+
     # 통합 설정 필드
     config: StrategyConfigUnion | None = Field(
         default=None, description="전략 설정 (유형에 따라 자동 매핑)"
     )
-    
+
     # 하위 호환성 유지
     golden_cross_config: GoldenCrossConfigDTO | None = Field(
         default=None, description="골든크로스 전략 설정 (Deprecated)"
@@ -362,17 +371,15 @@ class StrategyDetailResponseDTO(BaseDTO):
     account_no: str = Field(description="계좌번호")
     symbols: list[str] = Field(description="대상 종목 리스트")
     status: str = Field(description="전략 상태")
-    
+
     # 통합 설정 필드
-    config: StrategyConfigUnion | None = Field(
-        default=None, description="전략 설정"
-    )
-    
+    config: StrategyConfigUnion | None = Field(default=None, description="전략 설정")
+
     # 하위 호환성 유지
     golden_cross_config: GoldenCrossConfigDTO | None = Field(
         default=None, description="골든크로스 전략 설정 (Deprecated)"
     )
-    
+
     total_executions: int = Field(description="총 실행 횟수")
     successful_executions: int = Field(description="성공 실행 횟수")
     failed_executions: int = Field(description="실패 실행 횟수")
@@ -541,7 +548,9 @@ class UniverseRefreshResultDTO(BaseDTO):
     errors_truncated: bool = Field(default=False, description="errors 리스트 잘림 여부")
     errors: list[str] = Field(default_factory=list, description="오류 메시지(일부) 목록")
 
-    warning_counts: dict[str, int] = Field(default_factory=dict, description="카테고리별 경고/실패 카운트")
+    warning_counts: dict[str, int] = Field(
+        default_factory=dict, description="카테고리별 경고/실패 카운트"
+    )
 
     refreshed_at: str = Field(default="", description="갱신 완료 시각(isoformat)")
 
@@ -582,13 +591,17 @@ class GoldenCrossScanItemDTO(BaseDTO):
 
     # 재무 필터 (2차 필터) - DART API에서 조회
     financial_filter_status: str | None = Field(
-        default=None,
-        description="재무 필터 상태 (PASS, FAIL, TURNAROUND, PENDING, ERROR)"
+        default=None, description="재무 필터 상태 (PASS, FAIL, TURNAROUND, PENDING, ERROR)"
     )
     revenue_yoy: float | None = Field(default=None, description="매출 YoY 증가율 (%)")
     operating_margin: float | None = Field(default=None, description="영업이익률 (%)")
     is_consecutive_profit: bool | None = Field(default=None, description="2년 연속 흑자 여부")
     is_turnaround: bool | None = Field(default=None, description="적자→흑자 전환 여부")
+
+    # 추천 설명
+    recommendation_score: float | None = Field(default=None, description="추천 정렬 점수")
+    recommendation_reasons: list[str] = Field(default_factory=list, description="추천 사유")
+    filter_reasons: list[str] = Field(default_factory=list, description="추천 제외/주의 사유")
 
 
 class GoldenCrossScanListDTO(BaseDTO):
@@ -606,8 +619,12 @@ class GoldenCrossScanListDTO(BaseDTO):
 
     # 재무 필터 통계
     financial_pass_count: int = Field(default=0, description="재무 필터 통과 종목 수")
-    financial_fail_count: int = Field(default=0, description="재무 필터 미통과 종목 수 (조건 불충족)")
-    financial_error_count: int = Field(default=0, description="재무 필터 오류 종목 수 (조회 실패/데이터 없음)")
+    financial_fail_count: int = Field(
+        default=0, description="재무 필터 미통과 종목 수 (조건 불충족)"
+    )
+    financial_error_count: int = Field(
+        default=0, description="재무 필터 오류 종목 수 (조회 실패/데이터 없음)"
+    )
     turnaround_count: int = Field(default=0, description="턴어라운드(적자→흑자) 종목 수")
     financial_pending_count: int = Field(default=0, description="재무 필터 미조회 종목 수")
 
@@ -632,6 +649,17 @@ class GoldenCrossRecommendationDTO(BaseDTO):
     buy_candidate_count: int = Field(description="매수 후보 종목 수")
     scan_time: datetime = Field(description="기준 스캔 시각")
     errors: list[str] = Field(default_factory=list, description="스캔 경고/오류 메시지")
+    candidate_state_counts: dict[str, int] = Field(
+        default_factory=dict, description="추천 대상 상태별 후보 수"
+    )
+    selected_state_counts: dict[str, int] = Field(
+        default_factory=dict, description="Top 종목 상태별 수"
+    )
+    financial_status_counts: dict[str, int] = Field(
+        default_factory=dict, description="재무 필터 상태별 수"
+    )
+    excluded_count: int = Field(default=0, description="추천 제외 종목 수")
+    selection_criteria: list[str] = Field(default_factory=list, description="추천 선정 기준")
 
 
 # ==================== MA5 Breakout Strategy DTOs ====================
@@ -704,12 +732,12 @@ class StrategyExecuteResultDTO(BaseDTO):
 class SellPhaseEnum(str, Enum):
     """매도 Phase 단계"""
 
-    NONE = "NONE"           # 매도 조건 없음
-    PHASE_1 = "PHASE_1"     # 수익 보호 (GC 유지 + 과열)
-    PHASE_2 = "PHASE_2"     # 매도 준비 (MA 갭 축소 + 과열)
-    PHASE_3 = "PHASE_3"     # 매도 고려 (데드크로스 + 과열)
-    PHASE_4 = "PHASE_4"     # 매도 권장 (데드크로스 + 강한 과열)
-    PHASE_5 = "PHASE_5"     # 강력 매도 (데드크로스 + 극단적 과열)
+    NONE = "NONE"  # 매도 조건 없음
+    PHASE_1 = "PHASE_1"  # 수익 보호 (GC 유지 + 과열)
+    PHASE_2 = "PHASE_2"  # 매도 준비 (MA 갭 축소 + 과열)
+    PHASE_3 = "PHASE_3"  # 매도 고려 (데드크로스 + 과열)
+    PHASE_4 = "PHASE_4"  # 매도 권장 (데드크로스 + 강한 과열)
+    PHASE_5 = "PHASE_5"  # 강력 매도 (데드크로스 + 극단적 과열)
 
 
 class SellStageEnum(str, Enum):
@@ -719,10 +747,10 @@ class SellStageEnum(str, Enum):
     SellStageEnum은 비중축소 비율 결정에만 사용.
     """
 
-    HOLD = "HOLD"             # 보유 유지 (0%)
-    REDUCE_1 = "REDUCE_1"     # 1차 축소 (20~30%)
-    REDUCE_2 = "REDUCE_2"     # 2차 축소 (30~40%)
-    EXIT_ALL = "EXIT_ALL"     # 전량 청산 (100%)
+    HOLD = "HOLD"  # 보유 유지 (0%)
+    REDUCE_1 = "REDUCE_1"  # 1차 축소 (20~30%)
+    REDUCE_2 = "REDUCE_2"  # 2차 축소 (30~40%)
+    EXIT_ALL = "EXIT_ALL"  # 전량 청산 (100%)
 
 
 # 비중축소 단계별 매도 비율 (min, max)
@@ -730,18 +758,18 @@ SELL_STAGE_RATIOS: dict[SellStageEnum, tuple[float, float]] = {
     SellStageEnum.HOLD: (0.0, 0.0),
     SellStageEnum.REDUCE_1: (0.20, 0.30),  # 20~30%
     SellStageEnum.REDUCE_2: (0.30, 0.40),  # 30~40%
-    SellStageEnum.EXIT_ALL: (1.0, 1.0),    # 100%
+    SellStageEnum.EXIT_ALL: (1.0, 1.0),  # 100%
 }
 
 
 # Phase → Stage 매핑 (하위호환)
 PHASE_TO_STAGE_MAP: dict[SellPhaseEnum, SellStageEnum] = {
     SellPhaseEnum.NONE: SellStageEnum.HOLD,
-    SellPhaseEnum.PHASE_1: SellStageEnum.HOLD,       # 수익 보호 → 아직 매도 안 함
-    SellPhaseEnum.PHASE_2: SellStageEnum.REDUCE_1,   # 매도 준비 → 1차 축소
-    SellPhaseEnum.PHASE_3: SellStageEnum.REDUCE_1,   # 매도 고려 → 1차 축소
-    SellPhaseEnum.PHASE_4: SellStageEnum.REDUCE_2,   # 매도 권장 → 2차 축소
-    SellPhaseEnum.PHASE_5: SellStageEnum.EXIT_ALL,   # 강력 매도 → 전량 청산
+    SellPhaseEnum.PHASE_1: SellStageEnum.HOLD,  # 수익 보호 → 아직 매도 안 함
+    SellPhaseEnum.PHASE_2: SellStageEnum.REDUCE_1,  # 매도 준비 → 1차 축소
+    SellPhaseEnum.PHASE_3: SellStageEnum.REDUCE_1,  # 매도 고려 → 1차 축소
+    SellPhaseEnum.PHASE_4: SellStageEnum.REDUCE_2,  # 매도 권장 → 2차 축소
+    SellPhaseEnum.PHASE_5: SellStageEnum.EXIT_ALL,  # 강력 매도 → 전량 청산
 }
 
 
@@ -793,7 +821,9 @@ class SellSignalAnalysisDTO(BaseDTO):
     stoch_k: float = Field(description="Stochastic %K")
     stoch_d: float = Field(description="Stochastic %D")
     is_stoch_overbought: bool = Field(description="Stochastic 과매수 (K > 70)")
-    is_stoch_dead_cross: bool = Field(default=False, description="Stochastic 데드크로스 여부 (K < D)")
+    is_stoch_dead_cross: bool = Field(
+        default=False, description="Stochastic 데드크로스 여부 (K < D)"
+    )
     stoch_cross_type: str | None = Field(default=None, description="Stochastic 크로스 유형")
     prev_stoch_k: float | None = Field(
         default=None, description="이전 Stochastic %K", ge=0.0, le=100.0
@@ -859,9 +889,7 @@ class SellSignalAnalysisDTO(BaseDTO):
         default=None, description="점수 기반 매도 평가 결과"
     )
     score_based_stage: str | None = Field(default=None, description="점수 기반 권장 Stage")
-    final_stage: SellStageEnum = Field(
-        default=SellStageEnum.HOLD, description="최종 매도 단계"
-    )
+    final_stage: SellStageEnum = Field(default=SellStageEnum.HOLD, description="최종 매도 단계")
     final_ratio_min: float = Field(
         default=0.0, description="최종 최소 매도 비율 (0.0~1.0)", ge=0.0, le=1.0
     )
@@ -878,10 +906,16 @@ class SellSignalAnalysisDTO(BaseDTO):
     is_volume_spike: bool = Field(default=False, description="거래량 급증 여부 (>= 1.3x)")
     price_drop_ratio: float | None = Field(default=None, description="가격 하락률")
     is_volume_sell_signal: bool = Field(default=False, description="거래량+하락 매도 신호")
-    volume_sell_reasons: list[str] = Field(default_factory=list, description="거래량 매도 신호 근거")
+    volume_sell_reasons: list[str] = Field(
+        default_factory=list, description="거래량 매도 신호 근거"
+    )
     is_volume_peak: bool = Field(default=False, description="거래량 피크 신호 여부")
-    volume_signal_type: str | None = Field(default=None, description="거래량 신호 유형 (sell/peak/none)")
-    volume_peak_reasons: list[str] = Field(default_factory=list, description="거래량 피크 신호 근거")
+    volume_signal_type: str | None = Field(
+        default=None, description="거래량 신호 유형 (sell/peak/none)"
+    )
+    volume_peak_reasons: list[str] = Field(
+        default_factory=list, description="거래량 피크 신호 근거"
+    )
 
     # === ADX 관련 신규 필드 ===
     adx: float | None = Field(
@@ -893,23 +927,41 @@ class SellSignalAnalysisDTO(BaseDTO):
     minus_di: float | None = Field(
         default=None, description="-DI 값 (하락 방향 강도)", ge=0.0, le=100.0
     )
-    is_strong_uptrend: bool = Field(default=False, description="강한 상승 추세 여부 (ADX>25 & +DI>-DI)")
-    is_strong_downtrend: bool = Field(default=False, description="강한 하락 추세 여부 (ADX>25 & -DI>+DI)")
-    overbought_sell_blocked: bool = Field(default=False, description="과매수 매도 차단 여부 (강한 상승 추세)")
+    is_strong_uptrend: bool = Field(
+        default=False, description="강한 상승 추세 여부 (ADX>25 & +DI>-DI)"
+    )
+    is_strong_downtrend: bool = Field(
+        default=False, description="강한 하락 추세 여부 (ADX>25 & -DI>+DI)"
+    )
+    overbought_sell_blocked: bool = Field(
+        default=False, description="과매수 매도 차단 여부 (강한 상승 추세)"
+    )
 
     # === 개인 수급 관련 신규 필드 ===
-    personal_net_buy_latest: int | None = Field(default=None, description="최근 일자 개인 순매수 수량")
+    personal_net_buy_latest: int | None = Field(
+        default=None, description="최근 일자 개인 순매수 수량"
+    )
     personal_net_buy_3d: int | None = Field(default=None, description="최근 3일 개인 순매수 합계")
     personal_net_buy_5d: int | None = Field(default=None, description="최근 5일 개인 순매수 합계")
-    personal_buy_days_5d: int | None = Field(default=None, description="최근 5일 중 개인 순매수 일수")
-    personal_buy_ratio_5d_to_volume: float | None = Field(default=None, description="최근 5일 개인 순매수 합계 / 최근 거래량")
+    personal_buy_days_5d: int | None = Field(
+        default=None, description="최근 5일 중 개인 순매수 일수"
+    )
+    personal_buy_ratio_5d_to_volume: float | None = Field(
+        default=None, description="최근 5일 개인 순매수 합계 / 최근 거래량"
+    )
     is_personal_buying_overheated: bool = Field(default=False, description="개인 수급 과열 여부")
 
     # === 시장 신용 과열 관련 신규 필드 ===
     market_credit_label: str | None = Field(default=None, description="시장 신용 데이터 기준 시장")
-    market_credit_balance_million: int | None = Field(default=None, description="최신 시장 신용잔고 (백만 단위)")
-    market_credit_change_ratio: float | None = Field(default=None, description="시장 신용잔고 일간 증감률")
-    market_credit_recent_high_ratio: float | None = Field(default=None, description="최근 5일 고점 대비 현재 비율")
+    market_credit_balance_million: int | None = Field(
+        default=None, description="최신 시장 신용잔고 (백만 단위)"
+    )
+    market_credit_change_ratio: float | None = Field(
+        default=None, description="시장 신용잔고 일간 증감률"
+    )
+    market_credit_recent_high_ratio: float | None = Field(
+        default=None, description="최근 5일 고점 대비 현재 비율"
+    )
     is_market_credit_overheated: bool = Field(default=False, description="시장 신용 과열 여부")
 
     # 추가 정보
@@ -920,7 +972,9 @@ class SellSignalRequestDTO(BaseDTO):
     """매도 시그널 분석 요청 DTO"""
 
     symbol: str = Field(description="종목코드")
-    stoch_overbought: float = Field(default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값")
+    stoch_overbought: float = Field(
+        default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값"
+    )
     rsi_overbought: float = Field(default=70.0, ge=50.0, le=90.0, description="RSI 과매수 임계값")
 
 
@@ -958,7 +1012,9 @@ class AnalysisHistoryDTO(BaseDTO):
     sell_reasons: list[str] | None = Field(default=None, description="매도 근거")
 
     # 비중축소 분석용 (신규)
-    sell_stage: str | None = Field(default=None, description="비중축소 단계 (HOLD, REDUCE_1, REDUCE_2, EXIT_ALL)")
+    sell_stage: str | None = Field(
+        default=None, description="비중축소 단계 (HOLD, REDUCE_1, REDUCE_2, EXIT_ALL)"
+    )
     sell_stage_name: str | None = Field(default=None, description="비중축소 단계 이름")
     sell_ratio_min: float | None = Field(default=None, description="최소 매도 비율")
     sell_ratio_max: float | None = Field(default=None, description="최대 매도 비율")
@@ -974,6 +1030,15 @@ class AnalysisHistoryDTO(BaseDTO):
     minus_di: float | None = Field(default=None, description="-DI 값")
     is_strong_uptrend: bool | None = Field(default=None, description="강한 상승 추세 여부")
     overbought_sell_blocked: bool | None = Field(default=None, description="과매수 매도 차단 여부")
+
+    # 과열 보조지표 (신규)
+    is_personal_buying_overheated: bool | None = Field(
+        default=None, description="개인 수급 과열 여부"
+    )
+    market_credit_label: str | None = Field(default=None, description="시장 신용 기준 시장")
+    is_market_credit_overheated: bool | None = Field(
+        default=None, description="시장 신용 과열 여부"
+    )
 
     # 메타데이터
     analyzed_at: datetime = Field(description="분석 시각")
@@ -1079,7 +1144,9 @@ class PortfolioCashPlanDTO(BaseDTO):
     analyzed_at: datetime = Field(description="계획 산출 시각")
     active_sell_count: int = Field(description="활성 추적 매도 분석 종목 수")
     target_cash_ratio: float = Field(description="목표 현금 비중", ge=0.0, le=1.0)
-    current_cash_ratio: float | None = Field(default=None, description="현재 현금 비중", ge=0.0, le=1.0)
+    current_cash_ratio: float | None = Field(
+        default=None, description="현재 현금 비중", ge=0.0, le=1.0
+    )
     cash_gap_ratio: float | None = Field(
         default=None, description="목표 대비 부족/초과 현금 비중", ge=-1.0, le=1.0
     )
@@ -1087,4 +1154,6 @@ class PortfolioCashPlanDTO(BaseDTO):
     market_risk_score: float = Field(description="포트폴리오 위험 점수", ge=0.0)
     portfolio_action: str = Field(description="포트폴리오 전체 권장 행동")
     summary: list[str] = Field(default_factory=list, description="요약 메시지")
-    actions: list[PortfolioCashActionDTO] = Field(default_factory=list, description="종목별 권장 액션")
+    actions: list[PortfolioCashActionDTO] = Field(
+        default_factory=list, description="종목별 권장 액션"
+    )

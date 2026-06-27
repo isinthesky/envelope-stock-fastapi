@@ -9,7 +9,10 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+import ipaddress
+
 from src.adapters.external.websocket.websocket_manager import get_websocket_manager
+from src.application.common.dependencies import _is_ip_allowed
 
 router = APIRouter()
 
@@ -23,6 +26,30 @@ async def websocket_realtime_endpoint(websocket: WebSocket) -> None:
     - 구독: {"action": "subscribe", "tr_id": "H0STCNT0", "tr_key": "005930"}
     - 구독 해지: {"action": "unsubscribe", "tr_id": "H0STCNT0", "tr_key": "005930"}
     """
+    # IP 기반 접근 제어 (신뢰 프록시일 때만 XFF 참조)
+    from src.settings.config import get_settings
+    ws_settings = get_settings()
+    # XFF 헤더를 신뢰할 프록시: localhost만 (Docker bridge는 XFF 위조 방지를 위해 제외)
+    _TRUSTED_PROXIES = (
+        ipaddress.ip_network("127.0.0.0/8"),      # localhost (reverse proxy)
+        ipaddress.ip_network("::1/128"),           # localhost IPv6
+    )
+    direct_ip = websocket.client.host if websocket.client else "unknown"
+    client_ip = direct_ip
+    try:
+        addr = ipaddress.ip_address(direct_ip)
+        if any(addr in net for net in _TRUSTED_PROXIES):
+            forwarded = websocket.headers.get("x-forwarded-for")
+            if forwarded:
+                client_ip = forwarded.split(",")[0].strip()
+            elif websocket.headers.get("x-real-ip"):
+                client_ip = websocket.headers["x-real-ip"]
+    except ValueError:
+        pass
+    if not _is_ip_allowed(client_ip, ws_settings.admin_allowed_ips):
+        await websocket.close(code=4403, reason="Access denied")
+        return
+
     manager = get_websocket_manager()
     client_id = str(uuid.uuid4())
 

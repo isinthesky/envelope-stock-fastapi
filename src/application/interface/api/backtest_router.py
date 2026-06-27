@@ -7,7 +7,7 @@ from datetime import date, datetime, time
 
 from fastapi import APIRouter, Depends, Query
 
-from src.application.common.dependencies import DatabaseSession, get_kis_client, get_redis_client
+from src.application.common.dependencies import AdminAccessDep, DatabaseSession, get_kis_client, get_redis_client
 from src.application.domain.backtest.dto import BacktestRequestDTO, BacktestResultDTO, MultiSymbolBacktestRequestDTO, MultiSymbolBacktestResultDTO, UniverseBacktestRequestDTO, UniverseBacktestResultDTO
 from src.application.domain.backtest.service import BacktestService
 from src.application.domain.market_data.service import MarketDataService
@@ -23,17 +23,17 @@ async def get_backtest_service(session: DatabaseSession, kis_client=Depends(get_
 
 
 @router.post("/run", response_model=BacktestResultDTO)
-async def run_backtest(request: BacktestRequestDTO, service: BacktestService = Depends(get_backtest_service)):
+async def run_backtest(request: BacktestRequestDTO, service: BacktestService = Depends(get_backtest_service), admin_access: AdminAccessDep = None):
     return await service.run_backtest(request)
 
 
 @router.post("/run-multi", response_model=MultiSymbolBacktestResultDTO)
-async def run_multi_symbol_backtest(request: MultiSymbolBacktestRequestDTO, service: BacktestService = Depends(get_backtest_service)):
+async def run_multi_symbol_backtest(request: MultiSymbolBacktestRequestDTO, service: BacktestService = Depends(get_backtest_service), admin_access: AdminAccessDep = None):
     return await service.run_multi_symbol_backtest(request)
 
 
 @router.post("/run-universe-golden-cross", response_model=UniverseBacktestResultDTO)
-async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO, session: DatabaseSession, service: BacktestService = Depends(get_backtest_service)):
+async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO, session: DatabaseSession, service: BacktestService = Depends(get_backtest_service), admin_access: AdminAccessDep = None):
     base_strategy_params = {
         "short_period": 55,
         "long_period": 165,
@@ -157,7 +157,7 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
 
 
 @router.post("/validate-data")
-async def validate_data_quality(symbol: str, start_date: date = Query(..., description="시작일 (YYYY-MM-DD)"), end_date: date = Query(..., description="종료일 (YYYY-MM-DD)"), service: BacktestService = Depends(get_backtest_service)):
+async def validate_data_quality(symbol: str, start_date: date = Query(..., description="시작일 (YYYY-MM-DD)"), end_date: date = Query(..., description="종료일 (YYYY-MM-DD)"), service: BacktestService = Depends(get_backtest_service), admin_access: AdminAccessDep = None):
     start_dt = datetime.combine(start_date, time.min)
     end_dt = datetime.combine(end_date, time.min)
     return await service.validate_data_quality(symbol, start_dt, end_dt)

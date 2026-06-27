@@ -205,8 +205,10 @@ class KISAuth:
         }
 
         def _sync_write() -> None:
+            import os
             with open(self.token_cache_file, "w", encoding="utf-8") as f:
                 yaml.dump(data, f, allow_unicode=True)
+            os.chmod(self.token_cache_file, 0o600)
 
         await asyncio.to_thread(_sync_write)
 
@@ -285,14 +287,17 @@ class KISAuth:
 
     # ==================== 헤더 생성 ====================
 
-    async def get_auth_headers(self) -> dict[str, str]:
+    async def get_auth_headers(self, force_refresh: bool = False) -> dict[str, str]:
         """
         인증된 HTTP 헤더 반환
+
+        Args:
+            force_refresh: True면 토큰을 강제 재발급 후 헤더 생성
 
         Returns:
             dict[str, str]: 인증 헤더
         """
-        token = await self.get_access_token()
+        token = await self.get_access_token(force_refresh=force_refresh)
         return {
             "Content-Type": "application/json",
             "Accept": "application/json",

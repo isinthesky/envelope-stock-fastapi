@@ -97,3 +97,29 @@ def test_build_portfolio_cash_plan_prefers_winners_first_for_cash_creation() -> 
     assert result.actions[0].profit_ratio == 0.14
     assert result.actions[0].suggested_sell_ratio >= 0.30
     assert "수익" in (result.actions[0].note or "")
+
+
+def test_build_portfolio_cash_plan_clamps_non_negative_urgency_for_hold_items() -> None:
+    service = StrategyService(session=None)
+    histories = [
+        SimpleNamespace(
+            symbol="HOLD",
+            name="Hold Only",
+            market="KOSPI",
+            sell_stage="HOLD",
+            sell_reasons=[],
+            entry_price=Decimal("100"),
+            current_price=Decimal("100"),
+            is_death_cross=False,
+            is_volume_sell_signal=False,
+            is_volume_spike=False,
+            overbought_sell_blocked=True,
+            volume_ratio=1.0,
+        ),
+    ]
+
+    result = service.build_portfolio_cash_plan(histories)
+
+    assert result.actions[0].symbol == "HOLD"
+    assert result.actions[0].urgency_score == 0.0
+    assert result.market_risk_score == 0.0
