@@ -5,7 +5,9 @@ Backtest Service - 백테스팅 서비스
 백테스팅 실행 및 관리를 담당하는 서비스 레이어
 """
 
+from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,12 +18,37 @@ from src.application.domain.backtest.dto import (
     BacktestResultDTO,
     MultiSymbolBacktestRequestDTO,
     MultiSymbolBacktestResultDTO,
+    TradeDTO,
+    UniverseBacktestPortfolioSummaryDTO,
+    UniverseBacktestPortfolioTradeDTO,
     UniverseBacktestResultDTO,
     UniverseBacktestSummaryDTO,
     UniverseBacktestSymbolSummaryDTO,
 )
 from src.application.domain.backtest.engine import BacktestEngine
 from src.application.domain.market_data.service import MarketDataService
+
+
+@dataclass(frozen=True, slots=True)
+class _PortfolioCandidate:
+    symbol: str
+    rank_return: float
+    trade: TradeDTO
+
+
+@dataclass(frozen=True, slots=True)
+class _PortfolioPosition:
+    symbol: str
+    entry_date: datetime
+    exit_date: datetime
+    entry_price: Decimal
+    exit_price: Decimal
+    quantity: int
+    invested_cash: Decimal
+
+    @property
+    def exit_value(self) -> Decimal:
+        return self.exit_price * self.quantity
 
 
 class BacktestService:
@@ -104,6 +131,7 @@ class BacktestService:
             print(f"  - 총 수익률: {result.total_return:.2f}%")
             print(f"  - MDD: {result.mdd:.2f}%")
             print(f"  - Sharpe Ratio: {result.sharpe_ratio:.2f}")
+            print(f"  - 체결 시점: {result.execution_timing}")
             print(f"  - 총 거래: {result.total_trades}회 (승률: {result.win_rate:.1f}%)")
 
             return result
@@ -224,6 +252,182 @@ class BacktestService:
             worst_symbols=list(reversed(sorted_by_return[-5:])),
         )
 
+    def simulate_universe_portfolio(
+        self,
+        multi_result: MultiSymbolBacktestResultDTO,
+        initial_capital: Decimal,
+        max_positions: int,
+    ) -> UniverseBacktestPortfolioSummaryDTO:
+        if max_positions < 1:
+            raise BacktestError("max_positions must be at least 1")
+
+        candidates = self._build_portfolio_candidates(multi_result)
+        cash = initial_capital
+        active_positions: list[_PortfolioPosition] = []
+        completed_trades: list[UniverseBacktestPortfolioTradeDTO] = []
+        equity_points = [initial_capital]
+        entered_positions = 0
+        rejected_candidates = 0
+        slot_cash = initial_capital / Decimal(max_positions)
+
+        for candidate in candidates:
+            current_date = candidate.trade.entry_date
+            retained_positions: list[_PortfolioPosition] = []
+            released_position = False
+            for position in active_positions:
+                if position.exit_date <= current_date:
+                    cash += position.exit_value
+                    completed_trades.append(self._complete_portfolio_trade(position))
+                    released_position = True
+                else:
+                    retained_positions.append(position)
+            active_positions = retained_positions
+            if released_position:
+                active_equity = sum(item.invested_cash for item in active_positions)
+                equity_points.append(cash + active_equity)
+
+            if any(position.symbol == candidate.symbol for position in active_positions):
+                continue
+            if len(active_positions) >= max_positions or cash <= 0:
+                rejected_candidates += 1
+                continue
+
+            entry_price = candidate.trade.entry_price
+            exit_date = candidate.trade.exit_date
+            exit_price = candidate.trade.exit_price
+            if exit_date is None or exit_price is None or entry_price <= 0:
+                rejected_candidates += 1
+                continue
+
+            investable_cash = min(cash, slot_cash)
+            quantity = int(investable_cash / entry_price)
+            if quantity < 1:
+                rejected_candidates += 1
+                continue
+
+            invested_cash = entry_price * quantity
+            cash -= invested_cash
+            active_positions.append(
+                _PortfolioPosition(
+                    symbol=candidate.symbol,
+                    entry_date=candidate.trade.entry_date,
+                    exit_date=exit_date,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    quantity=quantity,
+                    invested_cash=invested_cash,
+                )
+            )
+            entered_positions += 1
+
+        remaining_positions = sorted(active_positions, key=lambda item: item.exit_date)
+        while remaining_positions:
+            position = remaining_positions.pop(0)
+            cash += position.exit_value
+            completed_trades.append(self._complete_portfolio_trade(position))
+            active_equity = sum(item.invested_cash for item in remaining_positions)
+            equity_points.append(cash + active_equity)
+
+        final_capital = cash
+        total_return = self._percentage_change(initial_capital, final_capital)
+        benchmark_return = self._average_benchmark_return(multi_result)
+        winning_trades = sum(1 for trade in completed_trades if trade.profit > 0)
+        losing_trades = sum(1 for trade in completed_trades if trade.profit < 0)
+        total_trades = len(completed_trades)
+        win_rate = round((winning_trades / total_trades) * 100, 2) if total_trades else 0.0
+
+        return UniverseBacktestPortfolioSummaryDTO(
+            ranking_method="entry_date_then_symbol_total_return_desc",
+            position_sizing="equal_cash_slot_by_max_positions",
+            initial_capital=initial_capital,
+            final_capital=final_capital,
+            ending_cash=cash,
+            total_return=total_return,
+            benchmark_return=benchmark_return,
+            excess_return=round(total_return - benchmark_return, 2),
+            max_positions=max_positions,
+            entered_positions=entered_positions,
+            rejected_candidates=rejected_candidates,
+            total_trades=total_trades,
+            winning_trades=winning_trades,
+            losing_trades=losing_trades,
+            win_rate=win_rate,
+            mdd=self._calculate_portfolio_mdd(equity_points),
+            trades=completed_trades,
+        )
+
+    def _build_portfolio_candidates(
+        self,
+        multi_result: MultiSymbolBacktestResultDTO,
+    ) -> list[_PortfolioCandidate]:
+        candidates: list[_PortfolioCandidate] = []
+        for result in multi_result.results.values():
+            for trade in result.trades:
+                if trade.exit_date is None or trade.exit_price is None:
+                    continue
+                candidates.append(
+                    _PortfolioCandidate(
+                        symbol=result.symbol,
+                        rank_return=result.total_return,
+                        trade=trade,
+                    )
+                )
+        return sorted(
+            candidates,
+            key=lambda item: (
+                item.trade.entry_date,
+                -item.rank_return,
+                item.symbol,
+                item.trade.trade_id,
+            ),
+        )
+
+    def _complete_portfolio_trade(
+        self,
+        position: _PortfolioPosition,
+    ) -> UniverseBacktestPortfolioTradeDTO:
+        exit_value = position.exit_value
+        profit = exit_value - position.invested_cash
+        return UniverseBacktestPortfolioTradeDTO(
+            symbol=position.symbol,
+            entry_date=position.entry_date,
+            exit_date=position.exit_date,
+            entry_price=position.entry_price,
+            exit_price=position.exit_price,
+            quantity=position.quantity,
+            invested_cash=position.invested_cash,
+            exit_value=exit_value,
+            profit=profit,
+            profit_rate=self._percentage_change(position.invested_cash, exit_value),
+        )
+
+    def _percentage_change(self, initial_value: Decimal, final_value: Decimal) -> float:
+        if initial_value <= 0:
+            return 0.0
+        return round(float((final_value - initial_value) / initial_value * Decimal("100")), 2)
+
+    def _average_benchmark_return(self, multi_result: MultiSymbolBacktestResultDTO) -> float:
+        benchmark_returns = [
+            result.benchmark_return
+            for result in multi_result.results.values()
+            if result.benchmark_return is not None
+        ]
+        if not benchmark_returns:
+            return 0.0
+        return round(sum(benchmark_returns) / len(benchmark_returns), 2)
+
+    def _calculate_portfolio_mdd(self, equity_points: list[Decimal]) -> float:
+        peak = equity_points[0] if equity_points else Decimal("0")
+        max_drawdown = Decimal("0")
+        for equity in equity_points:
+            if equity > peak:
+                peak = equity
+            if peak > 0:
+                drawdown = (equity - peak) / peak * Decimal("100")
+                if drawdown < max_drawdown:
+                    max_drawdown = drawdown
+        return round(float(max_drawdown), 2)
+
     def build_universe_backtest_result(
         self,
         *,
@@ -233,9 +437,18 @@ class BacktestService:
         request: MultiSymbolBacktestRequestDTO,
         multi_result: MultiSymbolBacktestResultDTO,
         config_summary: dict,
+        portfolio_enabled: bool = False,
+        max_positions: int | None = None,
     ) -> UniverseBacktestResultDTO:
         """유니버스 백테스트 결과 래핑"""
         summary = self.summarize_multi_symbol_results(multi_result)
+        portfolio_summary = None
+        if portfolio_enabled:
+            portfolio_summary = self.simulate_universe_portfolio(
+                multi_result,
+                request.backtest_config.initial_capital,
+                1 if max_positions is None else max_positions,
+            )
         return UniverseBacktestResultDTO(
             market=market,
             eligible_only=eligible_only,
@@ -244,7 +457,9 @@ class BacktestService:
             end_date=request.end_date,
             strategy_type=request.strategy_type,
             config_summary=config_summary,
+            portfolio_summary=portfolio_summary,
             summary=summary,
+            diagnostic_summary=summary,
             results=multi_result.results,
         )
 
@@ -316,6 +531,7 @@ class BacktestService:
         print("=" * 80)
 
         print(f"\n📅 기간: {result.start_date.date()} ~ {result.end_date.date()}")
+        print(f"⏱️ 체결 시점: {result.execution_timing}")
         print(f"💰 초기 자본: {result.initial_capital:,.0f}원")
         print(f"💰 최종 자본: {result.final_capital:,.0f}원")
 

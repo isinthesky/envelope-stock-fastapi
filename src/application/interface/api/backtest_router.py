@@ -79,6 +79,14 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
             break
 
     if not symbols:
+        diagnostic_summary = service.summarize_multi_symbol_results(MultiSymbolBacktestResultDTO(results={}, total_count=0, success_count=0, failed_count=0))
+        portfolio_summary = None
+        if request.portfolio:
+            portfolio_summary = service.simulate_universe_portfolio(
+                MultiSymbolBacktestResultDTO(results={}, total_count=0, success_count=0, failed_count=0),
+                request.backtest_config.initial_capital,
+                request.max_positions,
+            )
         return UniverseBacktestResultDTO(
             market=request.market,
             eligible_only=request.eligible_only,
@@ -87,7 +95,9 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
             end_date=request.end_date,
             strategy_type=request.strategy_type,
             config_summary={"label": "공격형 중단기 스윙 매도 v3", "comparison_results": []},
-            summary=service.summarize_multi_symbol_results(MultiSymbolBacktestResultDTO(results={}, total_count=0, success_count=0, failed_count=0)),
+            portfolio_summary=portfolio_summary,
+            summary=diagnostic_summary,
+            diagnostic_summary=diagnostic_summary,
             results={},
         )
 
@@ -127,8 +137,9 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
         comparison_results.append({
             "key": key,
             "label": label,
-            "average_return": summary.average_return,
-            "average_win_rate": summary.average_win_rate,
+            "summary_type": summary.summary_type,
+            "diagnostic_average_return": summary.average_return,
+            "diagnostic_average_win_rate": summary.average_win_rate,
             "average_holding_days": summary.average_holding_days,
             "profitable_ratio": summary.profitable_ratio,
             "total_trades": summary.total_trades,
@@ -153,7 +164,32 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
         "comparison_results": comparison_results,
     }
 
-    return service.build_universe_backtest_result(market=request.market, eligible_only=request.eligible_only, symbols=symbols, request=final_request, multi_result=final_multi_result, config_summary=config_summary)
+    return service.build_universe_backtest_result(market=request.market, eligible_only=request.eligible_only, symbols=symbols, request=final_request, multi_result=final_multi_result, config_summary=config_summary, portfolio_enabled=request.portfolio, max_positions=request.max_positions)
+
+
+@router.get("/universe/golden-cross", response_model=UniverseBacktestResultDTO)
+async def get_universe_golden_cross_backtest(
+    session: DatabaseSession,
+    service: BacktestService = Depends(get_backtest_service),
+    admin_access: AdminAccessDep = None,
+    market: str | None = Query(default=None),
+    eligible_only: bool = Query(default=True),
+    limit: int = Query(default=20, ge=1, le=100),
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    portfolio: bool = Query(default=False),
+    max_positions: int = Query(default=5, ge=1, le=100),
+):
+    request = UniverseBacktestRequestDTO(
+        market=market,
+        eligible_only=eligible_only,
+        limit=limit,
+        start_date=datetime.combine(start_date, time.min),
+        end_date=datetime.combine(end_date, time.min),
+        portfolio=portfolio,
+        max_positions=max_positions,
+    )
+    return await run_universe_golden_cross_backtest(request, session, service, admin_access)
 
 
 @router.post("/validate-data")

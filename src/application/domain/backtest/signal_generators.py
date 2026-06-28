@@ -9,6 +9,10 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 
 from src.application.common.indicators import TechnicalIndicators
+from src.application.domain.strategy.strategy_contract import (
+    DEFAULT_GOLDEN_CROSS_PULLBACK,
+    GoldenCrossTradeSignal,
+)
 
 
 class BaseSignalGenerator(ABC):
@@ -76,17 +80,17 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
 
     def __init__(
         self,
-        short_period: int = 55,
-        long_period: int = 165,
-        stoch_k_period: int = 14,
-        stoch_d_period: int = 3,
-        stoch_oversold: float = 30.0,
+        short_period: int = DEFAULT_GOLDEN_CROSS_PULLBACK.short_period,
+        long_period: int = DEFAULT_GOLDEN_CROSS_PULLBACK.long_period,
+        stoch_k_period: int = DEFAULT_GOLDEN_CROSS_PULLBACK.stoch_k_period,
+        stoch_d_period: int = DEFAULT_GOLDEN_CROSS_PULLBACK.stoch_d_period,
+        stoch_oversold: float = DEFAULT_GOLDEN_CROSS_PULLBACK.oversold_threshold,
         stoch_overbought: float = 70.0,
         require_k_above_d_for_buy: bool = False,
         require_k_below_d_for_sell: bool = False,
-        buy_recovery_threshold: float = 35.0,
-        min_pullback_bars: int = 2,
-        min_reentry_cooldown_bars: int = 5,
+        buy_recovery_threshold: float = DEFAULT_GOLDEN_CROSS_PULLBACK.strong_recovery_threshold,
+        min_pullback_bars: int = DEFAULT_GOLDEN_CROSS_PULLBACK.min_pullback_bars,
+        min_reentry_cooldown_bars: int = DEFAULT_GOLDEN_CROSS_PULLBACK.min_reentry_cooldown_bars,
         disable_stoch_overbought_sell: bool = True,
     ):
         self.short_period = short_period
@@ -121,7 +125,7 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
         **kwargs: object,
     ) -> str:
         if len(price_history) < self.min_period:
-            return "hold"
+            return GoldenCrossTradeSignal.HOLD.value
         self._bars_since_exit += 1
         ma_short = self._calculate_sma(price_history, self.short_period)
         ma_long = self._calculate_sma(price_history, self.long_period)
@@ -142,14 +146,14 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
             self._bars_since_exit = 0
             self._oversold_seen = False
             self._pullback_bars = 0
-            return "sell"
+            return GoldenCrossTradeSignal.SELL.value
         if self._should_buy(is_gc_active, stoch_k, stoch_d):
             self._oversold_seen = False
             self._pullback_bars = 0
-            return "buy"
+            return GoldenCrossTradeSignal.BUY.value
         self._prev_stoch_k = stoch_k
         self._prev_stoch_d = stoch_d
-        return "hold"
+        return GoldenCrossTradeSignal.HOLD.value
 
     def _should_buy(self, is_gc_active: bool, stoch_k: float, stoch_d: float) -> bool:
         if not is_gc_active:

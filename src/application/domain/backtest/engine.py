@@ -7,6 +7,7 @@ Backtest Engine - 백테스팅 엔진
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal, assert_never
 
 import pandas as pd
 
@@ -24,6 +25,9 @@ from src.application.domain.backtest.signal_generators import (
     create_signal_generator,
 )
 from src.application.domain.strategy.dto import StrategyConfigDTO
+from src.application.domain.strategy.strategy_contract import GoldenCrossRiskExitReason
+
+PendingSignal = Literal["buy", "sell"]
 
 
 class BacktestEngine:
@@ -96,6 +100,7 @@ class BacktestEngine:
         self.low_history: list[float] = []
         self.close_history: list[float] = []
         self.last_exit_date: datetime | None = None
+        self.pending_signal: PendingSignal | None = None
 
     async def run(
         self, data: pd.DataFrame, start_date: datetime, end_date: datetime
@@ -112,17 +117,59 @@ class BacktestEngine:
         return self._generate_result(start_date, end_date)
 
     async def _process_day(self, date: datetime, current_price: Decimal, row: pd.Series) -> None:
+        open_price = Decimal(str(row.get("open", row["close"])))
+        execution_timing = self.backtest_config.execution_timing
+
+        match execution_timing:
+            case "next_open":
+                await self._execute_pending_signal(date, open_price)
+            case "next_close" | "same_close":
+                pass
+            case unreachable:
+                assert_never(unreachable)
+
         await self._check_risk_management(date, current_price)
+
+        match execution_timing:
+            case "next_close":
+                await self._execute_pending_signal(date, current_price)
+            case "next_open" | "same_close":
+                pass
+            case unreachable:
+                assert_never(unreachable)
+
         volume = float(row.get("volume", 0)) if "volume" in row else None
         signal = self._generate_signal(current_price, volume=volume)
 
-        if signal == "buy" and not self.position_manager.has_position(self.symbol):
-            await self._execute_buy(date, current_price)
-        elif signal == "sell" and self.position_manager.has_position(self.symbol):
-            await self._execute_sell_all(date, current_price, exit_reason="signal")
+        match execution_timing:
+            case "same_close":
+                await self._execute_signal(date, current_price, signal)
+            case "next_open" | "next_close":
+                self._queue_signal(signal)
+            case unreachable:
+                assert_never(unreachable)
 
         position_value = self.position_manager.update_positions({self.symbol: current_price})
         self._update_daily_stats(date, position_value)
+
+    async def _execute_pending_signal(self, date: datetime, price: Decimal) -> None:
+        signal = self.pending_signal
+        self.pending_signal = None
+        if signal is None:
+            return
+        await self._execute_signal(date, price, signal)
+
+    async def _execute_signal(self, date: datetime, price: Decimal, signal: str) -> None:
+        if signal == "buy" and not self.position_manager.has_position(self.symbol):
+            await self._execute_buy(date, price)
+        elif signal == "sell" and self.position_manager.has_position(self.symbol):
+            await self._execute_sell_all(date, price, exit_reason="signal")
+
+    def _queue_signal(self, signal: str) -> None:
+        if signal == "buy" and not self.position_manager.has_position(self.symbol):
+            self.pending_signal = "buy"
+        elif signal == "sell" and self.position_manager.has_position(self.symbol):
+            self.pending_signal = "sell"
 
     def _reset(self) -> None:
         self.cash = self.backtest_config.initial_capital
@@ -136,6 +183,7 @@ class BacktestEngine:
         self.close_history.clear()
         self.position_manager.clear_all_positions()
         self.last_exit_date = None
+        self.pending_signal = None
         if hasattr(self.signal_generator, "reset"):
             self.signal_generator.reset()
 
@@ -261,21 +309,31 @@ class BacktestEngine:
             profit_ratio = position.get_unrealized_profit_rate(current_price)
             if profit_ratio >= breakeven_activation:
                 position.breakeven_armed = True
+            if profit_ratio >= self.strategy_params.get("trailing_stop_activation", 0.15):
+                position.trailing_stop_activated = True
 
             if not position.partial_take_profit_1_taken and profit_ratio >= partial_1:
                 position.partial_take_profit_1_taken = True
                 await self._close_position_lot(
-                    position, date, current_price, "partial_take_profit_1"
+                    position,
+                    date,
+                    current_price,
+                    GoldenCrossRiskExitReason.PARTIAL_TAKE_PROFIT_1.value,
                 )
                 continue
             if not position.partial_take_profit_2_taken and profit_ratio >= partial_2:
                 position.partial_take_profit_2_taken = True
                 await self._close_position_lot(
-                    position, date, current_price, "partial_take_profit_2"
+                    position,
+                    date,
+                    current_price,
+                    GoldenCrossRiskExitReason.PARTIAL_TAKE_PROFIT_2.value,
                 )
                 continue
             if self.position_manager.check_breakeven(position, current_price):
-                await self._close_position_lot(position, date, current_price, "breakeven")
+                await self._close_position_lot(
+                    position, date, current_price, GoldenCrossRiskExitReason.BREAKEVEN.value
+                )
                 continue
             if (
                 risk_config.use_stop_loss
@@ -284,16 +342,21 @@ class BacktestEngine:
                     position, current_price, risk_config.stop_loss_ratio
                 )
             ):
-                await self._close_position_lot(position, date, current_price, "stop_loss")
+                await self._close_position_lot(
+                    position, date, current_price, GoldenCrossRiskExitReason.STOP_LOSS.value
+                )
                 continue
             if (
                 risk_config.use_trailing_stop
                 and risk_config.trailing_stop_ratio is not None
+                and position.trailing_stop_activated
                 and self.position_manager.check_trailing_stop(
                     position, current_price, risk_config.trailing_stop_ratio
                 )
             ):
-                await self._close_position_lot(position, date, current_price, "trailing_stop")
+                await self._close_position_lot(
+                    position, date, current_price, GoldenCrossRiskExitReason.TRAILING_STOP.value
+                )
                 continue
             if (
                 risk_config.use_take_profit
@@ -302,20 +365,28 @@ class BacktestEngine:
                     position, current_price, risk_config.take_profit_ratio
                 )
             ):
-                await self._close_position_lot(position, date, current_price, "take_profit")
+                await self._close_position_lot(
+                    position, date, current_price, GoldenCrossRiskExitReason.TAKE_PROFIT.value
+                )
                 continue
             if risk_config.use_atr_stop_loss and self.position_manager.check_atr_stop_loss(
                 position, current_price, risk_config.atr_stop_loss_multiplier
             ):
-                await self._close_position_lot(position, date, current_price, "stop_loss")
+                await self._close_position_lot(
+                    position, date, current_price, GoldenCrossRiskExitReason.STOP_LOSS.value
+                )
                 continue
             if risk_config.use_atr_trailing_stop and self.position_manager.check_atr_trailing_stop(
                 position, current_price, risk_config.atr_trailing_multiplier
             ):
-                await self._close_position_lot(position, date, current_price, "trailing_stop")
+                await self._close_position_lot(
+                    position, date, current_price, GoldenCrossRiskExitReason.TRAILING_STOP.value
+                )
                 continue
             if self.position_manager.check_max_hold_days(position, date, max_hold_days):
-                await self._close_position_lot(position, date, current_price, "max_hold")
+                await self._close_position_lot(
+                    position, date, current_price, GoldenCrossRiskExitReason.MAX_HOLD.value
+                )
 
     def _update_daily_stats(self, date: datetime, position_value: Decimal) -> None:
         equity = self.cash + position_value
@@ -380,6 +451,7 @@ class BacktestEngine:
             end_date=end_date,
             initial_capital=self.initial_capital,
             final_capital=final_capital,
+            execution_timing=self.backtest_config.execution_timing,
             total_return=total_return,
             annualized_return=annualized_return,
             cagr=cagr,
