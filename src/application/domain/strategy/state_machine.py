@@ -6,12 +6,12 @@ Golden Cross State Machine - 골든크로스 상태 머신
 WAITING_FOR_GC → WAITING_FOR_PULLBACK → READY_TO_BUY → IN_POSITION
 
 진입 조건:
-1. MA60 > MA200 (골든크로스 발생)
+1. 단기 MA > 장기 MA (골든크로스 발생)
 2. Stoch K < 25 (풀백/과매도)
 3. Stoch K > 20 (회복) 또는 Stoch K > 30 (강한 회복)
 
 청산 조건:
-1. MA60 < MA200 (데드크로스)
+1. 단기 MA < 장기 MA (데드크로스)
 2. 손절/익절/트레일링 스탑
 3. 최대 보유 기간 초과
 """
@@ -28,14 +28,19 @@ from src.application.domain.strategy.dto import (
     GoldenCrossRiskConfig,
     StochasticConfig,
 )
+from src.application.domain.strategy.strategy_contract import (
+    GoldenCrossRiskExitReason,
+    GoldenCrossTradeSignal,
+    GoldenCrossTransitionReason,
+)
 
 
 class Signal(str, Enum):
     """시그널 유형"""
 
-    BUY = "buy"
-    SELL = "sell"
-    HOLD = "hold"
+    BUY = GoldenCrossTradeSignal.BUY.value
+    SELL = GoldenCrossTradeSignal.SELL.value
+    HOLD = GoldenCrossTradeSignal.HOLD.value
 
 
 @dataclass
@@ -139,7 +144,7 @@ class GoldenCrossStateMachine:
         return StateTransition(
             new_state=SymbolState.WAITING_FOR_GC,
             signal=Signal.HOLD,
-            reason="unknown_state_reset",
+            reason=GoldenCrossTransitionReason.UNKNOWN_STATE_RESET.value,
         )
 
     def _process_waiting_for_gc(
@@ -148,7 +153,7 @@ class GoldenCrossStateMachine:
         """
         골든크로스 대기 상태 처리
 
-        조건: 전일 MA60 <= MA200 AND 금일 MA60 > MA200
+        조건: 전일 단기 MA <= 장기 MA AND 금일 단기 MA > 장기 MA
         """
         is_golden_cross = (
             prev.ma_short <= prev.ma_long and current.ma_short > current.ma_long
@@ -158,7 +163,7 @@ class GoldenCrossStateMachine:
             return StateTransition(
                 new_state=SymbolState.WAITING_FOR_PULLBACK,
                 signal=Signal.HOLD,
-                reason="golden_cross_detected",
+                reason=GoldenCrossTransitionReason.GOLDEN_CROSS_DETECTED.value,
                 gc_date=current.timestamp,
             )
 
@@ -174,7 +179,7 @@ class GoldenCrossStateMachine:
         풀백 대기 상태 처리
 
         조건:
-        - GC 무효화: MA60 < MA200 -> 초기화
+        - GC 무효화: 단기 MA < 장기 MA -> 초기화
         - 풀백 발생: Stoch K < oversold_threshold
         """
         # GC 무효화 체크
@@ -182,7 +187,7 @@ class GoldenCrossStateMachine:
             return StateTransition(
                 new_state=SymbolState.WAITING_FOR_GC,
                 signal=Signal.HOLD,
-                reason="gc_invalidated",
+                reason=GoldenCrossTransitionReason.GC_INVALIDATED.value,
             )
 
         # 풀백 감지 (과매도)
@@ -190,7 +195,7 @@ class GoldenCrossStateMachine:
             return StateTransition(
                 new_state=SymbolState.READY_TO_BUY,
                 signal=Signal.HOLD,
-                reason="pullback_detected",
+                reason=GoldenCrossTransitionReason.PULLBACK_DETECTED.value,
                 gc_date=gc_date,
                 pullback_date=current.timestamp,
             )
@@ -211,7 +216,7 @@ class GoldenCrossStateMachine:
         매수 준비 상태 처리
 
         조건:
-        - GC 무효화: MA60 < MA200 -> 초기화
+        - GC 무효화: 단기 MA < 장기 MA -> 초기화
         - 매수 시그널:
           1) Stoch K가 recovery_threshold 상향 돌파
           2) Stoch K가 strong_recovery_threshold 초과
@@ -221,7 +226,7 @@ class GoldenCrossStateMachine:
             return StateTransition(
                 new_state=SymbolState.WAITING_FOR_GC,
                 signal=Signal.HOLD,
-                reason="gc_invalidated_during_ready",
+                reason=GoldenCrossTransitionReason.GC_INVALIDATED_DURING_READY.value,
             )
 
         # 회복 시그널 1: Stoch K 상향 돌파
@@ -234,7 +239,11 @@ class GoldenCrossStateMachine:
         strong_recovery = current.stoch_k > self.stoch_config.strong_recovery_threshold
 
         if recovery_crossover or strong_recovery:
-            reason = "stoch_recovery_crossover" if recovery_crossover else "stoch_strong_recovery"
+            reason = (
+                GoldenCrossTransitionReason.STOCH_RECOVERY_CROSSOVER.value
+                if recovery_crossover
+                else GoldenCrossTransitionReason.STOCH_STRONG_RECOVERY.value
+            )
             return StateTransition(
                 new_state=SymbolState.IN_POSITION,
                 signal=Signal.BUY,
@@ -258,7 +267,7 @@ class GoldenCrossStateMachine:
         포지션 보유 상태 처리
 
         청산 조건:
-        1. 데드크로스 (MA60 < MA200)
+        1. 데드크로스 (단기 MA < 장기 MA)
         2. 손절
         3. 익절
         4. 트레일링 스탑
@@ -269,7 +278,7 @@ class GoldenCrossStateMachine:
             return StateTransition(
                 new_state=SymbolState.WAITING_FOR_GC,
                 signal=Signal.SELL,
-                reason="dead_cross",
+                reason=GoldenCrossRiskExitReason.DEAD_CROSS.value,
             )
 
         # 수익률 계산
@@ -282,7 +291,7 @@ class GoldenCrossStateMachine:
                     return StateTransition(
                         new_state=SymbolState.WAITING_FOR_GC,
                         signal=Signal.SELL,
-                        reason="stop_loss",
+                        reason=GoldenCrossRiskExitReason.STOP_LOSS.value,
                     )
 
             # 3. 익절 체크
@@ -291,13 +300,16 @@ class GoldenCrossStateMachine:
                     return StateTransition(
                         new_state=SymbolState.WAITING_FOR_GC,
                         signal=Signal.SELL,
-                        reason="take_profit",
+                        reason=GoldenCrossRiskExitReason.TAKE_PROFIT.value,
                     )
 
             # 4. 트레일링 스탑 체크
             if self.risk_config.use_trailing_stop and highest_price and highest_price > 0:
-                # 활성화 조건: 수익률 >= trailing_stop_activation (기본 15%)
-                if pnl_ratio >= self.risk_config.trailing_stop_activation:
+                is_trailing_active = (
+                    trailing_stop_activated
+                    or pnl_ratio >= self.risk_config.trailing_stop_activation
+                )
+                if is_trailing_active:
                     # 고점 대비 하락폭 체크
                     drawdown = float((highest_price - current.close) / highest_price)
                     # 발동 조건: 고점 대비 trailing_stop_distance (기본 7%) 이상 하락
@@ -305,7 +317,7 @@ class GoldenCrossStateMachine:
                         return StateTransition(
                             new_state=SymbolState.WAITING_FOR_GC,
                             signal=Signal.SELL,
-                            reason="trailing_stop",
+                            reason=GoldenCrossRiskExitReason.TRAILING_STOP.value,
                         )
 
         # 5. 최대 보유 기간 체크
@@ -315,7 +327,7 @@ class GoldenCrossStateMachine:
                 return StateTransition(
                     new_state=SymbolState.WAITING_FOR_GC,
                     signal=Signal.SELL,
-                    reason="max_hold_days",
+                    reason=GoldenCrossRiskExitReason.MAX_HOLD.value,
                 )
 
         return StateTransition(

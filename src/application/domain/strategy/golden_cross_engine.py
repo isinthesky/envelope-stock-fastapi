@@ -5,7 +5,7 @@ Golden Cross Engine - 골든크로스 전략 실행 엔진
 장 마감 후 1회 실행 (15:35)
 1. 종목 스크리닝
 2. OHLCV 데이터 조회 (250일)
-3. 지표 계산 (MA60, MA200, Stochastic)
+3. 지표 계산 (configurable short/long MA, Stochastic)
 4. 상태 머신 업데이트 & 시그널 생성
 5. SafetyGuard 검증
 6. 주문 생성
