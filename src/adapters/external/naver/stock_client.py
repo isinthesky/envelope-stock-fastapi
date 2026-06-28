@@ -32,6 +32,7 @@ class StockFinancialData:
     roe: float | None  # ROE (%)
     per: float | None  # PER
     pbr: float | None  # PBR
+    industry_code: str | None = None  # 네이버 업종코드 (industryCode)
 
 
 @dataclass
@@ -176,6 +177,10 @@ class NaverStockClient:
             # 종목명 추출
             name = integration_data.get("stockName", "")
 
+            # 업종코드 추출 (naver_industry_codes 매핑 테이블과 동일한 키)
+            raw_industry = integration_data.get("industryCode") or integration_data.get("category", {}).get("industryCode")
+            industry_code = str(raw_industry) if raw_industry else None
+
             # 시가총액 추출 (totalInfos에서 "시총" 찾기)
             market_cap = 0
             total_infos = integration_data.get("totalInfos", [])
@@ -206,6 +211,7 @@ class NaverStockClient:
                 roe=roe,
                 per=per,
                 pbr=pbr,
+                industry_code=industry_code,
             )
 
         except Exception:

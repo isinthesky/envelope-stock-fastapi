@@ -128,3 +128,19 @@
   border-radius: 12px;
   font-size: 14px;
 }
+
+@media (max-width: 768px) {
+  .content {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  section {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .stock-table {
+    min-width: 920px;
+  }
+}

@@ -3,6 +3,117 @@ let selectedHistoryId = null;
 let analysisInProgress = false;
 let cashPlanInProgress = false;
 
+const escapeHtml = (v) => String(v ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+// CSS class name에 사용할 문자만 허용 (attribute injection 방지)
+const sanitizeCssClass = (v) => String(v ?? '').replace(/[^a-zA-Z0-9_-]/g, '');
+
+// 숫자 필드 안전 렌더링 (API에서 오는 숫자형 값)
+const safeNum = (v, fallback = '-') =>
+  Number.isFinite(Number(v)) ? String(Number(v)) : escapeHtml(String(fallback));
+
+/**
+ * Canvas 기반 수평 게이지 차트 (격자 포함)
+ * @param {string} id - canvas element ID
+ * @param {number} value - 현재 값
+ * @param {number} min - 최솟값
+ * @param {number} max - 최댓값
+ * @param {object} opts - { ticks, zones, highThreshold, lowThreshold, barColor }
+ */
+const drawGauge = (id, value, min, max, opts = {}) => {
+  const canvas = document.getElementById(id);
+  if (!canvas || !canvas.getContext) return;
+  if (!Number.isFinite(Number(value))) return;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth;
+  if (W <= 0) {
+    // 레이아웃 미완료 — ResizeObserver로 재시도 (이전 observer 해제 후 교체)
+    if (canvas._gaugeZeroRo) canvas._gaugeZeroRo.disconnect();
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver((entries, observer) => {
+        const w = entries[0]?.contentRect.width;
+        if (w > 0) {
+          observer.disconnect();
+          canvas._gaugeZeroRo = null;
+          drawGauge(id, value, min, max, opts);
+        }
+      });
+      ro.observe(canvas);
+      canvas._gaugeZeroRo = ro;
+    }
+    return;
+  }
+
+  const H = 40;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+
+  ctx.scale(dpr, dpr);
+
+  const PAD = { left: 2, right: 2, top: 4, bottom: 14 };
+  const chartW = W - PAD.left - PAD.right;
+  const chartH = H - PAD.top - PAD.bottom;
+  const clamp = (v) => Math.min(Math.max(v, min), max);
+  const toX = (v) => PAD.left + ((clamp(v) - min) / (max - min)) * chartW;
+
+  // 배경
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, W, H);
+
+  // 구간 색상 (zones)
+  (opts.zones || []).forEach(z => {
+    ctx.fillStyle = z.color;
+    ctx.fillRect(toX(z.from), PAD.top, toX(z.to) - toX(z.from), chartH);
+  });
+
+  // 값 막대
+  const vx = toX(value);
+  const high = opts.highThreshold ?? max;
+  const low = opts.lowThreshold ?? min;
+  const barColor = opts.barColor
+    || (value >= high ? '#dc2626' : value <= low ? '#16a34a' : '#3b82f6');
+  ctx.fillStyle = barColor;
+  ctx.globalAlpha = 0.65;
+  ctx.fillRect(PAD.left, PAD.top, vx - PAD.left, chartH);
+  ctx.globalAlpha = 1;
+
+  // 격자선 (gridlines)
+  const ticks = opts.ticks || [min, (min + max) / 2, max];
+  ticks.forEach(tick => {
+    const x = toX(tick);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(x, PAD.top);
+    ctx.lineTo(x, PAD.top + chartH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '8px ui-sans-serif,system-ui,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(tick, x, H - 2);
+  });
+
+  // 현재값 마커
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(vx, PAD.top);
+  ctx.lineTo(vx, PAD.top + chartH);
+  ctx.stroke();
+};
+
 const SELL_LAST_ANALYSIS_KEY = 'sellStrategy.lastAnalysis';
 const SELL_LAST_REFRESH_KEY = 'sellStrategy.lastRefresh';
 const CACHE_SCHEMA_VERSION = 1;
@@ -63,7 +174,9 @@ const updateLastAnalysisLabel = (data, isStale = false) => {
 
   const timeText = formatDateTime(data?.analyzed_at);
   const relTime = getRelativeTime(data?.analyzed_at);
-  const nameText = data?.symbol ? `${data.symbol}${data.name ? ` ${data.name}` : ''}` : '';
+  const nameText = data?.symbol
+    ? `${escapeHtml(data.symbol)}${data.name ? ` ${escapeHtml(data.name)}` : ''}`
+    : '';
 
   label.classList.toggle('stale', isStale);
 
@@ -158,7 +271,7 @@ const updateLastRefreshLabel = (data, isStale = false) => {
   const refreshedAt = data?.refreshedAt;
   const timeText = formatDateTime(refreshedAt);
   const relTime = getRelativeTime(refreshedAt);
-  const countText = data?.updated_count != null ? `${data.updated_count}개 종목` : '';
+  const countText = data?.updated_count != null ? `${safeNum(data.updated_count)}개 종목` : '';
 
   label.classList.toggle('stale', isStale);
 
@@ -193,7 +306,7 @@ const getStageDisplayName = (stage) => {
     REDUCE_2: '2차 비중 축소',
     EXIT_ALL: '전량 청산'
   };
-  return stageNames[stage] || stage || '보유 유지';
+  return stageNames[stage] || '보유 유지';
 };
 
 const resolveDisplayStage = (item) => {
@@ -214,10 +327,11 @@ const getPhaseDisplayName = (phase, phaseName) => {
     'PHASE_1': 1, 'PHASE_2': 2, 'PHASE_3': 3, 'PHASE_4': 4, 'PHASE_5': 5
   };
   const num = phaseNumbers[phase];
+  const safeName = escapeHtml(phaseName);
   if (num) {
-    return `${phaseName}(${num})`;
+    return `${safeName}(${num})`;
   }
-  return phaseName || '보유 유지';
+  return safeName || '보유 유지';
 };
 
 const loadHistory = async () => {
@@ -274,20 +388,20 @@ const renderPortfolioCashPlan = (data) => {
   const actionHtml = topActions.length > 0
     ? topActions.map(action => {
         const stage = action.sell_stage || 'HOLD';
-        const stageClass = `stage-${stage}`;
+        const stageClass = `stage-${sanitizeCssClass(stage)}`;
         const profitClass = (action.profit_ratio || 0) >= 0 ? 'positive' : 'negative';
         const profitText = action.profit_ratio !== null && action.profit_ratio !== undefined
           ? `<span class="cash-plan-profit ${profitClass}">${formatPercent(action.profit_ratio)}</span>`
           : '';
         const ratioText = `${Math.round((action.suggested_sell_ratio || 0) * 100)}%`;
-        const reasons = (action.reasons || []).slice(0, 3).map(reason => `<li>${reason}</li>`).join('');
+        const reasons = (action.reasons || []).slice(0, 3).map(reason => `<li>${escapeHtml(reason)}</li>`).join('');
 
         return `
           <div class="cash-plan-action">
             <div class="cash-plan-action-header">
               <div>
-                <strong>${action.priority}. ${action.symbol}${action.name ? ` ${action.name}` : ''}</strong>
-                <div style="font-size: 12px; color: #64748b; margin-top: 4px;">${action.action}</div>
+                <strong>${parseInt(action.priority, 10) || 0}. ${escapeHtml(action.symbol)}${action.name ? ` ${escapeHtml(action.name)}` : ''}</strong>
+                <div style="font-size: 12px; color: #64748b; margin-top: 4px;">${escapeHtml(action.action)}</div>
               </div>
               <div class="cash-plan-action-meta">
                 ${profitText}
@@ -295,7 +409,7 @@ const renderPortfolioCashPlan = (data) => {
                 <span class="recommendation-badge recommendation-CONSIDER_SELL" style="font-size: 11px; padding: 4px 8px;">권장 ${ratioText}</span>
               </div>
             </div>
-            ${action.note ? `<div class="cash-plan-note">${action.note}</div>` : ''}
+            ${action.note ? `<div class="cash-plan-note">${escapeHtml(action.note)}</div>` : ''}
             ${reasons ? `<div class="cash-plan-reasons"><ul>${reasons}</ul></div>` : ''}
           </div>
         `;
@@ -318,21 +432,21 @@ const renderPortfolioCashPlan = (data) => {
       </div>
       <div class="cash-plan-card">
         <div class="label">위험 점수 / 과열도</div>
-        <div class="value" style="font-size: 18px;">${Number(data.market_risk_score || 0).toFixed(1)} / ${data.market_heat_level}</div>
+        <div class="value" style="font-size: 18px;">${Number(data.market_risk_score || 0).toFixed(1)} / ${escapeHtml(data.market_heat_level)}</div>
       </div>
       <div class="cash-plan-card">
         <div class="label">활성 종목 / 수익 종목</div>
-        <div class="value" style="font-size: 18px;">${data.active_sell_count} / ${winnerCount}</div>
+        <div class="value" style="font-size: 18px;">${safeNum(data.active_sell_count)} / ${safeNum(winnerCount)}</div>
       </div>
       <div class="cash-plan-card">
         <div class="label">즉시 정리 후보</div>
-        <div class="value" style="font-size: 18px;">${immediateCount}</div>
+        <div class="value" style="font-size: 18px;">${safeNum(immediateCount)}</div>
       </div>
     </div>
     <div class="cash-plan-summary">
-      <strong>${data.portfolio_action}</strong>
+      <strong>${escapeHtml(data.portfolio_action)}</strong>
       <ul>
-        ${(data.summary || []).map(line => `<li>${line}</li>`).join('')}
+        ${(data.summary || []).map(line => `<li>${escapeHtml(line)}</li>`).join('')}
       </ul>
     </div>
     <div class="cash-plan-actions">
@@ -683,8 +797,8 @@ const displayResult = (data) => {
   document.getElementById("result_section").style.display = "block";
 
   const displayStage = resolveDisplayStage(data);
-  const phaseClass = `phase-${data.sell_phase || 'NONE'}`;
-  const stageClass = `stage-${displayStage}`;
+  const phaseClass = `phase-${sanitizeCssClass(data.sell_phase || 'NONE')}`;
+  const stageClass = `stage-${sanitizeCssClass(displayStage)}`;
 
   const stochStatus = data.is_stoch_overbought ? 'status-danger' : 'status-safe';
   const rsiStatus = data.is_rsi_overbought ? 'status-danger' : 'status-safe';
@@ -728,7 +842,7 @@ const displayResult = (data) => {
           </div>
           <div class="profit-item">
             <div class="label">적용 임계값</div>
-            <div class="value" style="font-size: 14px;">Stoch ${data.dynamic_stoch_threshold || 70} / RSI ${data.dynamic_rsi_threshold || 70}</div>
+            <div class="value" style="font-size: 14px;">Stoch ${safeNum(data.dynamic_stoch_threshold, 70)} / RSI ${safeNum(data.dynamic_rsi_threshold, 70)}</div>
           </div>
           ${data.is_stop_loss_triggered ? '<div class="profit-item"><div class="label">상태</div><div class="value negative">손절 라인</div></div>' : ''}
           ${data.is_take_profit_triggered ? '<div class="profit-item"><div class="label">상태</div><div class="value positive">익절 목표</div></div>' : ''}
@@ -782,7 +896,7 @@ const displayResult = (data) => {
         </div>
         ${data.volume_sell_reasons && data.volume_sell_reasons.length > 0 ? `
           <div style="margin-top: 8px; font-size: 12px; color: #9a3412; background: #fff7ed; padding: 8px; border-radius: 4px;">
-            ${data.volume_sell_reasons.join(', ')}
+            ${data.volume_sell_reasons.map(r => escapeHtml(r)).join(', ')}
           </div>
         ` : ''}
       </div>
@@ -802,6 +916,7 @@ const displayResult = (data) => {
             <div class="label">ADX</div>
             <div class="value" style="font-size: 18px; ${data.adx > 25 ? 'color: #2563eb; font-weight: 700;' : ''}">${Number(data.adx).toFixed(1)}</div>
             <span class="status ${data.adx > 25 ? 'status-info' : 'status-safe'}">${data.adx > 25 ? '강한 추세' : '횡보/약한 추세'}</span>
+            <canvas class="indicator-gauge" id="gauge_adx"></canvas>
           </div>
           <div class="indicator-card">
             <div class="label">+DI (상승 강도)</div>
@@ -834,7 +949,7 @@ const displayResult = (data) => {
     sellRatioHtml = `
       <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px;">
         <strong style="color: #991b1b;">권장 매도 비율: ${ratioMin}% ~ ${ratioMax}%</strong>
-        ${data.holding_quantity ? `<span style="color: #7c2d12; margin-left: 12px;">→ 보유 ${data.holding_quantity}주 중 ${Math.floor(data.holding_quantity * ratioMinValue)}~${Math.floor(data.holding_quantity * ratioMaxValue)}주 매도 권장</span>` : ''}
+        ${Number.isFinite(Number(data.holding_quantity)) && Number.isFinite(Number(ratioMinValue)) && Number.isFinite(Number(ratioMaxValue)) ? `<span style="color: #7c2d12; margin-left: 12px;">→ 보유 ${safeNum(data.holding_quantity)}주 중 ${Math.floor(Number(data.holding_quantity) * ratioMinValue)}~${Math.floor(Number(data.holding_quantity) * ratioMaxValue)}주 매도 권장</span>` : ''}
       </div>
     `;
   }
@@ -842,7 +957,7 @@ const displayResult = (data) => {
   const html = `
     <div class="result-card">
       <div class="result-header">
-        <h3>${data.symbol} ${data.name || ''}</h3>
+        <h3>${escapeHtml(data.symbol)} ${escapeHtml(data.name)}</h3>
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
           <span class="stage-badge ${stageClass}">${getStageDisplayName(currentStage)}</span>
           <span class="phase-badge ${phaseClass}">${getPhaseDisplayName(data.sell_phase, data.sell_phase_name)}</span>
@@ -875,15 +990,18 @@ const displayResult = (data) => {
           <div class="label">Stochastic %K</div>
           <div class="value">${Number(data.stoch_k).toFixed(1)}</div>
           <span class="status ${stochStatus}">${data.is_stoch_overbought ? '과매수' : '정상'}</span>
+          <canvas class="indicator-gauge" id="gauge_stoch_k"></canvas>
         </div>
         <div class="indicator-card">
           <div class="label">Stochastic %D</div>
           <div class="value">${Number(data.stoch_d).toFixed(1)}</div>
+          <canvas class="indicator-gauge" id="gauge_stoch_d"></canvas>
         </div>
         <div class="indicator-card">
           <div class="label">RSI (14)</div>
           <div class="value">${Number(data.rsi).toFixed(1)}</div>
           <span class="status ${rsiStatus}">${data.is_rsi_overbought ? '과매수' : '정상'}</span>
+          <canvas class="indicator-gauge" id="gauge_rsi"></canvas>
         </div>
         ${trailingStopHtml}
       </div>
@@ -896,7 +1014,7 @@ const displayResult = (data) => {
       <div class="reasons-list" style="background: #fef2f2; border-color: #fecaca;">
         <h4 style="color: #991b1b;">비중축소 판단 근거</h4>
         <ul>
-          ${stageReasons.map(r => `<li style="color: #7c2d12;">${r}</li>`).join('')}
+          ${stageReasons.map(r => `<li style="color: #7c2d12;">${escapeHtml(r)}</li>`).join('')}
         </ul>
       </div>
       ` : ''}
@@ -905,19 +1023,71 @@ const displayResult = (data) => {
       <div class="reasons-list">
         <h4>매도 근거</h4>
         <ul>
-          ${sellReasons.map(r => `<li>${r}</li>`).join('')}
+          ${sellReasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
         </ul>
       </div>
       ` : ''}
 
       <p style="margin-top: 16px; font-size: 12px; color: #64748b;">
         분석 시간: ${formatDateTime(data.analyzed_at)}
-        ${data.candle_count ? ` | 사용된 캔들: ${data.candle_count}개` : ''}
+        ${Number.isFinite(Number(data.candle_count)) ? ` | 사용된 캔들: ${safeNum(data.candle_count)}개` : ''}
       </p>
     </div>
   `;
 
   document.getElementById("result_container").innerHTML = html;
+
+  // canvas 게이지 렌더링 (layout 확정 후)
+  const stochOpts = {
+    ticks: [20, 50, 70, 80],
+    zones: [
+      { from: 0, to: 20, color: 'rgba(22,163,74,0.12)' },
+      { from: 70, to: 100, color: 'rgba(220,38,38,0.12)' }
+    ],
+    highThreshold: 70,
+    lowThreshold: 20
+  };
+  const rsiOpts = {
+    ticks: [30, 50, 70],
+    zones: [
+      { from: 0, to: 30, color: 'rgba(22,163,74,0.12)' },
+      { from: 70, to: 100, color: 'rgba(220,38,38,0.12)' }
+    ],
+    highThreshold: 70,
+    lowThreshold: 30
+  };
+  const adxOpts = data.adx !== null && data.adx !== undefined ? {
+    ticks: [10, 25, 40],
+    zones: [{ from: 25, to: 60, color: 'rgba(37,99,235,0.12)' }],
+    barColor: '#2563eb',
+    highThreshold: 60,
+    lowThreshold: 0
+  } : null;
+
+  const redrawGauges = () => {
+    drawGauge('gauge_stoch_k', data.stoch_k, 0, 100, stochOpts);
+    drawGauge('gauge_stoch_d', data.stoch_d, 0, 100, stochOpts);
+    drawGauge('gauge_rsi', data.rsi, 0, 100, rsiOpts);
+    if (adxOpts) drawGauge('gauge_adx', data.adx, 0, 60, adxOpts);
+  };
+
+  const resultContainer = document.getElementById('result_container');
+
+  // 이전 RAF 취소 후 새로 등록 (stale 콜백 방지)
+  if (resultContainer?._gaugeRafId) cancelAnimationFrame(resultContainer._gaugeRafId);
+  if (resultContainer) resultContainer._gaugeRafId = requestAnimationFrame(redrawGauges);
+
+  // 리사이즈 시 재렌더링 (ResizeObserver)
+  if (resultContainer && window.ResizeObserver) {
+    const existingRo = resultContainer._gaugeRo;
+    if (existingRo) existingRo.disconnect();
+    const ro = new ResizeObserver(() => {
+      if (resultContainer._gaugeRafId) cancelAnimationFrame(resultContainer._gaugeRafId);
+      resultContainer._gaugeRafId = requestAnimationFrame(redrawGauges);
+    });
+    ro.observe(resultContainer);
+    resultContainer._gaugeRo = ro;
+  }
 };
 
 const renderUniverseBacktest = (data) => {
@@ -932,14 +1102,14 @@ const renderUniverseBacktest = (data) => {
   const summary = data.summary;
   const bestSymbols = (summary.best_symbols || []).map(item => `
     <li>
-      <span>${item.symbol}</span>
+      <span>${escapeHtml(item.symbol)}</span>
       <strong class="universe-positive">${Number(item.total_return).toFixed(2)}%</strong>
     </li>
   `).join('') || '<li><span>데이터 없음</span><span>-</span></li>';
 
   const worstSymbols = (summary.worst_symbols || []).map(item => `
     <li>
-      <span>${item.symbol}</span>
+      <span>${escapeHtml(item.symbol)}</span>
       <strong class="universe-negative">${Number(item.total_return).toFixed(2)}%</strong>
     </li>
   `).join('') || '<li><span>데이터 없음</span><span>-</span></li>';
@@ -947,7 +1117,7 @@ const renderUniverseBacktest = (data) => {
   const config = data.config_summary || {};
   const comparisonRows = (config.comparison_results || []).map(item => `
     <li>
-      <span>${item.label}</span>
+      <span>${escapeHtml(item.label)}</span>
       <strong>${Number(item.average_return).toFixed(2)}% / ${Number(item.average_win_rate).toFixed(2)}% / ${Number(item.average_holding_days).toFixed(1)}일</strong>
     </li>
   `).join('');
@@ -956,11 +1126,11 @@ const renderUniverseBacktest = (data) => {
     <div class="result-header">
       <h3>유니버스 백테스트 요약</h3>
       <div style="font-size: 12px; color: #64748b;">
-        ${data.market || '전체'} · ${data.symbols.length}종목 · ${data.start_date?.slice(0,10)} ~ ${data.end_date?.slice(0,10)}
+        ${escapeHtml(data.market || '전체')} · ${Array.isArray(data.symbols) ? data.symbols.length : 0}종목 · ${escapeHtml(data.start_date?.slice(0,10) || '')} ~ ${escapeHtml(data.end_date?.slice(0,10) || '')}
       </div>
     </div>
     <div style="font-size: 13px; color: #475569; margin-bottom: 8px;">
-      전략: ${config.label || '공격형 중단기 스윙 매도 v3'}
+      전략: ${escapeHtml(config.label || '공격형 중단기 스윙 매도 v3')}
       (손절 ${formatPercent(Math.abs(config.stop_loss || 0))} / 본전보호 ${formatPercent(config.breakeven_activation || 0)} / 1차익절 ${formatPercent(config.partial_take_profit_1 || 0)} / 2차익절 ${formatPercent(config.partial_take_profit_2 || 0)} / trailing ${formatPercent(config.trailing_stop || 0)})
     </div>
     <div class="universe-summary-grid">
@@ -1038,7 +1208,7 @@ const renderHistoryTable = () => {
 
     tbody.innerHTML = analysisHistory.map(item => {
       const displayStage = resolveDisplayStage(item);
-      const stageClass = `stage-${displayStage}`;
+      const stageClass = `stage-${sanitizeCssClass(displayStage)}`;
       const activeIcon = item.is_active ? '●' : '○';
       const activeClass = item.is_active ? 'active' : 'inactive';
       const selectedClass = item.id === selectedHistoryId ? 'selected' : '';
@@ -1051,12 +1221,13 @@ const renderHistoryTable = () => {
       const stochDisplay = item.stoch_k !== null && item.stoch_k !== undefined ? Number(item.stoch_k).toFixed(1) : '-';
       const rsiDisplay = item.rsi !== null && item.rsi !== undefined ? Number(item.rsi).toFixed(1) : '-';
 
-      return `<tr class="${selectedClass}" onclick="showHistoryDetail(${item.id})">
+      const safeId = parseInt(item.id, 10);
+      return `<tr class="${selectedClass}" onclick="showHistoryDetail(${safeId})">
         <td>
-          <span class="active-toggle ${activeClass}" onclick="toggleActive(${item.id}, event)" title="${item.is_active ? '활성 추적 중' : '추적 중지됨'}">${activeIcon}</span>
+          <span class="active-toggle ${activeClass}" onclick="toggleActive(${safeId}, event)" title="${item.is_active ? '활성 추적 중' : '추적 중지됨'}">${activeIcon}</span>
         </td>
-        <td><strong>${item.symbol}</strong>${entryPriceBadge}</td>
-        <td>${item.name || '-'}</td>
+        <td><strong>${escapeHtml(item.symbol)}</strong>${entryPriceBadge}</td>
+        <td>${escapeHtml(item.name || '-')}</td>
         <td>${formatNumber(item.current_price)}</td>
         <td><span class="stage-badge ${stageClass}" style="font-size: 11px; padding: 4px 8px;">${stageName}</span></td>
         <td>${adxDisplay} ${adxBadge}</td>
@@ -1064,8 +1235,8 @@ const renderHistoryTable = () => {
         <td>${rsiDisplay}</td>
         <td>${formatTime(item.analyzed_at)}</td>
         <td>
-          <button class="btn-edit" onclick="openEditModal(${item.id}, event)">수정</button>
-          <button class="btn-delete" onclick="deleteHistory(${item.id}, event)">삭제</button>
+          <button class="btn-edit" onclick="openEditModal(${safeId}, event)">수정</button>
+          <button class="btn-delete" onclick="deleteHistory(${safeId}, event)">삭제</button>
         </td>
       </tr>`;
     }).join('');

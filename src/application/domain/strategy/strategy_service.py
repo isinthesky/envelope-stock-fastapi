@@ -891,6 +891,11 @@ class StrategyService:
                             name=(fin.name if fin and fin.name else getattr(stock, "name", None)),
                             market=getattr(stock, "market", None),
                             sector=getattr(stock, "sector", None),
+                            industry=(
+                                fin.industry_code
+                                if fin and fin.industry_code
+                                else getattr(stock, "industry", None)
+                            ),
                             market_cap=(
                                 Decimal(fin.market_cap)
                                 if fin and fin.market_cap
@@ -1785,7 +1790,7 @@ class StrategyService:
                 )
                 if latest and not latest.name:
                     # DB 유니버스에서 조회
-                    universe_stock = await universe_repo.get_by_symbol(symbol)
+                    universe_stock = await universe_repo.get_by_symbol(symbol, session=session)
                     if universe_stock and universe_stock.name:
                         stock_name = universe_stock.name
                     elif market_data_service:

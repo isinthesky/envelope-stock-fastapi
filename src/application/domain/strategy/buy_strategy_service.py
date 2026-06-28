@@ -287,6 +287,7 @@ class BuyStrategyService:
                                     name=stock.name,
                                     market=stock.market,
                                     current_price=Decimal(str(close)),
+                                    sector_name=getattr(stock, "sector", None),
                                     industry_code=getattr(stock, "industry", None),
                                     industry_name=None,
                                     ma_short=Decimal(str(round(ma_short, 2))),
@@ -471,6 +472,9 @@ class BuyStrategyService:
             symbol = item.get("symbol")
             name = item.get("name")
             market = item.get("market") or "ETF"
+            sector_name = item.get("sector_name") or item.get("sector")
+            industry_code = item.get("industry_code") or item.get("industry")
+            industry_name = item.get("industry_name")
 
             if not symbol:
                 continue
@@ -544,8 +548,9 @@ class BuyStrategyService:
                         name=name,
                         market=market,
                         current_price=Decimal(str(close)),
-                        industry_code=None,
-                        industry_name=None,
+                        sector_name=sector_name,
+                        industry_code=industry_code,
+                        industry_name=industry_name,
                         ma_short=Decimal(str(round(ma_short, 2))),
                         ma_long=Decimal(str(round(ma_long, 2))),
                         ma_gap_ratio=round(ma_gap_ratio, 2),
@@ -567,6 +572,21 @@ class BuyStrategyService:
                 error_msg = f"{symbol}: {str(e)}"
                 logger.warning(f"[GC Scan] Error processing {error_msg}")
                 errors.append(error_msg)
+
+        # industry_code → industry_name 매핑 (DB 스캔 경로와 동일)
+        industry_codes = {r.industry_code for r in results if r.industry_code and not r.industry_name}
+        if industry_codes:
+            try:
+                stmt = select(NaverIndustryCodeModel).where(
+                    NaverIndustryCodeModel.industry_code.in_(industry_codes)
+                )
+                mapping_rows = (await session.execute(stmt)).scalars().all()
+                code_to_name = {row.industry_code: row.industry_name for row in mapping_rows}
+                for r in results:
+                    if r.industry_code and not r.industry_name:
+                        r.industry_name = code_to_name.get(r.industry_code)
+            except Exception as e:
+                logger.warning(f"[GC Scan symbols] Failed to attach industry names: {e}")
 
         # 결과 정렬 (BUY_INTEREST 추가)
         state_order = {

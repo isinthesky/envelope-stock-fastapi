@@ -43,6 +43,7 @@
 .indicator-card .label { font-size: 12px; color: #64748b; text-transform: uppercase; margin-bottom: 4px; }
 .indicator-card .value { font-size: 24px; font-weight: 700; color: #1e293b; }
 .indicator-card .status { font-size: 12px; margin-top: 4px; padding: 2px 8px; border-radius: 4px; display: inline-block; }
+.indicator-gauge { display: block; width: 100%; height: 40px; margin-top: 8px; border-radius: 4px; border: 1px solid #e2e8f0; background: #f8fafc; }
 .status-danger { background: #fecaca; color: #991b1b; }
 .status-warning { background: #fef3c7; color: #92400e; }
 .status-safe { background: #dcfce7; color: #166534; }

@@ -30,6 +30,8 @@ class TestFinancialFilterStatistics:
                 name="삼성전자",
                 market="KOSPI",
                 current_price=Decimal("70000"),
+                sector_name="반도체",
+                industry_code="101",
                 ma_short=Decimal("68000"),
                 ma_long=Decimal("65000"),
                 ma_gap_ratio=4.6,
@@ -152,6 +154,9 @@ class TestFinancialFilterStatistics:
             assert result.financial_fail_count == 1  # SK하이닉스 (조건 불충족)
             assert result.financial_error_count == 1  # 카카오 (조회 실패)
             assert result.financial_pending_count == 1  # 셀트리온 (필터 대상 아님)
+            samsung = next(stock for stock in result.stocks if stock.symbol == "005930")
+            assert samsung.sector_name == "반도체"
+            assert samsung.industry_code == "101"
 
     @pytest.mark.asyncio
     async def test_revenue_yoy_none_handling(self, scan_result):
@@ -192,6 +197,79 @@ class TestFinancialFilterStatistics:
 
 class TestGoldenCrossScanListDTO:
     """GoldenCrossScanListDTO 테스트"""
+
+    def test_scan_item_serializes_sector_name(self):
+        item = GoldenCrossScanItemDTO(
+            symbol="005930",
+            name="삼성전자",
+            market="KOSPI",
+            current_price=Decimal("70000"),
+            sector_name="반도체",
+            industry_code="101",
+            industry_name=None,
+            ma_short=Decimal("68000"),
+            ma_long=Decimal("65000"),
+            ma_gap_ratio=4.6,
+            stoch_k=25.0,
+            stoch_d=28.0,
+            is_gc_active=True,
+            gc_state="OPTIMAL_BUY",
+        )
+
+        payload = item.model_dump()
+
+        assert payload["sector_name"] == "반도체"
+        assert payload["industry_code"] == "101"
+
+    def test_scan_item_industry_name_all_fields(self):
+        """sector_name, industry_code, industry_name 모두 직렬화 확인"""
+        item = GoldenCrossScanItemDTO(
+            symbol="005930",
+            name="삼성전자",
+            market="KOSPI",
+            current_price=Decimal("70000"),
+            sector_name="반도체",
+            industry_code="101",
+            industry_name="반도체와반도체장비",
+            ma_short=Decimal("68000"),
+            ma_long=Decimal("65000"),
+            ma_gap_ratio=4.6,
+            stoch_k=25.0,
+            stoch_d=28.0,
+            is_gc_active=True,
+            gc_state="OPTIMAL_BUY",
+        )
+
+        payload = item.model_dump()
+
+        assert payload["industry_name"] == "반도체와반도체장비"
+        assert payload["sector_name"] == "반도체"
+        assert payload["industry_code"] == "101"
+
+    def test_scan_item_sector_fallback_when_no_industry_name(self):
+        """industry_name=None일 때 sector_name과 industry_code가 보존되는지 확인"""
+        item = GoldenCrossScanItemDTO(
+            symbol="005930",
+            name="삼성전자",
+            market="KOSPI",
+            current_price=Decimal("70000"),
+            sector_name="반도체",
+            industry_code="101",
+            industry_name=None,
+            ma_short=Decimal("68000"),
+            ma_long=Decimal("65000"),
+            ma_gap_ratio=4.6,
+            stoch_k=25.0,
+            stoch_d=28.0,
+            is_gc_active=True,
+            gc_state="OPTIMAL_BUY",
+        )
+
+        payload = item.model_dump()
+
+        assert payload["industry_name"] is None
+        assert payload["sector_name"] == "반도체"
+        assert payload["industry_code"] == "101"
 
     def test_financial_error_count_field_exists(self):
         """financial_error_count 필드 존재 확인"""

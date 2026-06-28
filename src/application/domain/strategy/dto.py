@@ -567,6 +567,7 @@ class GoldenCrossScanItemDTO(BaseDTO):
     current_price: Decimal = Field(description="현재가")
 
     # 업종(섹터) 정보
+    sector_name: str | None = Field(default=None, description="섹터명")
     industry_code: str | None = Field(default=None, description="네이버 업종 코드 (industryCode)")
     industry_name: str | None = Field(default=None, description="업종명 (industry_code 매핑 결과)")
 

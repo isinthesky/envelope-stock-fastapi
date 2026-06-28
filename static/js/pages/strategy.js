@@ -217,6 +217,13 @@ const updateLastRefreshLabel = (data, isStale = false) => {
   `;
 };
 
+const escapeHtml = (value) => String(value ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#39;');
+
 // MA5 돌파 스캔 (유니버스 전체)
 const scanMA5Breakout = async (forceRefresh = false) => {
   // 중복 클릭 방지
@@ -373,13 +380,13 @@ const renderMA5ScanTable = (stocks) => {
 
   tbody.innerHTML = filtered.map(stock => {
     const stateClass = getMA5StateClass(stock.ma5_state);
-    const stateLabel = getMA5StateLabel(stock.ma5_state);
+    const stateLabel = escapeHtml(getMA5StateLabel(stock.ma5_state));
     const gapClass = stock.gap_ratio > 0 ? 'bullish' : 'bearish';
     const volRatioClass = stock.volume_ratio >= 1 ? 'bullish' : '';
 
     return `<tr>
-      <td><strong>${stock.symbol}</strong></td>
-      <td>${stock.name || '-'}</td>
+      <td><strong>${escapeHtml(stock.symbol || '-')}</strong></td>
+      <td>${escapeHtml(stock.name || '-')}</td>
       <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
       <td class="indicator">${formatNumber(stock.current_price)}</td>
       <td class="indicator">${formatNumber(stock.ma5)}</td>
@@ -475,10 +482,19 @@ const addToHistory = async (stock, event) => {
   }
 };
 
+const addScannedStockToHistory = (encodedSymbol, event) => {
+  const symbol = decodeURIComponent(encodedSymbol);
+  const stock = gcScanStocks.find(item => item.symbol === symbol);
+  if (!stock) return;
+  addToHistory(stock, event);
+};
+
 // 히스토리 삭제
-const deleteBuyHistory = async (id, symbol, event) => {
+const deleteBuyHistory = async (id, event) => {
   event.stopPropagation();
   if (!confirm('이 종목을 히스토리에서 삭제하시겠습니까?')) return;
+
+  const target = buyHistory.find(h => h.id === id);
 
   try {
     const response = await fetch(`/api/v1/strategies/analysis-history/${id}`, {
@@ -487,7 +503,7 @@ const deleteBuyHistory = async (id, symbol, event) => {
 
     if (response.ok) {
       buyHistory = buyHistory.filter(h => h.id !== id);
-      addedSymbols.delete(symbol);
+      if (target) addedSymbols.delete(target.symbol);
       renderBuyHistoryTable();
       renderGcScanTable(gcScanStocks); // 버튼 상태 업데이트
     }
@@ -632,7 +648,7 @@ const renderBuyHistoryTable = () => {
 
   tbody.innerHTML = buyHistory.map(item => {
     const stateClass = getGcStateClass(item.gc_state);
-    const stateLabel = getGcStateLabel(item.gc_state);
+    const stateLabel = escapeHtml(getGcStateLabel(item.gc_state));
     const activeIcon = item.is_active ? '●' : '○';
     const activeClass = item.is_active ? 'active' : 'inactive';
     const maGapClass = item.ma_gap_ratio > 0 ? 'bullish' : 'bearish';
@@ -641,7 +657,7 @@ const renderBuyHistoryTable = () => {
       <td>
         <span class="active-toggle ${activeClass}" onclick="toggleBuyActive(${item.id}, event)" title="${item.is_active ? '활성 추적 중' : '추적 중지됨'}">${activeIcon}</span>
       </td>
-      <td><strong>${item.symbol}</strong></td>
+      <td><strong>${escapeHtml(item.symbol || '-')}</strong></td>
             <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
       <td class="indicator">${formatNumber(item.current_price)}</td>
       <td class="indicator ${maGapClass}">${Number(item.ma_gap_ratio).toFixed(2)}%</td>
@@ -649,7 +665,7 @@ const renderBuyHistoryTable = () => {
       <td class="indicator">${Number(item.stoch_d).toFixed(1)}</td>
       <td>${formatTime(item.analyzed_at)}</td>
       <td>
-        <button class="btn-delete" onclick="deleteBuyHistory(${item.id}, '${item.symbol}', event)">삭제</button>
+        <button class="btn-delete" onclick="deleteBuyHistory(${item.id}, event)">삭제</button>
       </td>
     </tr>`;
   }).join('');
@@ -858,15 +874,20 @@ const renderGcScanTable = (stocks) => {
 
   tbody.innerHTML = filtered.map(stock => {
     const stateClass = getGcStateClass(stock.gc_state);
-    const stateLabel = getGcStateLabel(stock.gc_state);
+    const stateLabel = escapeHtml(getGcStateLabel(stock.gc_state));
     const finClass = getFinStatusClass(stock.financial_filter_status);
-    const finLabel = getFinStatusLabel(stock.financial_filter_status);
+    const finLabel = escapeHtml(getFinStatusLabel(stock.financial_filter_status));
     const maGapClass = stock.ma_gap_ratio > 0 ? 'bullish' : 'bearish';
     const stochClass = stock.stoch_k < 30 ? 'bearish' : stock.stoch_k > 70 ? 'bullish' : '';
     const isAdded = addedSymbols.has(stock.symbol);
     const btnClass = isAdded ? 'btn-add added' : 'btn-add';
     const btnText = isAdded ? '추가됨' : '+';
-    const stockJson = JSON.stringify(stock).replace(/'/g, "\\'");
+    const encodedSymbol = encodeURIComponent(String(stock.symbol || '')).replace(/'/g, '%27');
+    const symbolText = escapeHtml(stock.symbol || '-');
+    const nameText = escapeHtml(stock.name || '-');
+    const sectorText = escapeHtml(
+      stock.industry_name || stock.sector_name || stock.sector || stock.industry_code || '-'
+    );
 
     // 재무 데이터 포맷
     const revenueYoy = stock.revenue_yoy != null ? `${stock.revenue_yoy >= 0 ? '+' : ''}${Number(stock.revenue_yoy).toFixed(1)}%` : '-';
@@ -876,13 +897,13 @@ const renderGcScanTable = (stocks) => {
 
     return `<tr>
       <td>
-        <button class="${btnClass}" onclick='addToHistory(${stockJson}, event)' ${isAdded ? 'disabled' : ''}>${btnText}</button>
+        <button class="${btnClass}" onclick="addScannedStockToHistory('${encodedSymbol}', event)" ${isAdded ? 'disabled' : ''}>${btnText}</button>
       </td>
-      <td><strong>${stock.symbol}</strong></td>
-      <td>${stock.name}</td>
+      <td><strong>${symbolText}</strong></td>
+      <td>${nameText}</td>
       <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
       <td><span class="state-badge ${finClass}">${finLabel}</span></td>
-      <td style="font-size:12px; color:#94a3b8;">${stock.industry_name || '-'}</td>
+      <td style="font-size:12px; color:#94a3b8;">${sectorText}</td>
       <td class="indicator">${formatNumber(stock.current_price)}</td>
       <td class="indicator ${maGapClass}">${stock.ma_gap_ratio.toFixed(2)}%</td>
       <td class="indicator ${stochClass}">${stock.stoch_k.toFixed(1)} / ${stock.stoch_d.toFixed(1)}</td>
@@ -982,10 +1003,10 @@ const renderUniverseTable = (stocks) => {
     const scoreClass = score >= 70 ? 'bullish' : score >= 50 ? '' : 'bearish';
 
     return `<tr>
-      <td><strong>${stock.symbol}</strong></td>
-      <td>${stock.name || '-'}</td>
-      <td><span class="state-badge ${marketClass}">${stock.market}</span></td>
-      <td>${stock.sector || '-'}</td>
+      <td><strong>${escapeHtml(stock.symbol || '-')}</strong></td>
+      <td>${escapeHtml(stock.name || '-')}</td>
+      <td><span class="state-badge ${marketClass}">${escapeHtml(stock.market || '-')}</span></td>
+      <td>${escapeHtml(stock.sector || '-')}</td>
       <td class="indicator">${formatMarketCap(stock.market_cap)}</td>
       <td class="indicator">${formatNumber(stock.current_price)}</td>
       <td class="indicator">${formatVolume(stock.avg_volume_20d)}</td>
@@ -1037,13 +1058,13 @@ const renderTable = (stocks) => {
   if (!tbody) return;
   tbody.innerHTML = filtered.map(stock => {
     const stateClass = getStateClass(stock.state);
-    const stateLabel = getStateLabel(stock.state);
+    const stateLabel = escapeHtml(getStateLabel(stock.state));
     const pnl = stock.unrealized_pnl_ratio ? (stock.unrealized_pnl_ratio * 100).toFixed(2) + '%' : '-';
     const pnlClass = stock.unrealized_pnl_ratio > 0 ? 'bullish' : stock.unrealized_pnl_ratio < 0 ? 'bearish' : '';
 
     return `<tr>
-      <td><strong>${stock.symbol}</strong></td>
-      <td>${stock.name || '-'}</td>
+      <td><strong>${escapeHtml(stock.symbol || '-')}</strong></td>
+      <td>${escapeHtml(stock.name || '-')}</td>
       <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
       <td class="indicator">${formatNumber(stock.last_close)}</td>
       <td class="indicator">${formatNumber(stock.last_ma_short)}</td>
@@ -1380,13 +1401,13 @@ function renderStrategyList(strategies) {
   }
 
   body.innerHTML = strategies.map((s) => {
-    const symbols = Array.isArray(s.symbols) ? s.symbols.join(', ') : (s.symbols || '');
+    const symbols = escapeHtml(Array.isArray(s.symbols) ? s.symbols.join(', ') : (s.symbols || ''));
     return `
       <tr onclick="selectStrategy(${s.id})">
         <td>${s.id}</td>
-        <td>${s.name || '-'}</td>
-        <td>${s.strategy_type || '-'}</td>
-        <td>${s.status || '-'}</td>
+        <td>${escapeHtml(s.name || '-')}</td>
+        <td>${escapeHtml(s.strategy_type || '-')}</td>
+        <td>${escapeHtml(s.status || '-')}</td>
         <td style="max-width: 360px; overflow:hidden; text-overflow: ellipsis; white-space: nowrap;">${symbols}</td>
         <td>
           <button class="secondary" onclick="event.stopPropagation(); selectStrategy(${s.id})">Select</button>
@@ -1620,8 +1641,8 @@ const renderSymbolStatesTable = (items) => {
   body.innerHTML = items.map((item) => {
     return `
       <tr>
-        <td>${item.symbol || '-'}</td>
-        <td>${item.state || '-'}</td>
+        <td>${escapeHtml(item.symbol || '-')}</td>
+        <td>${escapeHtml(item.state || '-')}</td>
         <td>${item.last_close ?? '-'}</td>
         <td>${item.unrealized_pnl_ratio ?? '-'}</td>
       </tr>
@@ -1666,13 +1687,13 @@ const renderSignalsTable = (items) => {
   }
 
   body.innerHTML = items.map((item) => {
-    const ts = item.signal_at || item.created_at || item.time || item.timestamp || '-';
+    const ts = escapeHtml(item.signal_at || item.created_at || item.time || item.timestamp || '-');
     return `
       <tr>
         <td>${ts}</td>
-        <td>${item.symbol || '-'}</td>
-        <td>${item.signal_type || '-'}</td>
-        <td>${item.signal_status || '-'}</td>
+        <td>${escapeHtml(item.symbol || '-')}</td>
+        <td>${escapeHtml(item.signal_type || '-')}</td>
+        <td>${escapeHtml(item.signal_status || '-')}</td>
         <td>${item.signal_price ?? '-'}</td>
         <td>${item.target_quantity ?? item.executed_quantity ?? '-'}</td>
       </tr>
