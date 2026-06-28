@@ -103,6 +103,9 @@ uv.lock
 # Documentation (local only)
 /docs
 
+# OMO work documents
+.omo/
+
 # BMAD
 .bmad/
 .claude/commands/
