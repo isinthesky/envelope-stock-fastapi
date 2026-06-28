@@ -169,9 +169,9 @@ class NaverStockClient:
             )
 
             # 에러 처리
-            if isinstance(integration_data, Exception):
+            if isinstance(integration_data, BaseException):
                 return None
-            if isinstance(finance_data, Exception):
+            if isinstance(finance_data, BaseException):
                 finance_data = {}
 
             # 종목명 추출

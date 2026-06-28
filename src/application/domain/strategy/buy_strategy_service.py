@@ -327,7 +327,7 @@ class BuyStrategyService:
 
         error_map: dict[int, str] = {}
         for item in completed:
-            if isinstance(item, Exception):
+            if isinstance(item, BaseException):
                 errors.append(str(item))
                 continue
             worker_results, worker_errors, worker_cache_stats = item
@@ -755,7 +755,7 @@ class BuyStrategyService:
         completed = await asyncio.gather(*tasks, return_exceptions=True)
 
         for item in completed:
-            if isinstance(item, Exception):
+            if isinstance(item, BaseException):
                 continue
             symbol, result = item
             if result:
@@ -1021,7 +1021,7 @@ class BuyStrategyService:
                         if not is_breakout:
                             continue
 
-                        ma5_state = "BREAKOUT"
+                        ma5_state = "BREAKOUT"  # 유니버스 스캔은 돌파 종목만 반환
                         gap_ratio = ((ma5 - upper_band) / upper_band * 100) if upper_band > 0 else 0
 
                         if use_volume_filter and volume_ma20 > 0:
@@ -1076,7 +1076,7 @@ class BuyStrategyService:
 
         error_map: dict[int, str] = {}
         for item in completed:
-            if isinstance(item, Exception):
+            if isinstance(item, BaseException):
                 errors.append(str(item))
                 continue
             worker_results, worker_errors, worker_cache_stats = item

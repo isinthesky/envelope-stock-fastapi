@@ -148,6 +148,7 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
         self,
         symbol: str,
         analysis_type: str,
+        is_active: bool | None = None,
         session: AsyncSession | None = None,
     ) -> AnalysisHistoryModel | None:
         """
@@ -156,16 +157,20 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
         Args:
             symbol: 종목코드
             analysis_type: 분석 유형
+            is_active: 활성 상태 필터 (None이면 전체)
             session: AsyncSession (새 패턴) 또는 None (기존 패턴)
 
         Returns:
             AnalysisHistoryModel | None: 최신 분석 이력 또는 None
         """
         db = self._get_session(session)
-        stmt = select(self.model).where(
+        conditions = [
             self.model.symbol == symbol,
             self.model.analysis_type == analysis_type,
-        ).order_by(self.model.analyzed_at.desc()).limit(1)
+        ]
+        if is_active is not None:
+            conditions.append(self.model.is_active == is_active)
+        stmt = select(self.model).where(*conditions).order_by(self.model.analyzed_at.desc()).limit(1)
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
 

@@ -281,8 +281,12 @@ class StrategyService:
         account_no = account_no or settings.current_kis_account_no
 
         if status:
+            try:
+                status_enum = StrategyStatus(status)
+            except ValueError:
+                raise StrategyError(f"유효하지 않은 전략 상태: {status}")
             strategies = await self.strategy_repo.get_by_status(
-                StrategyStatus(status), limit=limit, offset=offset, session=session
+                status_enum, account_no=account_no, limit=limit, offset=offset, session=session
             )
         else:
             strategies = await self.strategy_repo.get_by_account(
@@ -291,7 +295,11 @@ class StrategyService:
 
         strategy_list = [self._to_detail_dto(s) for s in strategies]
 
-        return StrategyListResponseDTO(strategies=strategy_list, total_count=len(strategy_list))
+        total_count = await self.strategy_repo.count_by_account(
+            account_no, status=StrategyStatus(status) if status else None, session=session
+        )
+
+        return StrategyListResponseDTO(strategies=strategy_list, total_count=total_count)
 
     # ==================== 전략 수정 ====================
 
@@ -615,9 +623,9 @@ class StrategyService:
             stocks = await universe_repo.get_eligible_stocks(market=market_type, limit=limit)
         else:
             if market_type:
-                stocks = await universe_repo.get_many(market=market_type.value)
+                stocks = await universe_repo.get_many(market=market_type.value, limit=limit)
             else:
-                stocks = await universe_repo.get_all()
+                stocks = await universe_repo.get_many(limit=limit)
 
         stock_dtos = [
             StockUniverseItemDTO(
@@ -958,7 +966,7 @@ class StrategyService:
         total_error_count = 0
         errors: list[str] = []
         for item in results:
-            if isinstance(item, Exception):
+            if isinstance(item, BaseException):
                 total_error_count += 1
                 logger.error("[universe.refresh] worker task crashed", exc_info=item)
                 if len(errors) < MAX_ERRORS:
@@ -1786,7 +1794,7 @@ class StrategyService:
                 # 종목명 조회 (DB에 없는 경우)
                 stock_name = None
                 latest = await history_repo.get_latest_by_symbol(
-                    symbol, analysis_type, session=session
+                    symbol, analysis_type, is_active=True, session=session
                 )
                 if latest and not latest.name:
                     # DB 유니버스에서 조회

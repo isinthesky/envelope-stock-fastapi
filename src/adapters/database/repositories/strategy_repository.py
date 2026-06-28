@@ -10,7 +10,7 @@ Strategy Repository - 전략 데이터 접근 계층
 from datetime import datetime
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.strategy import StrategyModel, StrategyStatus
@@ -98,23 +98,45 @@ class StrategyRepository(
     async def get_by_status(
         self,
         status: StrategyStatus,
+        account_no: str | None = None,
         limit: int = 100,
         offset: int = 0,
         session: AsyncSession | None = None,
     ) -> Sequence[StrategyModel]:
         """상태별 전략 목록 조회"""
         db = self._get_session(session)
+        conditions = [
+            self.model.status == status.value,
+            self.model.deleted_at.is_(None),
+        ]
+        if account_no:
+            conditions.append(self.model.account_no == account_no)
         stmt = (
             select(self.model)
-            .where(
-                self.model.status == status.value,
-                self.model.deleted_at.is_(None),
-            )
+            .where(*conditions)
             .limit(limit)
             .offset(offset)
         )
         result = await db.execute(stmt)
         return result.scalars().all()
+
+    async def count_by_account(
+        self,
+        account_no: str,
+        status: StrategyStatus | None = None,
+        session: AsyncSession | None = None,
+    ) -> int:
+        """계좌의 전략 총 개수 조회"""
+        db = self._get_session(session)
+        conditions = [
+            self.model.account_no == account_no,
+            self.model.deleted_at.is_(None),
+        ]
+        if status:
+            conditions.append(self.model.status == status.value)
+        stmt = select(func.count()).select_from(self.model).where(*conditions)
+        result = await db.execute(stmt)
+        return result.scalar_one()
 
     async def get_active_strategies(
         self,
@@ -136,14 +158,26 @@ class StrategyRepository(
     async def get_by_symbol(
         self,
         symbol: str,
+        account_no: str | None = None,
         limit: int = 100,
         offset: int = 0,
         session: AsyncSession | None = None,
     ) -> Sequence[StrategyModel]:
-        """종목 코드로 전략 조회 (symbols 필드에서 검색)"""
+        """종목 코드로 전략 조회 (symbols 필드 정확 매칭)"""
         db = self._get_session(session)
-        stmt = select(self.model).where(self.model.symbols.like(f"%{symbol}%"))
-        stmt = stmt.limit(limit).offset(offset)
+        # 종목코드는 콤마 구분 목록 내 단어 단위로 매칭 (부분 문자열 오탐 방지)
+        conditions = [
+            (
+                self.model.symbols.like(f"{symbol},%")
+                | self.model.symbols.like(f"%,{symbol},%")
+                | self.model.symbols.like(f"%,{symbol}")
+                | (self.model.symbols == symbol)
+            ),
+            self.model.deleted_at.is_(None),
+        ]
+        if account_no:
+            conditions.append(self.model.account_no == account_no)
+        stmt = select(self.model).where(*conditions).limit(limit).offset(offset)
 
         result = await db.execute(stmt)
         return result.scalars().all()
