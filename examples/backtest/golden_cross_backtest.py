@@ -11,9 +11,9 @@ analysis_history 테이블의 종목들에 대해 2년치 일봉 데이터로
 """
 
 import asyncio
-from datetime import datetime, timedelta
-from decimal import Decimal
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -22,6 +22,7 @@ from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.connection import get_db
 from src.adapters.external.kis_api.client import KISAPIClient
 from src.application.common.indicators import TechnicalIndicators
+from src.application.domain.backtest.cost_schedule import get_backtest_cost_schedule
 from src.application.domain.backtest.data_loader import BacktestDataLoader
 from src.application.domain.market_data.service import MarketDataService
 
@@ -29,11 +30,12 @@ from src.application.domain.market_data.service import MarketDataService
 @dataclass
 class GoldenCrossConfig:
     """골든크로스 전략 설정"""
+
     short_ma_period: int = 55  # 단기 이동평균 기간
     long_ma_period: int = 165  # 장기 이동평균 기간
-    stoch_k_period: int = 14   # Stochastic K 기간
-    stoch_d_period: int = 3    # Stochastic D 기간
-    stoch_oversold: float = 30.0   # 과매도 임계값
+    stoch_k_period: int = 14  # Stochastic K 기간
+    stoch_d_period: int = 3  # Stochastic D 기간
+    stoch_oversold: float = 30.0  # 과매도 임계값
     stoch_overbought: float = 70.0  # 과매수 임계값
     stop_loss_ratio: float = -0.07  # 손절 비율 (-7%)
     take_profit_ratio: float = 0.15  # 익절 비율 (+15%)
@@ -43,15 +45,29 @@ class GoldenCrossConfig:
 @dataclass
 class BacktestConfig:
     """백테스트 설정"""
+
     initial_capital: Decimal = Decimal("10_000_000")  # 초기 자본 1,000만원
-    commission_rate: float = 0.00015  # 수수료 0.015%
-    tax_rate: float = 0.0018  # 세금 0.18% (매도 시만)
-    slippage_rate: float = 0.0005  # 슬리피지 0.05%
+    cost_schedule_date: date = date(2025, 1, 1)
+    commission_rate: float | None = None
+    tax_rate: float | None = None
+    slippage_rate: float | None = None
+    cost_source_label: str = ""
+
+    def __post_init__(self) -> None:
+        schedule = get_backtest_cost_schedule(self.cost_schedule_date)
+        if self.commission_rate is None:
+            self.commission_rate = float(schedule.default_commission_rate)
+        if self.tax_rate is None:
+            self.tax_rate = float(schedule.sell_tax_rate)
+        if self.slippage_rate is None:
+            self.slippage_rate = float(schedule.default_slippage_rate)
+        self.cost_source_label = schedule.source_label
 
 
 @dataclass
 class Trade:
     """거래 기록"""
+
     trade_id: int
     entry_date: datetime
     entry_price: Decimal
@@ -67,6 +83,7 @@ class Trade:
 @dataclass
 class BacktestResult:
     """백테스트 결과"""
+
     symbol: str
     name: str
     start_date: datetime
@@ -161,7 +178,7 @@ class GoldenCrossBacktester:
                 avg_holding_days=0.0,
                 max_consecutive_wins=0,
                 max_consecutive_losses=0,
-                error=f"Insufficient data: {len(df)} rows (minimum {min_period} required)"
+                error=f"Insufficient data: {len(df)} rows (minimum {min_period} required)",
             )
 
         # 일별 처리
@@ -178,15 +195,19 @@ class GoldenCrossBacktester:
             # NaN 체크
             if pd.isna(ma_short) or pd.isna(ma_long):
                 # 자산 기록 (포지션 없을 때)
-                position_value = position_quantity * current_price if position_quantity > 0 else Decimal("0")
+                position_value = (
+                    position_quantity * current_price if position_quantity > 0 else Decimal("0")
+                )
                 equity = cash + position_value
                 equity_curve.append(equity)
-                daily_equity.append({
-                    "date": current_date,
-                    "equity": float(equity),
-                    "cash": float(cash),
-                    "position_value": float(position_value),
-                })
+                daily_equity.append(
+                    {
+                        "date": current_date,
+                        "equity": float(equity),
+                        "cash": float(cash),
+                        "position_value": float(position_value),
+                    }
+                )
                 continue
 
             # === 1. 손절/익절 체크 (포지션 보유 시) ===
@@ -196,8 +217,14 @@ class GoldenCrossBacktester:
                 # 손절
                 if profit_rate <= self.strategy_config.stop_loss_ratio:
                     cash, current_trade = self._execute_sell(
-                        cash, current_price, position_quantity, position_entry_price,
-                        position_entry_date, current_date, current_trade, "stop_loss"
+                        cash,
+                        current_price,
+                        position_quantity,
+                        position_entry_price,
+                        position_entry_date,
+                        current_date,
+                        current_trade,
+                        "stop_loss",
                     )
                     trades.append(current_trade)
                     position_quantity = 0
@@ -206,8 +233,14 @@ class GoldenCrossBacktester:
                 # 익절
                 elif profit_rate >= self.strategy_config.take_profit_ratio:
                     cash, current_trade = self._execute_sell(
-                        cash, current_price, position_quantity, position_entry_price,
-                        position_entry_date, current_date, current_trade, "take_profit"
+                        cash,
+                        current_price,
+                        position_quantity,
+                        position_entry_price,
+                        position_entry_date,
+                        current_date,
+                        current_trade,
+                        "take_profit",
                     )
                     trades.append(current_trade)
                     position_quantity = 0
@@ -248,39 +281,54 @@ class GoldenCrossBacktester:
             elif position_quantity > 0 and current_trade:
                 if dc_signal:
                     cash, current_trade = self._execute_sell(
-                        cash, current_price, position_quantity, position_entry_price,
-                        position_entry_date, current_date, current_trade, "death_cross"
+                        cash,
+                        current_price,
+                        position_quantity,
+                        position_entry_price,
+                        position_entry_date,
+                        current_date,
+                        current_trade,
+                        "death_cross",
                     )
                     trades.append(current_trade)
                     position_quantity = 0
                     current_trade = None
 
             # === 3. 일별 자산 기록 ===
-            position_value = position_quantity * current_price if position_quantity > 0 else Decimal("0")
+            position_value = (
+                position_quantity * current_price if position_quantity > 0 else Decimal("0")
+            )
             equity = cash + position_value
             equity_curve.append(equity)
-            daily_equity.append({
-                "date": current_date,
-                "equity": float(equity),
-                "cash": float(cash),
-                "position_value": float(position_value),
-            })
+            daily_equity.append(
+                {
+                    "date": current_date,
+                    "equity": float(equity),
+                    "cash": float(cash),
+                    "position_value": float(position_value),
+                }
+            )
 
         # 마지막 포지션 청산
         if position_quantity > 0 and current_trade:
             last_price = Decimal(str(df.iloc[-1]["close"]))
             last_date = df.iloc[-1]["timestamp"]
             cash, current_trade = self._execute_sell(
-                cash, last_price, position_quantity, position_entry_price,
-                position_entry_date, last_date, current_trade, "end_of_period"
+                cash,
+                last_price,
+                position_quantity,
+                position_entry_price,
+                position_entry_date,
+                last_date,
+                current_trade,
+                "end_of_period",
             )
             trades.append(current_trade)
 
         # 결과 계산
         final_capital = equity_curve[-1] if equity_curve else self.backtest_config.initial_capital
         result = self._calculate_result(
-            symbol, name, start_date, end_date,
-            final_capital, trades, equity_curve, daily_equity
+            symbol, name, start_date, end_date, final_capital, trades, equity_curve, daily_equity
         )
 
         return result
@@ -357,14 +405,16 @@ class GoldenCrossBacktester:
         if len(daily_equity) > 1:
             returns = []
             for i in range(1, len(daily_equity)):
-                prev_eq = daily_equity[i-1]["equity"]
+                prev_eq = daily_equity[i - 1]["equity"]
                 curr_eq = daily_equity[i]["equity"]
                 if prev_eq > 0:
                     returns.append((curr_eq - prev_eq) / prev_eq)
             if returns:
                 avg_return = sum(returns) / len(returns)
                 std_return = (sum((r - avg_return) ** 2 for r in returns) / len(returns)) ** 0.5
-                sharpe_ratio = (avg_return * 252 / (std_return * (252 ** 0.5))) if std_return > 0 else 0.0
+                sharpe_ratio = (
+                    (avg_return * 252 / (std_return * (252**0.5))) if std_return > 0 else 0.0
+                )
             else:
                 sharpe_ratio = 0.0
         else:
@@ -377,14 +427,28 @@ class GoldenCrossBacktester:
 
         win_rate = (len(winning_trades) / len(completed_trades) * 100) if completed_trades else 0.0
 
-        avg_profit = sum(t.profit_rate for t in winning_trades) / len(winning_trades) if winning_trades else 0.0
-        avg_loss = sum(t.profit_rate for t in losing_trades) / len(losing_trades) if losing_trades else 0.0
+        avg_profit = (
+            sum(t.profit_rate for t in winning_trades) / len(winning_trades)
+            if winning_trades
+            else 0.0
+        )
+        avg_loss = (
+            sum(t.profit_rate for t in losing_trades) / len(losing_trades) if losing_trades else 0.0
+        )
 
         total_profit = sum(float(t.profit_loss) for t in winning_trades) if winning_trades else 0.0
         total_loss = abs(sum(float(t.profit_loss) for t in losing_trades)) if losing_trades else 0.0
-        profit_factor = total_profit / total_loss if total_loss > 0 else (float("inf") if total_profit > 0 else 0.0)
+        profit_factor = (
+            total_profit / total_loss
+            if total_loss > 0
+            else (float("inf") if total_profit > 0 else 0.0)
+        )
 
-        avg_holding_days = sum(t.holding_days for t in completed_trades) / len(completed_trades) if completed_trades else 0.0
+        avg_holding_days = (
+            sum(t.holding_days for t in completed_trades) / len(completed_trades)
+            if completed_trades
+            else 0.0
+        )
 
         # 연승/연패
         max_wins, max_losses = self._calculate_streaks(completed_trades)
@@ -440,7 +504,11 @@ class GoldenCrossBacktester:
 
             if drawdown > mdd:
                 mdd = drawdown
-                mdd_start = daily_equity[current_peak_idx]["date"] if current_peak_idx < len(daily_equity) else None
+                mdd_start = (
+                    daily_equity[current_peak_idx]["date"]
+                    if current_peak_idx < len(daily_equity)
+                    else None
+                )
                 mdd_end = daily_equity[idx]["date"] if idx < len(daily_equity) else None
 
         return mdd, mdd_start, mdd_end
@@ -472,12 +540,14 @@ async def get_analysis_history_symbols(db_session) -> list[dict]:
     """analysis_history 테이블에서 활성 종목 조회"""
     from sqlalchemy import text
 
-    query = text("""
+    query = text(
+        """
         SELECT DISTINCT symbol, name, analysis_type
         FROM analysis_history
         WHERE is_active = true
         ORDER BY symbol
-    """)
+    """
+    )
 
     result = await db_session.execute(query)
     rows = result.fetchall()
@@ -554,7 +624,9 @@ def generate_report(results: list[BacktestResult], report_path: str) -> str:
         for r in sorted_results:
             lines.append(f"### {r.name} ({r.symbol})")
             lines.append("")
-            lines.append(f"**기간**: {r.start_date.strftime('%Y-%m-%d')} ~ {r.end_date.strftime('%Y-%m-%d')}")
+            lines.append(
+                f"**기간**: {r.start_date.strftime('%Y-%m-%d')} ~ {r.end_date.strftime('%Y-%m-%d')}"
+            )
             lines.append("")
             lines.append("#### 수익 지표")
             lines.append(f"- 초기 자본: {r.initial_capital:,.0f}원")
@@ -565,17 +637,23 @@ def generate_report(results: list[BacktestResult], report_path: str) -> str:
             lines.append("#### 리스크 지표")
             lines.append(f"- **MDD**: {r.mdd:.2f}%")
             if r.mdd_start_date and r.mdd_end_date:
-                lines.append(f"  - 기간: {r.mdd_start_date.strftime('%Y-%m-%d')} ~ {r.mdd_end_date.strftime('%Y-%m-%d')}")
+                lines.append(
+                    f"  - 기간: {r.mdd_start_date.strftime('%Y-%m-%d')} ~ {r.mdd_end_date.strftime('%Y-%m-%d')}"
+                )
             lines.append(f"- **Sharpe Ratio**: {r.sharpe_ratio:.2f}")
             lines.append("")
             lines.append("#### 거래 통계")
-            lines.append(f"- 총 거래: {r.total_trades}회 (승리: {r.winning_trades}, 패배: {r.losing_trades})")
+            lines.append(
+                f"- 총 거래: {r.total_trades}회 (승리: {r.winning_trades}, 패배: {r.losing_trades})"
+            )
             lines.append(f"- **승률**: {r.win_rate:.1f}%")
             lines.append(f"- 평균 수익: {r.avg_profit:+.2f}%")
             lines.append(f"- 평균 손실: {r.avg_loss:.2f}%")
             lines.append(f"- **Profit Factor**: {r.profit_factor:.2f}")
             lines.append(f"- 평균 보유 기간: {r.avg_holding_days:.0f}일")
-            lines.append(f"- 최대 연승: {r.max_consecutive_wins}회, 최대 연패: {r.max_consecutive_losses}회")
+            lines.append(
+                f"- 최대 연승: {r.max_consecutive_wins}회, 최대 연패: {r.max_consecutive_losses}회"
+            )
             lines.append("")
 
             # 거래 내역
@@ -586,7 +664,7 @@ def generate_report(results: list[BacktestResult], report_path: str) -> str:
                 lines.append("|:----:|:------:|-------:|:------:|-------:|-------:|:----:|")
 
                 for trade in r.trades[-10:]:  # 최근 10건
-                    exit_date = trade.exit_date.strftime('%Y-%m-%d') if trade.exit_date else "-"
+                    exit_date = trade.exit_date.strftime("%Y-%m-%d") if trade.exit_date else "-"
                     exit_price = f"{trade.exit_price:,.0f}" if trade.exit_price else "-"
                     exit_reason_kr = {
                         "death_cross": "데드크로스",
@@ -595,7 +673,9 @@ def generate_report(results: list[BacktestResult], report_path: str) -> str:
                         "end_of_period": "기간종료",
                     }.get(trade.exit_reason, trade.exit_reason or "-")
 
-                    profit_emoji = "📈" if trade.profit_rate > 0 else ("📉" if trade.profit_rate < 0 else "➖")
+                    profit_emoji = (
+                        "📈" if trade.profit_rate > 0 else ("📉" if trade.profit_rate < 0 else "➖")
+                    )
 
                     lines.append(
                         f"| {trade.trade_id} | {trade.entry_date.strftime('%Y-%m-%d')} | "
@@ -628,8 +708,12 @@ def generate_report(results: list[BacktestResult], report_path: str) -> str:
         unprofitable = [r for r in valid_results if r.total_return <= 0]
 
         lines.append(f"### 수익성 분석")
-        lines.append(f"- 수익 종목: {len(profitable)}개 ({len(profitable)/len(valid_results)*100:.1f}%)")
-        lines.append(f"- 손실 종목: {len(unprofitable)}개 ({len(unprofitable)/len(valid_results)*100:.1f}%)")
+        lines.append(
+            f"- 수익 종목: {len(profitable)}개 ({len(profitable)/len(valid_results)*100:.1f}%)"
+        )
+        lines.append(
+            f"- 손실 종목: {len(unprofitable)}개 ({len(unprofitable)/len(valid_results)*100:.1f}%)"
+        )
         lines.append("")
 
         if profitable:
@@ -669,7 +753,9 @@ def generate_report(results: list[BacktestResult], report_path: str) -> str:
     lines.append("")
     lines.append("---")
     lines.append("")
-    lines.append("*이 리포트는 자동 생성되었습니다. 투자 결정은 본인의 판단하에 이루어져야 합니다.*")
+    lines.append(
+        "*이 리포트는 자동 생성되었습니다. 투자 결정은 본인의 판단하에 이루어져야 합니다.*"
+    )
 
     report_content = "\n".join(lines)
 
@@ -720,7 +806,9 @@ async def main():
         end_date = datetime.now()
         start_date = end_date - timedelta(days=730)  # 약 2년
 
-        print(f"\n📅 백테스트 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
+        print(
+            f"\n📅 백테스트 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
+        )
         print("=" * 80)
 
         # 7. 종목별 백테스트 실행
@@ -742,7 +830,9 @@ async def main():
                     use_cache=True,
                 )
 
-                print(f"   📥 데이터: {len(df)}건 ({actual_start.strftime('%Y-%m-%d')} ~ {actual_end.strftime('%Y-%m-%d')})")
+                print(
+                    f"   📥 데이터: {len(df)}건 ({actual_start.strftime('%Y-%m-%d')} ~ {actual_end.strftime('%Y-%m-%d')})"
+                )
 
                 # 백테스트 실행
                 result = await backtester.run(
@@ -757,37 +847,41 @@ async def main():
                     print(f"   ⚠️ 오류: {result.error}")
                 else:
                     emoji = "📈" if result.total_return > 0 else "📉"
-                    print(f"   {emoji} 수익률: {result.total_return:+.2f}% | MDD: {result.mdd:.2f}% | 거래: {result.total_trades}회")
+                    print(
+                        f"   {emoji} 수익률: {result.total_return:+.2f}% | MDD: {result.mdd:.2f}% | 거래: {result.total_trades}회"
+                    )
 
                 results.append(result)
 
             except Exception as e:
                 print(f"   ❌ 실패: {e}")
-                results.append(BacktestResult(
-                    symbol=symbol,
-                    name=name,
-                    start_date=start_date,
-                    end_date=end_date,
-                    initial_capital=backtest_config.initial_capital,
-                    final_capital=backtest_config.initial_capital,
-                    total_return=0.0,
-                    annualized_return=0.0,
-                    mdd=0.0,
-                    mdd_start_date=None,
-                    mdd_end_date=None,
-                    sharpe_ratio=0.0,
-                    win_rate=0.0,
-                    total_trades=0,
-                    winning_trades=0,
-                    losing_trades=0,
-                    avg_profit=0.0,
-                    avg_loss=0.0,
-                    profit_factor=0.0,
-                    avg_holding_days=0.0,
-                    max_consecutive_wins=0,
-                    max_consecutive_losses=0,
-                    error=str(e),
-                ))
+                results.append(
+                    BacktestResult(
+                        symbol=symbol,
+                        name=name,
+                        start_date=start_date,
+                        end_date=end_date,
+                        initial_capital=backtest_config.initial_capital,
+                        final_capital=backtest_config.initial_capital,
+                        total_return=0.0,
+                        annualized_return=0.0,
+                        mdd=0.0,
+                        mdd_start_date=None,
+                        mdd_end_date=None,
+                        sharpe_ratio=0.0,
+                        win_rate=0.0,
+                        total_trades=0,
+                        winning_trades=0,
+                        losing_trades=0,
+                        avg_profit=0.0,
+                        avg_loss=0.0,
+                        profit_factor=0.0,
+                        avg_holding_days=0.0,
+                        max_consecutive_wins=0,
+                        max_consecutive_losses=0,
+                        error=str(e),
+                    )
+                )
 
         # 8. 결과 요약 출력
         print("\n" + "=" * 80)
@@ -802,7 +896,9 @@ async def main():
 
             for r in sorted(valid_results, key=lambda x: x.total_return, reverse=True):
                 emoji = "📈" if r.total_return > 0 else "📉"
-                print(f"{emoji} {r.name[:25]:<28} {r.total_return:>+9.2f}% {r.mdd:>7.2f}% {r.win_rate:>7.1f}% {r.total_trades:>8}")
+                print(
+                    f"{emoji} {r.name[:25]:<28} {r.total_return:>+9.2f}% {r.mdd:>7.2f}% {r.win_rate:>7.1f}% {r.total_trades:>8}"
+                )
 
             print("-" * 70)
 
@@ -814,6 +910,7 @@ async def main():
         report_path = "reports/golden_cross_backtest_report.md"
 
         import os
+
         os.makedirs("reports", exist_ok=True)
 
         print(f"\n📝 리포트 생성 중...")
@@ -831,6 +928,7 @@ async def main():
     except Exception as e:
         print(f"\n❌ 오류 발생: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         await db_session.close()

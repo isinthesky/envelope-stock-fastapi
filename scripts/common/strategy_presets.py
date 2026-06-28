@@ -188,15 +188,10 @@ class StrategyPresets:
         기본 백테스트 설정
 
         - 초기 자본: 1,000만원
-        - 수수료: 0.015%
-        - 세금: 0.23%
-        - 슬리피지: 0.05%
+        - 거래 비용: 날짜별 백테스트 비용 스케줄
         """
         return BacktestConfigDTO(
             initial_capital=Decimal("10000000"),
-            commission_rate=0.00015,
-            tax_rate=0.0023,
-            slippage_rate=0.0005,
             use_commission=True,
             use_tax=True,
             use_slippage=True,
@@ -226,9 +221,6 @@ class StrategyPresets:
         """
         return BacktestConfigDTO(
             initial_capital=Decimal("100000000"),
-            commission_rate=0.00015,
-            tax_rate=0.0023,
-            slippage_rate=0.0005,
             use_commission=True,
             use_tax=True,
             use_slippage=True,

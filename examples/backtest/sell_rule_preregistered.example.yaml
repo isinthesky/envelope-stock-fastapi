@@ -1,0 +1,85 @@
+symbols:
+  - "005930"
+candidates:
+  - candidate_id: "current-overlay-score-v1"
+    description: "Current overlay score path frozen before the test window"
+    rule_type: "current_overlay_score"
+    thresholds:
+      - field: "current_overlay_score"
+        operator: "gte"
+        value: 8.0
+    evaluation_window:
+      train_start_date: "20240101"
+      train_end_date: "20241231"
+      test_start_date: "20250101"
+      test_end_date: "20251231"
+  - candidate_id: "simple-credit-personal-v1"
+    description: "Simpler personal-flow and market-credit threshold rule"
+    rule_type: "all_thresholds"
+    thresholds:
+      - field: "personal_buy_days_5d"
+        operator: "gte"
+        value: 4.0
+      - field: "personal_buy_ratio_5d_to_volume"
+        operator: "gte"
+        value: 0.15
+      - field: "market_credit_change_ratio"
+        operator: "gte"
+        value: 0.008
+      - field: "market_credit_recent_high_ratio"
+        operator: "gte"
+        value: 0.99
+    evaluation_window:
+      train_start_date: "20240101"
+      train_end_date: "20241231"
+      test_start_date: "20250101"
+      test_end_date: "20251231"
+fixture_rows:
+  - symbol: "005930"
+    biz_date: "20250103"
+    personal_buy_days_5d: 5
+    personal_buy_ratio_5d_to_volume: 0.22
+    market_credit_change_ratio: 0.011
+    market_credit_recent_high_ratio: 0.997
+    stoch_k: 88.0
+    is_52week_high: true
+    high_52week_ratio: 1.0
+    is_peak_label: true
+    future_drawdown_10d: 0.08
+    future_return_10d: 0.01
+  - symbol: "005930"
+    biz_date: "20250110"
+    personal_buy_days_5d: 4
+    personal_buy_ratio_5d_to_volume: 0.16
+    market_credit_change_ratio: 0.010
+    market_credit_recent_high_ratio: 0.996
+    stoch_k: 72.0
+    is_52week_high: false
+    high_52week_ratio: 0.94
+    is_peak_label: false
+    future_drawdown_10d: 0.03
+    future_return_10d: 0.06
+  - symbol: "005930"
+    biz_date: "20250120"
+    personal_buy_days_5d: 4
+    personal_buy_ratio_5d_to_volume: 0.18
+    market_credit_change_ratio: 0.008
+    market_credit_recent_high_ratio: 0.991
+    stoch_k: 60.0
+    is_52week_high: false
+    high_52week_ratio: 0.93
+    is_peak_label: true
+    future_drawdown_10d: 0.07
+    future_return_10d: 0.02
+  - symbol: "005930"
+    biz_date: "20250205"
+    personal_buy_days_5d: 1
+    personal_buy_ratio_5d_to_volume: 0.02
+    market_credit_change_ratio: 0.001
+    market_credit_recent_high_ratio: 0.95
+    stoch_k: 48.0
+    is_52week_high: false
+    high_52week_ratio: 0.90
+    is_peak_label: false
+    future_drawdown_10d: 0.01
+    future_return_10d: 0.04

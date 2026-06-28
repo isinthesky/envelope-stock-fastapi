@@ -46,9 +46,6 @@ async def main():
         # 2. 기본 설정
         backtest_config = BacktestConfigDTO(
             initial_capital=Decimal("10_000_000"),
-            commission_rate=0.00015,
-            tax_rate=0.0023,
-            slippage_rate=0.0005,
             use_commission=True,
             use_tax=True,
             use_slippage=True

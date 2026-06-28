@@ -1,16 +1,20 @@
+import argparse
 import asyncio
-import numpy as np
-import pandas as pd
+import json
+import logging
 from datetime import datetime
 from decimal import Decimal
-import logging
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 # Logging Setup
 logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 from src.application.domain.backtest.engine import BacktestEngine
-from src.application.domain.backtest.dto import BacktestConfigDTO
+from src.application.domain.backtest.dto import BacktestConfigDTO, ExecutionTiming
 from src.application.domain.strategy.dto import (
     StrategyConfigDTO,
     BollingerBandConfig,
@@ -188,10 +192,40 @@ class MarketSimulator:
 # 3. Main Execution Script
 # ==============================================================================
 
+def parse_execution_timing(value: str) -> ExecutionTiming:
+    match value:
+        case "next_open" | "next_close" | "same_close":
+            return value
+        case _:
+            raise argparse.ArgumentTypeError(
+                "execution_timing must be one of: next_open, next_close, same_close"
+            )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the synthetic golden-cross strategy simulation.")
+    parser.add_argument(
+        "--execution-timing",
+        type=parse_execution_timing,
+        default="next_open",
+        help=(
+            "Signal execution timing. Daily bars default to next_open; "
+            "same_close is for explicit closing-auction style scenarios."
+        ),
+    )
+    parser.add_argument("--limit", type=int, default=None, help="Limit selected target stocks.")
+    parser.add_argument("--output", type=Path, default=None, help="Write JSON summary to this path.")
+    return parser.parse_args()
+
+
 async def main():
+    args = parse_args()
+    backtest_config = BacktestConfigDTO(execution_timing=args.execution_timing)
+
     print("=" * 80)
     print("🌊 'Second Wave' Strategy Simulation")
     print("   Criteria: Small Cap + GC(60/200) + Stoch Pullback + Rebound")
+    print(f"   Execution timing: {backtest_config.execution_timing}")
     print("=" * 80)
 
     # 1. Setup Market
@@ -221,6 +255,9 @@ async def main():
             print(f"   ❌ {symbol} ({info['name']}): Cap {info['market_cap']:,} - Too Large")
             
     print(f"\n   Targets: {', '.join(target_stocks)}")
+    if args.limit is not None:
+        target_stocks = target_stocks[: args.limit]
+        print(f"   Limited targets: {', '.join(target_stocks)}")
 
     # 2. Run Strategy on Targets
     print("\n🚀 2. Running Strategy Simulation...")
@@ -283,7 +320,23 @@ async def main():
     print("📊 Simulation Result")
     print(f"   Initial Balance: {initial_balance:,.0f}")
     print(f"   Final Balance:   {balance:,.0f}")
-    print(f"   Return:          {((balance - initial_balance) / initial_balance * 100):+.2f}%")
+    return_pct = (balance - initial_balance) / initial_balance * 100
+    print(f"   Return:          {return_pct:+.2f}%")
+
+    summary = {
+        "execution_timing": backtest_config.execution_timing,
+        "target_count": len(target_stocks),
+        "initial_balance": initial_balance,
+        "final_balance": float(balance),
+        "return_pct": float(return_pct),
+    }
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"   Output:          {args.output}")
 
 if __name__ == "__main__":
     asyncio.run(main())

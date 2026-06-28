@@ -1,0 +1,50 @@
+strategy_id: golden-cross-pullback
+benchmark: KOSPI
+selection_metric: cagr
+period:
+  train_start: 2023-01-01
+  train_end: 2023-12-31
+  test_start: 2024-01-01
+  test_end: 2024-12-31
+candidates:
+  - candidate_id: golden-cross-baseline-v1
+    name: Golden cross pullback baseline
+    rules:
+      short_period: 55
+      long_period: 165
+      stoch_oversold: 30.0
+      stoch_overbought: 70.0
+      min_pullback_bars: 2
+    train_metrics:
+      cagr: 9.4
+      benchmark_cagr: 6.1
+      mdd: -12.8
+      sharpe: 0.91
+      turnover: 0.42
+    test_metrics:
+      cagr: 5.8
+      benchmark_cagr: 4.9
+      mdd: -10.4
+      sharpe: 0.66
+      turnover: 0.39
+  - candidate_id: golden-cross-kd-confirm-v1
+    name: Golden cross with K-above-D confirmation
+    rules:
+      short_period: 55
+      long_period: 165
+      stoch_oversold: 30.0
+      stoch_overbought: 70.0
+      min_pullback_bars: 2
+      require_k_above_d_for_buy: true
+    train_metrics:
+      cagr: 13.2
+      benchmark_cagr: 6.1
+      mdd: -11.9
+      sharpe: 1.14
+      turnover: 0.37
+    test_metrics:
+      cagr: 7.1
+      benchmark_cagr: 4.9
+      mdd: -9.8
+      sharpe: 0.82
+      turnover: 0.35
