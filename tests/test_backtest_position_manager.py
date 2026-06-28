@@ -55,11 +55,11 @@ class TestPosition:
         """평가 손익률 계산 테스트"""
         # 수익률
         profit_rate = self.position.get_unrealized_profit_rate(Decimal("77000"))
-        assert profit_rate == pytest.approx(10.0, abs=0.01)  # (77000 - 70000) / 70000 * 100
+        assert profit_rate == pytest.approx(0.10, abs=0.01)
 
         # 손실률
         loss_rate = self.position.get_unrealized_profit_rate(Decimal("63000"))
-        assert loss_rate == pytest.approx(-10.0, abs=0.01)
+        assert loss_rate == pytest.approx(-0.10, abs=0.01)
 
 
 class TestPositionManager:
@@ -98,15 +98,15 @@ class TestPositionManager:
         )
 
         # 포지션 청산
-        closed_position = self.manager.close_position("005930")
-        assert closed_position is not None
-        assert closed_position.symbol == "005930"
+        closed_positions = self.manager.close_position("005930")
+        assert len(closed_positions) == 1
+        assert closed_positions[0].symbol == "005930"
         assert not self.manager.has_position("005930")
 
     def test_close_non_existent_position(self):
         """존재하지 않는 포지션 청산 테스트"""
         result = self.manager.close_position("999999")
-        assert result is None
+        assert result == []
 
     def test_update_positions(self):
         """포지션 평가액 업데이트 테스트"""
@@ -150,18 +150,20 @@ class TestPositionManager:
         )
 
         # 손절 발동 (진입가 70000, 현재가 67000 = -4.29%)
+        position = self.manager.get_position("005930")
+        assert position is not None
         is_stop_loss = self.manager.check_stop_loss(
-            symbol="005930",
+            position=position,
             current_price=Decimal("67000"),
-            stop_loss_ratio=-3.0  # -3%
+            stop_loss_ratio=-0.03,
         )
         assert is_stop_loss is True
 
         # 손절 미발동
         is_stop_loss = self.manager.check_stop_loss(
-            symbol="005930",
+            position=position,
             current_price=Decimal("69000"),
-            stop_loss_ratio=-3.0
+            stop_loss_ratio=-0.03,
         )
         assert is_stop_loss is False
 
@@ -176,18 +178,20 @@ class TestPositionManager:
         )
 
         # 익절 발동 (진입가 70000, 현재가 74000 = +5.71%)
+        position = self.manager.get_position("005930")
+        assert position is not None
         is_take_profit = self.manager.check_take_profit(
-            symbol="005930",
+            position=position,
             current_price=Decimal("74000"),
-            take_profit_ratio=5.0  # +5%
+            take_profit_ratio=0.05,
         )
         assert is_take_profit is True
 
         # 익절 미발동
         is_take_profit = self.manager.check_take_profit(
-            symbol="005930",
+            position=position,
             current_price=Decimal("72000"),
-            take_profit_ratio=5.0
+            take_profit_ratio=0.05,
         )
         assert is_take_profit is False
 
@@ -208,17 +212,17 @@ class TestPositionManager:
 
         # Trailing Stop 발동 (최고가 80000, 현재가 76000 = -5%)
         is_trailing_stop = self.manager.check_trailing_stop(
-            symbol="005930",
+            position=position,
             current_price=Decimal("76000"),
-            trailing_stop_ratio=0.03  # 3%
+            trailing_stop_ratio=0.03,
         )
         assert is_trailing_stop is True
 
         # Trailing Stop 미발동
         is_trailing_stop = self.manager.check_trailing_stop(
-            symbol="005930",
+            position=position,
             current_price=Decimal("78000"),
-            trailing_stop_ratio=0.03
+            trailing_stop_ratio=0.03,
         )
         assert is_trailing_stop is False
 

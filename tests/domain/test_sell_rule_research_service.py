@@ -14,7 +14,12 @@ async def test_research_service_prefers_combo_peak_rule() -> None:
         _ = symbols
         return [{"symbol": "005930", "name": "삼성전자", "market": "KOSPI"}]
 
-    async def fake_load(symbol: str, market: str | None, start_date: str, end_date: str) -> pd.DataFrame:
+    async def fake_load(
+        symbol: str,
+        market: str | None,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
         _ = symbol, market, start_date, end_date
         rows = []
         base = datetime(2024, 1, 1)
@@ -37,7 +42,9 @@ async def test_research_service_prefers_combo_peak_rule() -> None:
     def fake_label(df: pd.DataFrame) -> pd.DataFrame:
         labeled = df.copy()
         labeled["is_peak_label"] = labeled["is_52week_high"]
-        labeled["future_drawdown_10d"] = labeled["is_52week_high"].map(lambda v: 0.09 if v else 0.02)
+        labeled["future_drawdown_10d"] = labeled["is_52week_high"].map(
+            lambda v: 0.09 if v else 0.02
+        )
         labeled["future_return_10d"] = labeled["is_52week_high"].map(lambda v: 0.01 if v else 0.04)
         return labeled
 
@@ -85,3 +92,13 @@ def test_evaluate_peak_rule_inputs_keeps_stoch_combo_as_research_only() -> None:
     assert result["research_combo_peak_with_stoch"] is True
     assert result["combo_bonus"] == 0.0
     assert any("[research]" in reason for reason in result["combo_reasons"])
+
+
+def test_candidate_rules_keep_stable_ids() -> None:
+    candidates = SellPeakRuleResearchService._candidate_rules()
+
+    assert [candidate.rule_id for candidate in candidates] == [
+        "combo_peak_near_high",
+        "credit_hot_personal_strong",
+        "combo_peak_with_stoch",
+    ]

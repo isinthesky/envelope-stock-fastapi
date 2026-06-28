@@ -46,9 +46,6 @@ class TestBacktestPerformance:
         # 백테스트 설정
         self.backtest_config = BacktestConfigDTO(
             initial_capital=Decimal("10000000"),
-            commission_rate=0.00015,
-            tax_rate=0.0023,
-            slippage_rate=0.0005,
             use_commission=True,
             use_tax=True,
             use_slippage=True,
@@ -135,7 +132,6 @@ class TestBacktestPerformance:
         assert result.total_return is not None
 
         print(f"\n[소규모] 30일 처리 시간: {elapsed:.3f}초")
-        print(f"  - 일평균 처리 시간: {elapsed/30*1000:.2f}ms")
         print(f"  - 거래 횟수: {result.total_trades}")
 
     async def test_performance_medium_dataset(self):

@@ -3,11 +3,10 @@
 BacktestOrderManager 테스트
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
-import pytest
-
+from src.application.domain.backtest.cost_schedule import get_backtest_cost_schedule
 from src.application.domain.backtest.dto import BacktestConfigDTO, TradeDTO
 from src.application.domain.backtest.order_manager import BacktestOrderManager
 
@@ -15,26 +14,23 @@ from src.application.domain.backtest.order_manager import BacktestOrderManager
 class TestBacktestOrderManager:
     """주문 관리자 테스트"""
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         """테스트 초기화"""
         self.config = BacktestConfigDTO(
             initial_capital=Decimal("10000000"),
             commission_rate=0.00015,  # 0.015%
-            tax_rate=0.0023,  # 0.23%
             slippage_rate=0.0005,  # 0.05%
             use_commission=True,
             use_tax=True,
-            use_slippage=True
+            use_slippage=True,
+            cost_schedule_date=date(2024, 1, 1),
         )
         self.manager = BacktestOrderManager(self.config)
 
-    def test_execute_buy_order_with_fees(self):
+    def test_execute_buy_order_with_fees(self) -> None:
         """매수 주문 실행 (수수료 포함) 테스트"""
         trade, total_cost = self.manager.execute_buy_order(
-            symbol="005930",
-            price=Decimal("70000"),
-            quantity=10,
-            date=datetime(2024, 1, 1)
+            symbol="005930", price=Decimal("70000"), quantity=10, date=datetime(2024, 1, 1)
         )
 
         # 슬리피지 적용: 70000 * 1.0005 = 70035
@@ -55,24 +51,20 @@ class TestBacktestOrderManager:
         assert trade.tax == Decimal("0")  # 매수 시 세금 없음
         assert trade.trade_type == "buy"
 
-    def test_execute_buy_order_without_fees(self):
+    def test_execute_buy_order_without_fees(self) -> None:
         """매수 주문 실행 (수수료 미포함) 테스트"""
         config_no_fees = BacktestConfigDTO(
             initial_capital=Decimal("10000000"),
             commission_rate=0.00015,
-            tax_rate=0.0023,
             slippage_rate=0.0005,
             use_commission=False,
             use_tax=False,
-            use_slippage=False
+            use_slippage=False,
         )
         manager = BacktestOrderManager(config_no_fees)
 
         trade, total_cost = manager.execute_buy_order(
-            symbol="005930",
-            price=Decimal("70000"),
-            quantity=10,
-            date=datetime(2024, 1, 1)
+            symbol="005930", price=Decimal("70000"), quantity=10, date=datetime(2024, 1, 1)
         )
 
         # 슬리피지 미적용
@@ -84,22 +76,16 @@ class TestBacktestOrderManager:
         # 총 비용 = 매수 금액
         assert total_cost == Decimal("700000")
 
-    def test_execute_sell_order_with_fees(self):
+    def test_execute_sell_order_with_fees(self) -> None:
         """매도 주문 실행 (수수료/세금 포함) 테스트"""
         # 먼저 매수
         buy_trade, _ = self.manager.execute_buy_order(
-            symbol="005930",
-            price=Decimal("70000"),
-            quantity=10,
-            date=datetime(2024, 1, 1)
+            symbol="005930", price=Decimal("70000"), quantity=10, date=datetime(2024, 1, 1)
         )
 
         # 매도 (10% 상승)
         sell_trade, net_proceeds = self.manager.execute_sell_order(
-            trade=buy_trade,
-            price=Decimal("77000"),
-            date=datetime(2024, 2, 1),
-            exit_reason="signal"
+            trade=buy_trade, price=Decimal("77000"), date=datetime(2024, 2, 1), exit_reason="signal"
         )
 
         # 슬리피지 적용: 77000 * 0.9995 = 76961.5
@@ -112,8 +98,8 @@ class TestBacktestOrderManager:
         # 수수료: 769615 * 0.00015
         sell_commission = sell_amount * Decimal("0.00015")
 
-        # 세금: 769615 * 0.0023
-        tax = sell_amount * Decimal("0.0023")
+        tax_schedule = get_backtest_cost_schedule(date(2024, 1, 1))
+        tax = sell_amount * tax_schedule.sell_tax_rate
 
         # 순 수익 = 매도 금액 - 수수료 - 세금
         expected_net_proceeds = sell_amount - sell_commission - tax
@@ -124,30 +110,197 @@ class TestBacktestOrderManager:
         assert sell_trade.exit_reason == "signal"
         assert sell_trade.holding_days == 31  # 2024년 1월 1일 ~ 2월 1일
 
-    def test_profit_calculation(self):
-        """손익 계산 테스트"""
-        # 매수
-        buy_trade, buy_cost = self.manager.execute_buy_order(
+    def test_execute_orders_use_dated_schedule_when_rates_are_not_overridden(self) -> None:
+        config = BacktestConfigDTO(
+            initial_capital=Decimal("10000000"),
+            cost_schedule_date=date(2026, 6, 28),
+            use_commission=True,
+            use_tax=True,
+            use_slippage=True,
+        )
+        manager = BacktestOrderManager(config)
+
+        buy_trade, total_cost = manager.execute_buy_order(
             symbol="005930",
             price=Decimal("70000"),
             quantity=10,
-            date=datetime(2024, 1, 1)
+            date=datetime(2026, 6, 28),
+        )
+        expected_buy_price = Decimal("70000") * Decimal("1.0005")
+        expected_purchase_amount = expected_buy_price * 10
+        expected_buy_commission = expected_purchase_amount * Decimal("0.00015")
+
+        assert buy_trade.entry_price == expected_buy_price
+        assert buy_trade.commission == expected_buy_commission
+        assert total_cost == expected_purchase_amount + expected_buy_commission
+
+        sell_trade, net_proceeds = manager.execute_sell_order(
+            trade=buy_trade,
+            price=Decimal("77000"),
+            date=datetime(2026, 7, 1),
+            exit_reason="signal",
+        )
+        expected_sell_price = Decimal("77000") * Decimal("0.9995")
+        expected_sell_amount = expected_sell_price * 10
+        expected_sell_commission = expected_sell_amount * Decimal("0.00015")
+        expected_sell_tax = expected_sell_amount * Decimal("0.0018")
+
+        assert sell_trade.exit_price == expected_sell_price
+        assert sell_trade.commission == expected_buy_commission + expected_sell_commission
+        assert sell_trade.tax == expected_sell_tax
+        assert net_proceeds == expected_sell_amount - expected_sell_commission - expected_sell_tax
+
+    def test_sell_order_uses_trade_date_tax_regime_without_fixed_schedule(self) -> None:
+        config = BacktestConfigDTO(
+            initial_capital=Decimal("10000000"),
+            use_commission=True,
+            use_tax=True,
+            use_slippage=True,
+        )
+        manager = BacktestOrderManager(config)
+
+        buy_trade, _ = manager.execute_buy_order(
+            symbol="005930",
+            price=Decimal("70000"),
+            quantity=10,
+            date=datetime(2024, 12, 31),
+        )
+        sell_trade, _ = manager.execute_sell_order(
+            trade=buy_trade,
+            price=Decimal("77000"),
+            date=datetime(2025, 1, 1),
+            exit_reason="signal",
+        )
+
+        expected_sell_price = Decimal("77000") * Decimal("0.9995")
+        expected_sell_amount = expected_sell_price * 10
+        assert sell_trade.tax == expected_sell_amount * Decimal("0.0018")
+
+    def test_buy_order_rounds_execution_price_when_enabled(self) -> None:
+        config = BacktestConfigDTO(
+            initial_capital=Decimal("10000000"),
+            use_commission=True,
+            use_tax=False,
+            use_slippage=False,
+            use_price_rounding=True,
+            cost_schedule_date=date(2026, 6, 28),
+        )
+        manager = BacktestOrderManager(config)
+
+        trade, total_cost = manager.execute_buy_order(
+            symbol="005930",
+            price=Decimal("70000.5"),
+            quantity=10,
+            date=datetime(2026, 6, 28),
+        )
+
+        expected_purchase_amount = Decimal("70001") * 10
+        expected_commission = expected_purchase_amount * Decimal("0.00015")
+        assert trade.entry_price == Decimal("70001")
+        assert trade.commission == expected_commission
+        assert total_cost == expected_purchase_amount + expected_commission
+
+    def test_sell_order_rounds_execution_price_before_tax_when_enabled(self) -> None:
+        config = BacktestConfigDTO(
+            initial_capital=Decimal("10000000"),
+            use_commission=False,
+            use_tax=True,
+            use_slippage=False,
+            use_price_rounding=True,
+            cost_schedule_date=date(2026, 6, 28),
+        )
+        manager = BacktestOrderManager(config)
+        buy_trade = TradeDTO(
+            trade_id=1,
+            symbol="005930",
+            trade_type="buy",
+            entry_date=datetime(2026, 6, 28),
+            entry_price=Decimal("70000"),
+            exit_date=None,
+            exit_price=None,
+            quantity=10,
+            commission=Decimal("0"),
+            tax=Decimal("0"),
+            profit=None,
+            profit_rate=None,
+            holding_days=None,
+            exit_reason=None,
+        )
+
+        sell_trade, net_proceeds = manager.execute_sell_order(
+            trade=buy_trade,
+            price=Decimal("77000.5"),
+            date=datetime(2026, 7, 1),
+            exit_reason="signal",
+        )
+
+        expected_sell_amount = Decimal("77001") * 10
+        expected_tax = expected_sell_amount * Decimal("0.0018")
+        assert sell_trade.exit_price == Decimal("77001")
+        assert sell_trade.tax == expected_tax
+        assert net_proceeds == expected_sell_amount - expected_tax
+
+    def test_position_size_uses_rounded_price_when_enabled(self) -> None:
+        config = BacktestConfigDTO(
+            initial_capital=Decimal("10000000"),
+            use_commission=False,
+            use_tax=False,
+            use_slippage=False,
+            use_price_rounding=True,
+            cost_schedule_date=date(2026, 6, 28),
+        )
+        manager = BacktestOrderManager(config)
+
+        quantity = manager.calculate_position_size(
+            available_cash=Decimal("1005"),
+            allocation_ratio=1.0,
+            current_price=Decimal("100.5"),
+        )
+
+        assert quantity == 9
+
+    def test_can_afford_uses_rounded_price_when_enabled(self) -> None:
+        config = BacktestConfigDTO(
+            initial_capital=Decimal("10000000"),
+            use_commission=False,
+            use_tax=False,
+            use_slippage=False,
+            use_price_rounding=True,
+            cost_schedule_date=date(2026, 6, 28),
+        )
+        manager = BacktestOrderManager(config)
+
+        can_buy = manager.can_afford(
+            available_cash=Decimal("1005"),
+            price=Decimal("100.5"),
+            quantity=10,
+        )
+
+        assert can_buy is False
+
+    def test_profit_calculation(self) -> None:
+        """손익 계산 테스트"""
+        # 매수
+        buy_trade, _ = self.manager.execute_buy_order(
+            symbol="005930", price=Decimal("70000"), quantity=10, date=datetime(2024, 1, 1)
         )
 
         # 매도 (5% 손실)
-        sell_trade, net_proceeds = self.manager.execute_sell_order(
+        sell_trade, _ = self.manager.execute_sell_order(
             trade=buy_trade,
             price=Decimal("66500"),
             date=datetime(2024, 1, 15),
-            exit_reason="stop_loss"
+            exit_reason="stop_loss",
         )
 
         # 손실 발생 확인
+        assert sell_trade.profit is not None
+        assert sell_trade.profit_rate is not None
         assert sell_trade.profit < 0
         assert sell_trade.profit_rate < 0
         assert sell_trade.exit_reason == "stop_loss"
 
-    def test_calculate_position_size(self):
+    def test_calculate_position_size(self) -> None:
         """포지션 크기 계산 테스트"""
         available_cash = Decimal("1000000")
         allocation_ratio = 0.1  # 10%
@@ -162,7 +315,7 @@ class TestBacktestOrderManager:
         # 수량: 99985 / 70000 = 1.42... -> 1주
         assert quantity == 1
 
-    def test_calculate_position_size_with_larger_budget(self):
+    def test_calculate_position_size_with_larger_budget(self) -> None:
         """큰 예산으로 포지션 크기 계산 테스트"""
         available_cash = Decimal("10000000")
         allocation_ratio = 0.5  # 50%
@@ -177,38 +330,26 @@ class TestBacktestOrderManager:
         # 수량: 4999250 / 70000 = 71.41... -> 71주
         assert quantity == 71
 
-    def test_calculate_position_size_zero_price(self):
+    def test_calculate_position_size_zero_price(self) -> None:
         """가격이 0일 때 포지션 크기 계산 테스트"""
-        quantity = self.manager.calculate_position_size(
-            Decimal("1000000"), 0.1, Decimal("0")
-        )
+        quantity = self.manager.calculate_position_size(Decimal("1000000"), 0.1, Decimal("0"))
         assert quantity == 0
 
-    def test_can_afford_true(self):
+    def test_can_afford_true(self) -> None:
         """매수 가능 여부 확인 (가능) 테스트"""
         can_buy = self.manager.can_afford(
-            available_cash=Decimal("1000000"),
-            price=Decimal("70000"),
-            quantity=10
+            available_cash=Decimal("1000000"), price=Decimal("70000"), quantity=10
         )
-        # 비용: 70000 * 10 = 700000
-        # 수수료: 700000 * 0.00015 = 105
-        # 총: 700105 < 1000000
         assert can_buy is True
 
-    def test_can_afford_false(self):
+    def test_can_afford_false(self) -> None:
         """매수 가능 여부 확인 (불가) 테스트"""
         can_buy = self.manager.can_afford(
-            available_cash=Decimal("100000"),
-            price=Decimal("70000"),
-            quantity=10
+            available_cash=Decimal("100000"), price=Decimal("70000"), quantity=10
         )
-        # 비용: 70000 * 10 = 700000
-        # 수수료: 700000 * 0.00015 = 105
-        # 총: 700105 > 100000
         assert can_buy is False
 
-    def test_trade_id_increments(self):
+    def test_trade_id_increments(self) -> None:
         """거래 ID 증가 테스트"""
         trade1, _ = self.manager.execute_buy_order(
             "005930", Decimal("70000"), 10, datetime(2024, 1, 1)
@@ -220,7 +361,7 @@ class TestBacktestOrderManager:
         assert trade1.trade_id == 1
         assert trade2.trade_id == 2
 
-    def test_exit_reasons(self):
+    def test_exit_reasons(self) -> None:
         """청산 이유 테스트"""
         buy_trade, _ = self.manager.execute_buy_order(
             "005930", Decimal("70000"), 10, datetime(2024, 1, 1)
