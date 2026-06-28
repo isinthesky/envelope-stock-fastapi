@@ -32,6 +32,7 @@ class Position:
         self.entry_atr = entry_atr
         self.current_atr: float | None = entry_atr
         self.breakeven_armed = False
+        self.trailing_stop_activated = False
         self.partial_take_profit_1_taken = False
         self.partial_take_profit_2_taken = False
 

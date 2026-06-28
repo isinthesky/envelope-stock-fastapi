@@ -8,6 +8,11 @@ Order Manager - 주문 관리자
 from datetime import datetime
 from decimal import Decimal
 
+from src.application.domain.backtest.cost_schedule import (
+    BacktestCostSchedule,
+    get_backtest_cost_schedule,
+    get_latest_backtest_cost_schedule,
+)
 from src.application.domain.backtest.dto import BacktestConfigDTO, TradeDTO
 
 
@@ -22,12 +27,41 @@ class BacktestOrderManager:
         self.config = config
         self.trade_id_counter = 0
 
-    def execute_buy_order(
+    def _cost_schedule_for(self, trade_datetime: datetime) -> BacktestCostSchedule:
+        schedule_date = self.config.cost_schedule_date or trade_datetime.date()
+        return get_backtest_cost_schedule(schedule_date)
+
+    def _cost_schedule_for_estimate(self) -> BacktestCostSchedule:
+        if self.config.cost_schedule_date is not None:
+            return get_backtest_cost_schedule(self.config.cost_schedule_date)
+        return get_latest_backtest_cost_schedule()
+
+    def _commission_rate(self, schedule: BacktestCostSchedule) -> Decimal:
+        if self.config.commission_rate is not None:
+            return Decimal(str(self.config.commission_rate))
+        return schedule.default_commission_rate
+
+    def _sell_tax_rate(self, schedule: BacktestCostSchedule) -> Decimal:
+        if self.config.tax_rate is not None:
+            return Decimal(str(self.config.tax_rate))
+        return schedule.sell_tax_rate
+
+    def _slippage_rate(self, schedule: BacktestCostSchedule) -> Decimal:
+        if self.config.slippage_rate is not None:
+            return Decimal(str(self.config.slippage_rate))
+        return schedule.default_slippage_rate
+
+    def _round_execution_price(
         self,
-        symbol: str,
+        schedule: BacktestCostSchedule,
         price: Decimal,
-        quantity: int,
-        date: datetime
+    ) -> Decimal:
+        if self.config.use_price_rounding:
+            return schedule.round_price(price)
+        return price
+
+    def execute_buy_order(
+        self, symbol: str, price: Decimal, quantity: int, date: datetime
     ) -> tuple[TradeDTO, Decimal]:
         """
         매수 주문 실행
@@ -42,26 +76,24 @@ class BacktestOrderManager:
             tuple[TradeDTO, Decimal]: (거래 정보, 총 비용)
         """
         self.trade_id_counter += 1
+        schedule = self._cost_schedule_for(date)
+        slippage_rate = self._slippage_rate(schedule)
 
-        # 슬리피지 적용
         if self.config.use_slippage:
-            actual_price = price * Decimal(str(1 + self.config.slippage_rate))
+            actual_price = price * (Decimal("1") + slippage_rate)
         else:
             actual_price = price
+        actual_price = self._round_execution_price(schedule, actual_price)
 
-        # 매수 금액
         purchase_amount = actual_price * quantity
 
-        # 수수료 계산
         if self.config.use_commission:
-            commission = purchase_amount * Decimal(str(self.config.commission_rate))
+            commission = purchase_amount * self._commission_rate(schedule)
         else:
             commission = Decimal("0")
 
-        # 총 비용
         total_cost = purchase_amount + commission
 
-        # Trade DTO 생성
         trade = TradeDTO(
             trade_id=self.trade_id_counter,
             symbol=symbol,
@@ -72,21 +104,17 @@ class BacktestOrderManager:
             exit_price=None,
             quantity=quantity,
             commission=commission,
-            tax=Decimal("0"),  # 매수 시 세금 없음
+            tax=Decimal("0"),
             profit=None,
             profit_rate=None,
             holding_days=None,
-            exit_reason=None
+            exit_reason=None,
         )
 
         return trade, total_cost
 
     def execute_sell_order(
-        self,
-        trade: TradeDTO,
-        price: Decimal,
-        date: datetime,
-        exit_reason: str = "signal"
+        self, trade: TradeDTO, price: Decimal, date: datetime, exit_reason: str = "signal"
     ) -> tuple[TradeDTO, Decimal]:
         """
         매도 주문 실행
@@ -100,43 +128,37 @@ class BacktestOrderManager:
         Returns:
             tuple[TradeDTO, Decimal]: (업데이트된 거래 정보, 총 수익)
         """
-        # 슬리피지 적용
+        schedule = self._cost_schedule_for(date)
+        slippage_rate = self._slippage_rate(schedule)
+
         if self.config.use_slippage:
-            actual_price = price * Decimal(str(1 - self.config.slippage_rate))
+            actual_price = price * (Decimal("1") - slippage_rate)
         else:
             actual_price = price
+        actual_price = self._round_execution_price(schedule, actual_price)
 
-        # 매도 금액
         sell_amount = actual_price * trade.quantity
 
-        # 수수료 계산
         if self.config.use_commission:
-            commission = sell_amount * Decimal(str(self.config.commission_rate))
+            commission = sell_amount * self._commission_rate(schedule)
         else:
             commission = Decimal("0")
 
-        # 증권거래세 계산
         if self.config.use_tax:
-            tax = sell_amount * Decimal(str(self.config.tax_rate))
+            tax = sell_amount * self._sell_tax_rate(schedule)
         else:
             tax = Decimal("0")
 
-        # 순 수익 계산
         net_proceeds = sell_amount - commission - tax
 
-        # 매수 비용 (매수 수수료 포함)
         purchase_cost = trade.entry_price * trade.quantity + trade.commission
 
-        # 손익
         profit = net_proceeds - purchase_cost
 
-        # 손익률
         profit_rate = float(profit / purchase_cost * 100) if purchase_cost > 0 else 0.0
 
-        # 보유 기간
         holding_days = (date - trade.entry_date).days
 
-        # Trade DTO 업데이트
         updated_trade = TradeDTO(
             trade_id=trade.trade_id,
             symbol=trade.symbol,
@@ -151,16 +173,13 @@ class BacktestOrderManager:
             profit=profit,
             profit_rate=profit_rate,
             holding_days=holding_days,
-            exit_reason=exit_reason
+            exit_reason=exit_reason,
         )
 
         return updated_trade, net_proceeds
 
     def calculate_position_size(
-        self,
-        available_cash: Decimal,
-        allocation_ratio: float,
-        current_price: Decimal
+        self, available_cash: Decimal, allocation_ratio: float, current_price: Decimal
     ) -> int:
         """
         포지션 크기 계산
@@ -176,26 +195,24 @@ class BacktestOrderManager:
         if current_price <= 0:
             return 0
 
-        # 할당 금액
+        schedule = self._cost_schedule_for_estimate()
         target_amount = available_cash * Decimal(str(allocation_ratio))
+        price_with_slippage = current_price
+        if self.config.use_slippage:
+            price_with_slippage *= Decimal("1") + self._slippage_rate(schedule)
+        price_with_slippage = self._round_execution_price(schedule, price_with_slippage)
 
-        # 수량 계산 (수수료 고려)
         if self.config.use_commission:
-            commission_multiplier = Decimal(str(1 + self.config.commission_rate))
+            commission_multiplier = Decimal("1") + self._commission_rate(schedule)
             affordable_amount = target_amount / commission_multiplier
         else:
             affordable_amount = target_amount
 
-        quantity = int(affordable_amount / current_price)
+        quantity = int(affordable_amount / price_with_slippage)
 
         return quantity
 
-    def can_afford(
-        self,
-        available_cash: Decimal,
-        price: Decimal,
-        quantity: int
-    ) -> bool:
+    def can_afford(self, available_cash: Decimal, price: Decimal, quantity: int) -> bool:
         """
         매수 가능 여부 확인
 
@@ -207,11 +224,15 @@ class BacktestOrderManager:
         Returns:
             bool: 매수 가능 여부
         """
-        # 예상 비용 계산
-        purchase_amount = price * quantity
+        schedule = self._cost_schedule_for_estimate()
+        actual_price = price
+        if self.config.use_slippage:
+            actual_price *= Decimal("1") + self._slippage_rate(schedule)
+        actual_price = self._round_execution_price(schedule, actual_price)
+        purchase_amount = actual_price * quantity
 
         if self.config.use_commission:
-            commission = purchase_amount * Decimal(str(self.config.commission_rate))
+            commission = purchase_amount * self._commission_rate(schedule)
         else:
             commission = Decimal("0")
 
