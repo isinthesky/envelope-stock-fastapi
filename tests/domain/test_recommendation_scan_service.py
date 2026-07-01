@@ -12,12 +12,33 @@ from decimal import Decimal
 import pytest
 
 import src.application.domain.recommendation.recommendation_scan_service as scan_service_module
-from src.application.domain.recommendation.dto import ReadinessLabel
+from src.application.common.exceptions import ResourceNotFoundError
+from src.application.domain.recommendation.dto import ReadinessLabel, RecommendationRuleCandidateDTO
 from src.application.domain.recommendation.recommendation_scan_service import (
     RecommendationScanService,
 )
+from src.application.domain.recommendation.rule_set_mapper import candidates_to_json
 from src.application.domain.screener.dto import ValueScreenerResultDTO, ValueStockItemDTO
 from src.application.domain.strategy.dto import GoldenCrossScanItemDTO, GoldenCrossScanListDTO
+
+
+class _FakeRuleSetModel:
+    def __init__(self, id, name, version, status, candidates_json, frozen_hash):  # noqa: A002
+        self.id = id
+        self.name = name
+        self.version = version
+        self.status = status
+        self.candidates_json = candidates_json
+        self.frozen_hash = frozen_hash
+
+
+class _StubRuleSetRepository:
+    def __init__(self, model=None) -> None:
+        self._model = model
+
+    async def get_active_by_id(self, rule_set_id, session=None):
+        _ = rule_set_id, session
+        return self._model
 
 
 def _gc_item(symbol: str, gc_state: str) -> GoldenCrossScanItemDTO:
@@ -213,3 +234,128 @@ async def test_golden_cross_scan_errors_are_propagated_to_result(
     result = await service.scan_candidates()
 
     assert result.errors == ["005930: OHLCV load failed"]
+
+
+@pytest.mark.asyncio
+async def test_rule_set_id_overrides_stoch_threshold_with_frozen_candidate_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[tuple] = []
+    candidate = RecommendationRuleCandidateDTO(
+        candidate_id="c1", name="baseline", rules={"stoch_oversold": 22.5, "short_period": 20}
+    )
+    model = _FakeRuleSetModel(
+        id=1,
+        name="rs",
+        version=1,
+        status="active",
+        candidates_json=candidates_to_json([candidate]),
+        frozen_hash=None,
+    )
+
+    monkeypatch.setattr(
+        scan_service_module,
+        "RecommendationRuleSetRepository",
+        lambda: _StubRuleSetRepository(model),
+    )
+    monkeypatch.setattr(
+        scan_service_module,
+        "BuyStrategyService",
+        lambda **kwargs: _StubBuyStrategyService([], captured_calls=captured_calls),
+    )
+    monkeypatch.setattr(
+        scan_service_module,
+        "ValueScreenerService",
+        lambda *args, **kwargs: _StubValueScreenerService([]),
+    )
+
+    service = RecommendationScanService(naver_client=object(), session=object())
+    await service.scan_candidates(stoch_threshold=30.0, rule_set_id="1")
+
+    assert len(captured_calls) == 1
+    _, kwargs = captured_calls[0]
+    assert kwargs["stoch_threshold"] == 22.5
+
+
+@pytest.mark.asyncio
+async def test_rule_set_id_selects_candidate_matching_frozen_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[tuple] = []
+    losing_candidate = RecommendationRuleCandidateDTO(
+        candidate_id="c-slow", name="slow", rules={"stoch_oversold": 30.0}
+    )
+    winning_candidate = RecommendationRuleCandidateDTO(
+        candidate_id="c-fast", name="fast", rules={"stoch_oversold": 20.0}
+    )
+    model = _FakeRuleSetModel(
+        id=2,
+        name="rs",
+        version=1,
+        status="active",
+        candidates_json=candidates_to_json([losing_candidate, winning_candidate]),
+        frozen_hash=winning_candidate.frozen_hash,
+    )
+
+    monkeypatch.setattr(
+        scan_service_module,
+        "RecommendationRuleSetRepository",
+        lambda: _StubRuleSetRepository(model),
+    )
+    monkeypatch.setattr(
+        scan_service_module,
+        "BuyStrategyService",
+        lambda **kwargs: _StubBuyStrategyService([], captured_calls=captured_calls),
+    )
+    monkeypatch.setattr(
+        scan_service_module,
+        "ValueScreenerService",
+        lambda *args, **kwargs: _StubValueScreenerService([]),
+    )
+
+    service = RecommendationScanService(naver_client=object(), session=object())
+    await service.scan_candidates(rule_set_id="2")
+
+    _, kwargs = captured_calls[0]
+    assert kwargs["stoch_threshold"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_rule_set_id_raises_resource_not_found_when_no_active_rule_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        scan_service_module, "RecommendationRuleSetRepository", lambda: _StubRuleSetRepository(None)
+    )
+
+    service = RecommendationScanService(naver_client=object(), session=object())
+
+    with pytest.raises(ResourceNotFoundError):
+        await service.scan_candidates(rule_set_id="999")
+
+
+@pytest.mark.asyncio
+async def test_scan_without_rule_set_id_keeps_phase1_default_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rule_set_id 미지정 시 RecommendationRuleSetRepository는 전혀 호출되지 않아야 한다."""
+    calls: list[str] = []
+
+    class _CountingRepository:
+        def __init__(self) -> None:
+            calls.append("constructed")
+
+    monkeypatch.setattr(scan_service_module, "RecommendationRuleSetRepository", _CountingRepository)
+    monkeypatch.setattr(
+        scan_service_module, "BuyStrategyService", lambda **kwargs: _StubBuyStrategyService([])
+    )
+    monkeypatch.setattr(
+        scan_service_module,
+        "ValueScreenerService",
+        lambda *args, **kwargs: _StubValueScreenerService([]),
+    )
+
+    service = RecommendationScanService(naver_client=object(), session=object())
+    await service.scan_candidates(stoch_threshold=30.0)
+
+    assert calls == []

@@ -6,21 +6,27 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-
-# Import Settings and Base
-from src.settings.config import settings
 from src.adapters.database.connection import Base
 
 # Import all models for autogenerate
 from src.adapters.database.models.account import AccountModel  # noqa: F401
 from src.adapters.database.models.analysis_history import AnalysisHistoryModel  # noqa: F401
+from src.adapters.database.models.naver_industry_code import NaverIndustryCodeModel  # noqa: F401
 from src.adapters.database.models.order import OrderModel  # noqa: F401
 from src.adapters.database.models.position import PositionModel  # noqa: F401
-from src.adapters.database.models.strategy import StrategyModel  # noqa: F401
-from src.adapters.database.models.strategy_symbol_state import StrategySymbolStateModel  # noqa: F401
-from src.adapters.database.models.strategy_signal import StrategySignalModel  # noqa: F401
+from src.adapters.database.models.recommendation_rule_set import (  # noqa: F401
+    RecommendationRuleSetModel,
+    RecommendationRuleValidationModel,
+)
 from src.adapters.database.models.stock_universe import StockUniverseModel  # noqa: F401
-from src.adapters.database.models.naver_industry_code import NaverIndustryCodeModel  # noqa: F401
+from src.adapters.database.models.strategy import StrategyModel  # noqa: F401
+from src.adapters.database.models.strategy_signal import StrategySignalModel  # noqa: F401
+from src.adapters.database.models.strategy_symbol_state import (  # noqa: F401
+    StrategySymbolStateModel,
+)
+
+# Import Settings and Base
+from src.settings.config import settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
