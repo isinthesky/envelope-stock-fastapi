@@ -225,6 +225,7 @@ app = FastAPI(
 
 # Static files (CSS)
 from pathlib import Path
+
 from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -266,8 +267,8 @@ async def root() -> dict[str, str]:
 @app.get("/health", tags=["Health"])
 async def health_check() -> dict[str, str]:
     """헬스체크 엔드포인트 - 실제 인프라 연결 상태 확인"""
-    from src.adapters.database.connection import get_async_session
     from src.adapters.cache.redis_client import get_redis_client
+    from src.adapters.database.connection import get_async_session
 
     status_result: dict[str, str] = {"status": "healthy"}
 
@@ -311,22 +312,21 @@ register_exception_handlers(app)
 
 # ==================== Router 등록 ====================
 
+from src.application.common.dependencies import verify_admin_access
 from src.application.interface.api.access_log_router import router as access_log_router
 from src.application.interface.api.account_router import router as account_router
 from src.application.interface.api.auth_router import router as auth_router
 from src.application.interface.api.backtest_router import router as backtest_router
 from src.application.interface.api.market_data_router import router as market_data_router
+from src.application.interface.api.ops_router import router as ops_router
 
 # from src.application.interface.api.ohlcv_router import router as ohlcv_router  # TODO: apscheduler 의존성 필요
 from src.application.interface.api.order_router import router as order_router
-from src.application.interface.api.ops_router import router as ops_router
+from src.application.interface.api.recommendation_router import router as recommendation_router
 from src.application.interface.api.screener_router import router as screener_router
-from src.application.interface.api.strategy_router import (
-    router as strategy_router,
-    admin_router as strategy_admin_router,
-)
+from src.application.interface.api.strategy_router import admin_router as strategy_admin_router
+from src.application.interface.api.strategy_router import router as strategy_router
 from src.application.interface.api.websocket_router import router as websocket_router
-from src.application.common.dependencies import verify_admin_access
 from src.application.interface.page import mypage_routers, public_page_routers
 
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
@@ -346,6 +346,7 @@ if settings.enable_admin_strategy_routes:
 
 # app.include_router(ohlcv_router, prefix="/api/v1/ohlcv", tags=["OHLCV Cache"])  # TODO: apscheduler 의존성 필요
 app.include_router(screener_router)  # 내부 prefix: /api/v1/screener
+app.include_router(recommendation_router)  # 내부 prefix: /api/v1/recommendations
 app.include_router(backtest_router)  # 내부 prefix: /api/v1/backtest
 app.include_router(access_log_router)  # 내부 prefix: /api/v1/access-logs
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
