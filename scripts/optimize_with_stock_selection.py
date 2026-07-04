@@ -1,15 +1,8 @@
 import asyncio
-import numpy as np
-import pandas as pd
 from datetime import datetime
 from decimal import Decimal
-import random
-import logging
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
+from scripts.common.data_generator import MarketScenario, SyntheticMarket
 from src.application.domain.backtest.engine import BacktestEngine
 from src.application.domain.backtest.dto import BacktestConfigDTO
 from src.application.domain.strategy.dto import (
@@ -20,63 +13,18 @@ from src.application.domain.strategy.dto import (
     RiskManagementConfig,
 )
 
-# 1. Synthetic Data Generator with Metadata
-class SyntheticMarket:
-    def __init__(self):
-        self.stocks = {}
 
-    def add_stock(self, symbol, name, start_price, volatility, trend, avg_volume, financials):
-        self.stocks[symbol] = {
-            "name": name,
-            "start_price": start_price,
-            "volatility": volatility,
-            "trend": trend,
-            "avg_volume": avg_volume,
-            "financials": financials,
-            "data": None
-        }
-
-    def generate_data(self, symbol, start_date, periods):
-        stock = self.stocks.get(symbol)
-        if not stock:
-            return None
-
-        np.random.seed(hash(symbol) % 2**32) # Deterministic per symbol
-        
-        dates = pd.date_range(start=start_date, periods=periods, freq="D")
-        
-        # Price Generation
-        returns = np.random.normal(loc=stock["trend"], scale=stock["volatility"], size=periods)
-        price_paths = stock["start_price"] * np.cumprod(1 + returns)
-        
-        # OHLC Generation
-        opens = price_paths
-        closes = price_paths * (1 + np.random.normal(0, 0.005, periods))
-        highs = np.maximum(opens, closes) * (1 + np.abs(np.random.normal(0, 0.005, periods)))
-        lows = np.minimum(opens, closes) * (1 - np.abs(np.random.normal(0, 0.005, periods)))
-        
-        # Volume Generation (with noise)
-        volumes = np.random.normal(loc=stock["avg_volume"], scale=stock["avg_volume"]*0.2, size=periods)
-        volumes = np.maximum(volumes, 1000).astype(int) # Ensure positive volume
-
-        df = pd.DataFrame({
-            "timestamp": dates,
-            "open": opens,
-            "high": highs,
-            "low": lows,
-            "close": closes,
-            "volume": volumes
-        })
-        
-        stock["data"] = df
-        return df
-
-# 2. Stock Selection Logic
+# 1. Stock Selection Logic
 class StockSelector:
-    def __init__(self, market):
+    """
+    합성 시장(SyntheticMarket)의 종목 메타데이터를 기준으로 스크리닝하고,
+    각 판정 사유를 콘솔에 출력한다.
+    """
+
+    def __init__(self, market: SyntheticMarket):
         self.market = market
 
-    def filter_stocks(self, criteria):
+    def filter_stocks(self, criteria: dict) -> list[str]:
         """
         criteria: dict
           - min_volume
@@ -85,7 +33,7 @@ class StockSelector:
           - max_per
         """
         selected = []
-        
+
         print("\n🔍 Screening Stocks based on Criteria:")
         print(f"   - Min Volume: {criteria.get('min_volume', 0):,}")
         print(f"   - Min Volatility (Daily): {criteria.get('min_volatility', 0)*100:.2f}%")
@@ -93,71 +41,80 @@ class StockSelector:
         print(f"   - Max PER: {criteria.get('max_per', 999)}")
         print("-" * 60)
 
-        for symbol, info in self.market.stocks.items():
+        for symbol, meta in self.market.stocks.items():
             # 1. Volume Check
-            avg_vol = info["avg_volume"]
-            if avg_vol < criteria.get("min_volume", 0):
-                print(f"   ❌ {symbol} ({info['name']}): Volume too low ({avg_vol:,})")
+            if meta.avg_volume < criteria.get("min_volume", 0):
+                print(f"   ❌ {symbol} ({meta.name}): Volume too low ({meta.avg_volume:,})")
                 continue
 
             # 2. Financial Check
-            fin = info["financials"]
-            if fin["debt_ratio"] > criteria.get("max_debt_ratio", 9999):
-                print(f"   ❌ {symbol} ({info['name']}): High Debt ({fin['debt_ratio']}%)")
-                continue
-            
-            if fin["per"] > criteria.get("max_per", 9999):
-                print(f"   ❌ {symbol} ({info['name']}): Overvalued (PER {fin['per']})")
+            if meta.debt_ratio > criteria.get("max_debt_ratio", 9999):
+                print(f"   ❌ {symbol} ({meta.name}): High Debt ({meta.debt_ratio}%)")
                 continue
 
-            # 3. Volatility Check (using generated data)
-            if info["data"] is None:
-                # Generate strictly for analysis if not present
-                self.market.generate_data(symbol, datetime(2023,1,1), 100)
-            
-            # Calculate daily returns std dev
-            returns = info["data"]["close"].pct_change().std()
-            if returns < criteria.get("min_volatility", 0):
-                print(f"   ❌ {symbol} ({info['name']}): Low Volatility ({returns*100:.2f}%)")
+            if meta.per > criteria.get("max_per", 9999):
+                print(f"   ❌ {symbol} ({meta.name}): Overvalued (PER {meta.per})")
                 continue
 
-            print(f"   ✅ {symbol} ({info['name']}): Passed Selection")
+            # 3. Volatility Check (설정된 시나리오 변동성 기준)
+            if meta.volatility < criteria.get("min_volatility", 0):
+                print(f"   ❌ {symbol} ({meta.name}): Low Volatility ({meta.volatility*100:.2f}%)")
+                continue
+
+            print(f"   ✅ {symbol} ({meta.name}): Passed Selection")
             selected.append(symbol)
-            
+
         return selected
 
-# 3. Main Execution
+
+# 2. Main Execution
 async def main():
     print("=" * 80)
     print("🚀 Stock Selection & Strategy Optimization")
     print("=" * 80)
 
-    # Initialize Market with diverse stocks
-    market = SyntheticMarket()
-    
-    # Stock A: The Ideal Candidate (High Vol, Good Fin, High Vol)
-    market.add_stock("005930", "Samsung Elec (Sim)", 70000, 0.02, 0.0005, 10000000, 
-                     {"debt_ratio": 30.0, "per": 15.0})
-    
-    # Stock B: Low Volatility (Stable)
-    market.add_stock("000660", "SK Hynix (Sim)", 120000, 0.005, 0.0002, 5000000, 
-                     {"debt_ratio": 40.0, "per": 12.0})
-    
-    # Stock C: Bad Financials (High Debt)
-    market.add_stock("035720", "Kakao (Sim)", 50000, 0.025, -0.0005, 2000000, 
-                     {"debt_ratio": 150.0, "per": 50.0})
-    
-    # Stock D: Low Volume
-    market.add_stock("005380", "Hyundai Motor (Sim)", 200000, 0.015, 0.0003, 100000, 
-                     {"debt_ratio": 80.0, "per": 8.0})
-    
-    # Stock E: High Volatility, Good Financials (Another Candidate)
-    market.add_stock("035420", "Naver (Sim)", 200000, 0.022, 0.0004, 1500000, 
-                     {"debt_ratio": 45.0, "per": 25.0})
+    start_date = datetime(2023, 1, 1)
+    periods = 365
 
-    # Generate Data for all
-    for sym in market.stocks:
-        market.generate_data(sym, datetime(2023, 1, 1), 365)
+    # Initialize Market with diverse stocks (합성 데이터 생성은 scripts/common/data_generator 사용)
+    market = SyntheticMarket()
+
+    def add(symbol, name, start_price, volatility, trend, avg_volume, debt_ratio, per):
+        scenario = MarketScenario(
+            name=symbol,
+            trend=trend,
+            volatility=volatility,
+            start_price=start_price,
+            periods=periods,
+            avg_volume=avg_volume,
+        )
+        market.add_stock(
+            symbol,
+            name,
+            scenario=scenario,
+            avg_volume=avg_volume,
+            volatility=volatility,
+            debt_ratio=debt_ratio,
+            per=per,
+        )
+
+    # Stock A: The Ideal Candidate (High Vol, Good Fin, High Vol)
+    add("005930", "Samsung Elec (Sim)", 70000, 0.02, 0.0005, 10000000, 30.0, 15.0)
+
+    # Stock B: Low Volatility (Stable)
+    add("000660", "SK Hynix (Sim)", 120000, 0.005, 0.0002, 5000000, 40.0, 12.0)
+
+    # Stock C: Bad Financials (High Debt)
+    add("035720", "Kakao (Sim)", 50000, 0.025, -0.0005, 2000000, 150.0, 50.0)
+
+    # Stock D: Low Volume
+    add("005380", "Hyundai Motor (Sim)", 200000, 0.015, 0.0003, 100000, 80.0, 8.0)
+
+    # Stock E: High Volatility, Good Financials (Another Candidate)
+    add("035420", "Naver (Sim)", 200000, 0.022, 0.0004, 1500000, 45.0, 25.0)
+
+    # Generate Data for all (이미 add_stock 시점에 scenario 캐시됨)
+    data_map = market.generate_all(start_date=start_date, periods=periods)
 
     # Perform Selection
     selector = StockSelector(market)
@@ -165,11 +122,11 @@ async def main():
         "min_volume": 500000,        # Min 500k avg daily volume
         "min_volatility": 0.015,     # Min 1.5% daily volatility
         "max_debt_ratio": 100.0,     # Max 100% debt ratio
-        "max_per": 40.0              # Max PER 40
+        "max_per": 40.0,             # Max PER 40
     })
 
     print(f"\n🎯 Selected Stocks: {', '.join(selected_symbols)}")
-    
+
     # Backtest Configuration (Using 'Strategy F' - Trailing Stop Focus)
     print("\n" + "=" * 80)
     print("🧪 Running Backtest on Selected Stocks")
@@ -179,40 +136,40 @@ async def main():
     strategy_config = StrategyConfigDTO(
         bollinger_band=BollingerBandConfig(period=20, std_multiplier=2.0),
         envelope=EnvelopeConfig(period=20, percentage=2.0),
-        position=PositionConfig(allocation_ratio=0.2, max_position_count=1), # Increased allocation
+        position=PositionConfig(allocation_ratio=0.2, max_position_count=1),  # Increased allocation
         risk_management=RiskManagementConfig(
             use_stop_loss=True,
             stop_loss_ratio=-0.05,
             use_take_profit=False,     # Let profits run
             use_trailing_stop=True,    # Use trailing stop
             trailing_stop_ratio=0.03,  # 3% trailing
-            use_reverse_signal_exit=True
-        )
+            use_reverse_signal_exit=True,
+        ),
     )
 
     backtest_config = BacktestConfigDTO(
         initial_capital=Decimal("10000000"),
         use_commission=True,
         use_tax=True,
-        use_slippage=True
+        use_slippage=True,
     )
 
     results = {}
     for symbol in selected_symbols:
-        df = market.stocks[symbol]["data"]
+        df = data_map[symbol]
         engine = BacktestEngine(symbol, strategy_config, backtest_config)
-        
+
         result = await engine.run(
-            df, 
-            df["timestamp"].iloc[0], 
-            df["timestamp"].iloc[-1]
+            df,
+            df["timestamp"].iloc[0],
+            df["timestamp"].iloc[-1],
         )
         results[symbol] = result
 
     # Print Results
     print(f"\n{'Symbol':^10} {'Return':>10} {'Win Rate':>10} {'Sharpe':>10} {'MDD':>10} {'Trades':>8}")
     print("-" * 70)
-    
+
     for symbol, res in results.items():
         print(
             f"{symbol:^10} "
@@ -226,6 +183,7 @@ async def main():
     print("\n✅ Optimization Complete.")
     print("   These stocks met the criteria for Volume, Volatility, and Financial Health.")
     print("   The backtest demonstrates performance using the optimized 'Trailing Stop' strategy.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

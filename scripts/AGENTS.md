@@ -8,7 +8,7 @@ research/backfill. Treat them as production-adjacent tooling.
 ```text
 scripts/
 |-- common/                         # reusable backtest/data/result helpers
-|-- evaluate_strategy*.py           # online/offline strategy evaluation
+|-- evaluate_strategy.py            # offline strategy evaluation (stock-backtest-offline skill entrypoint)
 |-- simulate_golden_cross_strategy.py
 |-- scan_and_filter.py              # API-driven scan/filter workflow
 |-- validate_strategy_walk_forward.py
@@ -46,7 +46,7 @@ scripts/
 
 ## COMMANDS
 ```bash
-python scripts/evaluate_strategy_offline.py
+python -m scripts.evaluate_strategy
 python scripts/scan_and_filter.py
 bash scripts/verify_sell_risk_changes.sh
 ```
@@ -54,4 +54,16 @@ bash scripts/verify_sell_risk_changes.sh
 ## ARCHIVED
 
 Moved to `_attic/cleanup_2026-07-04/`: `run_backtests.py`, `init_db_tables.py`,
-`add_40_stocks.py`, `add_stocks_to_universe.py`, `activate_all_stocks.py`.
+`add_40_stocks.py`, `add_stocks_to_universe.py`, `activate_all_stocks.py`,
+`evaluate_strategy_offline.py`.
+
+`evaluate_strategy_offline.py` duplicated `evaluate_strategy.py`'s purpose (offline
+synthetic-data strategy evaluation) with a standalone inline implementation. Kept
+`evaluate_strategy.py` instead because: (1) it is the script actually documented and
+invoked by the `.claude/skills/stock-backtest-offline/SKILL.md` skill (`uv run python -m
+scripts.evaluate_strategy ...`), (2) it already composes `scripts/common/` (`data_generator`,
+`strategy_presets`, `backtest_runner`, `result_analyzer`) instead of duplicating that logic
+inline, and (3) its hardcoded strategy config in the offline script was identical to
+`StrategyPresets.default_bollinger()`, so nothing unique was lost. The offline script's only
+distinguishing bit — a stub that scans `logs/` for `*.log` files and prints a reminder to
+compare with live trades — did no actual comparison, so it was not ported.

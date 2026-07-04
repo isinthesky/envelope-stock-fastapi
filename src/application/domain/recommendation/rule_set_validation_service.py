@@ -4,7 +4,7 @@ Recommendation Rule Set Validation Service
 
 RecommendationRuleSetDTO의 각 후보(candidate)를 골든크로스 유니버스에 대해
 train/test 기간으로 각각 백테스트해 CandidateRule.train_metrics/test_metrics를
-채운 뒤, 기존(미사용) walk-forward 엔진(backtest/walk_forward.py)에 위임해
+채운 뒤, 기존 walk-forward 엔진(backtest/walk_forward.py)에 위임해
 frozen_hash/data_snooping_warning이 담긴 WalkForwardValidationResult를 만든다.
 
 이 서비스는 검증 "실행"만 담당한다. DB 저장(recommendation_rule_validations)은

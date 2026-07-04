@@ -13,6 +13,7 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+from scripts.common.data_generator import MarketScenario, SyntheticDataGenerator
 from src.application.domain.backtest.engine import BacktestEngine
 from src.application.domain.backtest.dto import BacktestConfigDTO, ExecutionTiming
 from src.application.domain.strategy.dto import (
@@ -135,56 +136,68 @@ class MarketSimulator:
         stock = self.stocks.get(symbol)
         if not stock: return None
 
-        np.random.seed(hash(symbol) % 2**32)
-        dates = pd.date_range(start=start_date, periods=periods, freq="D")
-        
-        # Base Price
-        start_price = 10000
-        
         if stock["trend_type"] == "gc_scenario":
+            # NOTE: 이 시나리오는 scripts/common/data_generator.SyntheticDataGenerator
+            # .generate_gc_scenario()와 목적은 같지만(골든크로스 유도), 이 스크립트의
+            # GoldenCrossStrategy 상태머신(WAITING_FOR_GC -> WAITING_FOR_PULLBACK ->
+            # READY_TO_BUY -> IN_POSITION)이 정확한 타이밍(1~250일 MA200 안정화,
+            # 250~300일 급등으로 GC, 300~320일 눌림목으로 Stoch<25, 320일~ 2차 파동)을
+            # 요구하기 때문에 linspace 기반 결정적 경로를 그대로 유지한다.
+            # common의 generate_gc_scenario()는 구간 비율(40/60/80%)과 노이즈 기반 드리프트가
+            # 달라 대체 시 상태머신 신호(GC/눌림목/2차 파동)가 안정적으로 재현되지 않는다.
+            np.random.seed(hash(symbol) % 2**32)
+            dates = pd.date_range(start=start_date, periods=periods, freq="D")
+
             # Construct a price path that guarantees a GC and Pullback
             # Use a longer, clearer sequence to ensure MA calculations work
             # 1. Flat at 5000 for 250 days (Stabilize MA200)
             # 2. Strong Rally to 10000 (250-300 days) -> GC happens here
             # 3. Sharp Pullback to 7500 (300-320 days) -> Stoch drops
             # 4. Second Wave to 15000 (320+ days)
-            
+
             p1_len = 250
             p2_len = 50
             p3_len = 20
             p4_len = periods - (p1_len + p2_len + p3_len)
-            
+
             phase1 = np.full(p1_len, 5000.0)
             phase2 = np.linspace(5000, 10000, p2_len)
             phase3 = np.linspace(10000, 7500, p3_len)
             phase4 = np.linspace(7500, 15000, p4_len)
-            
+
             trend_line = np.concatenate([phase1, phase2, phase3, phase4])
-            
+
             # Add minimal noise to keep indicators clean
             noise = np.random.normal(0, stock["volatility"] * 1000, periods)
             prices = trend_line + noise
+
+            # OHLCV Generation
+            opens = prices
+            closes = prices * (1 + np.random.normal(0, 0.005, periods))
+            highs = np.maximum(opens, closes) * (1 + np.abs(np.random.normal(0, 0.005, periods)))
+            lows = np.minimum(opens, closes) * (1 - np.abs(np.random.normal(0, 0.005, periods)))
+            volumes = np.random.randint(50000, 500000, periods)
+
+            df = pd.DataFrame({
+                "timestamp": dates,
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": closes,
+                "volume": volumes
+            })
         else:
-            # Random Walk
-            returns = np.random.normal(0.0002, stock["volatility"], periods)
-            prices = start_price * np.cumprod(1 + returns)
+            # Random Walk: 합성 데이터 생성은 scripts/common/data_generator로 일원화
+            scenario = MarketScenario(
+                name=symbol,
+                trend=0.0002,
+                volatility=stock["volatility"],
+                start_price=10000,
+                periods=periods,
+                volume_range=(50_000, 500_000),
+            )
+            df = SyntheticDataGenerator.generate_ohlcv(scenario, start_date=start_date)
 
-        # OHLCV Generation
-        opens = prices
-        closes = prices * (1 + np.random.normal(0, 0.005, periods))
-        highs = np.maximum(opens, closes) * (1 + np.abs(np.random.normal(0, 0.005, periods)))
-        lows = np.minimum(opens, closes) * (1 - np.abs(np.random.normal(0, 0.005, periods)))
-        volumes = np.random.randint(50000, 500000, periods)
-
-        df = pd.DataFrame({
-            "timestamp": dates,
-            "open": opens,
-            "high": highs,
-            "low": lows,
-            "close": closes,
-            "volume": volumes
-        })
-        
         stock["data"] = df
         return df
 

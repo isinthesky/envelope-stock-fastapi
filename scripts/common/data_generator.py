@@ -27,6 +27,9 @@ class MarketScenario:
         periods: 캔들 개수
         seed: 난수 시드 (재현성)
         scenario_type: 시나리오 유형 (random, gc_scenario, dc_scenario, sideways)
+        avg_volume: 지정 시 거래량을 이 값 중심의 정규분포로 생성 (미지정 시 volume_range 균등분포)
+        volume_noise_ratio: avg_volume 지정 시 거래량 표준편차 비율
+        volume_range: avg_volume 미지정 시 사용할 거래량 균등분포 범위 (low, high)
     """
 
     name: str = "Default"
@@ -36,6 +39,9 @@ class MarketScenario:
     periods: int = 250
     seed: int | None = None
     scenario_type: str = "random"  # random, gc_scenario, dc_scenario, sideways
+    avg_volume: float | None = None
+    volume_noise_ratio: float = 0.2
+    volume_range: tuple[int, int] = (100_000, 1_000_000)
 
     def __post_init__(self):
         if self.seed is None:
@@ -95,6 +101,9 @@ class SyntheticDataGenerator:
                 volatility=scenario.volatility,
                 start_price=scenario.start_price,
                 seed=scenario.seed,
+                avg_volume=scenario.avg_volume,
+                volume_noise_ratio=scenario.volume_noise_ratio,
+                volume_range=scenario.volume_range,
             )
 
     @staticmethod
@@ -105,6 +114,9 @@ class SyntheticDataGenerator:
         volatility: float,
         start_price: float,
         seed: int | None,
+        avg_volume: float | None = None,
+        volume_noise_ratio: float = 0.2,
+        volume_range: tuple[int, int] = (100_000, 1_000_000),
     ) -> pd.DataFrame:
         """Random Walk with Drift 기반 데이터 생성"""
         if seed is not None:
@@ -122,7 +134,15 @@ class SyntheticDataGenerator:
         closes = price_paths * (1 + np.random.normal(0, 0.005, periods))
         highs = np.maximum(opens, closes) * (1 + np.abs(np.random.normal(0, 0.005, periods)))
         lows = np.minimum(opens, closes) * (1 - np.abs(np.random.normal(0, 0.005, periods)))
-        volumes = np.random.randint(100000, 1000000, periods)
+
+        if avg_volume is not None:
+            # 종목별 평균 거래량 중심의 정규분포 (최소 1000주 보장)
+            volumes = np.random.normal(
+                loc=avg_volume, scale=avg_volume * volume_noise_ratio, size=periods
+            )
+            volumes = np.maximum(volumes, 1000).astype(int)
+        else:
+            volumes = np.random.randint(volume_range[0], volume_range[1], periods)
 
         df = pd.DataFrame({
             "timestamp": dates,
@@ -444,6 +464,7 @@ class SyntheticMarket:
         self,
         min_volume: int = 500000,
         max_volatility: float = 0.03,
+        min_volatility: float = 0.0,
         max_debt_ratio: float = 100.0,
         max_per: float = 40.0,
     ) -> list[str]:
@@ -453,6 +474,7 @@ class SyntheticMarket:
         Args:
             min_volume: 최소 거래량
             max_volatility: 최대 변동성
+            min_volatility: 최소 변동성 (너무 안정적인 종목 배제용, 기본값은 제한 없음)
             max_debt_ratio: 최대 부채비율
             max_per: 최대 PER
 
@@ -465,6 +487,8 @@ class SyntheticMarket:
             if meta.avg_volume < min_volume:
                 continue
             if meta.volatility > max_volatility:
+                continue
+            if meta.volatility < min_volatility:
                 continue
             if meta.debt_ratio > max_debt_ratio:
                 continue
