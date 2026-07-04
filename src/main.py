@@ -323,6 +323,9 @@ from src.application.interface.api.ops_router import router as ops_router
 from src.application.interface.api.order_router import router as order_router
 from src.application.interface.api.recommendation_router import router as recommendation_router
 from src.application.interface.api.screener_router import router as screener_router
+from src.application.interface.api.sell_rule_research_router import (
+    router as sell_rule_research_router,
+)
 from src.application.interface.api.strategy_router import admin_router as strategy_admin_router
 from src.application.interface.api.strategy_router import router as strategy_router
 from src.application.interface.api.websocket_router import router as websocket_router
@@ -333,6 +336,7 @@ app.include_router(market_data_router, prefix="/api/v1/market", tags=["MarketDat
 app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
 app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
 app.include_router(ops_router)
+app.include_router(sell_rule_research_router)
 app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
 
 # 전략 생성/수정/삭제 같은 관리자 전용 라우트는 기본 비활성(완전 비노출)

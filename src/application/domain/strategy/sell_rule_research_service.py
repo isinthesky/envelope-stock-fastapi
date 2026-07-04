@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Any, Callable, Self, assert_never
+from typing import Any, Callable, Final, Self, assert_never
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -32,6 +32,8 @@ from src.adapters.database.repositories.personal_flow_snapshot_repository import
     PersonalFlowSnapshotRepository,
 )
 from src.application.common.indicators import TechnicalIndicators
+
+DEFAULT_PREREGISTERED_SYMBOL_LIMIT: Final = 50
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,7 @@ class SellRulePreRegistrationConfig(BaseModel):
     symbols: tuple[str, ...] | None = None
     candidates: tuple[PreRegisteredSellRuleCandidate, ...] = Field(min_length=1)
     fixture_rows: tuple[SellRuleResearchFixtureRow, ...] | None = None
+    symbol_limit: int = Field(default=DEFAULT_PREREGISTERED_SYMBOL_LIMIT, ge=1, le=200)
 
 
 class SellPeakRuleResearchService:
@@ -140,7 +143,7 @@ class SellPeakRuleResearchService:
     PEAK_DROP_THRESHOLD = 0.06
     MIN_ROWS_PER_SYMBOL = 60
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession | None) -> None:
         self.session = session
 
     @staticmethod
@@ -179,8 +182,7 @@ class SellPeakRuleResearchService:
             and market_credit_recent_high_ratio >= 0.995
         )
         near_high = bool(
-            is_52week_high
-            or (high_52week_ratio is not None and high_52week_ratio >= 0.98)
+            is_52week_high or (high_52week_ratio is not None and high_52week_ratio >= 0.98)
         )
         stoch_hot = stoch_k is not None and stoch_k >= 85.0
 
@@ -233,6 +235,11 @@ class SellPeakRuleResearchService:
         symbols: list[str] | None = None,
     ) -> list[dict[str, str | None]]:
         if symbols:
+            if self.session is None:
+                return [
+                    {"symbol": symbol, "name": None, "market": None}
+                    for symbol in symbols
+                ]
             stmt = select(
                 StockUniverseModel.symbol,
                 StockUniverseModel.name,
@@ -240,14 +247,15 @@ class SellPeakRuleResearchService:
             ).where(StockUniverseModel.symbol.in_(symbols))
             result = await self.session.execute(stmt)
             mapped = {
-                row[0]: {"symbol": row[0], "name": row[1], "market": row[2]}
-                for row in result.all()
+                row[0]: {"symbol": row[0], "name": row[1], "market": row[2]} for row in result.all()
             }
             return [
                 mapped.get(symbol, {"symbol": symbol, "name": None, "market": None})
                 for symbol in symbols
             ]
 
+        if self.session is None:
+            return []
         rows = await AnalysisHistoryRepository(self.session).get_active_symbols_with_names(
             "sell",
             session=self.session,
@@ -260,7 +268,11 @@ class SellPeakRuleResearchService:
         market: str | None,
         start_date: str,
         end_date: str,
+        credit_df: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
+        if self.session is None:
+            return pd.DataFrame()
+
         start_dt = datetime.strptime(start_date, "%Y%m%d")
         end_dt = datetime.strptime(end_date, "%Y%m%d") + timedelta(days=1)
 
@@ -316,19 +328,79 @@ class SellPeakRuleResearchService:
                 personal_df["recent_5d_personal_net_buy"] / volume_series
             )
 
-        market_label = "전체"
-        if (market or "").upper() == "KOSPI":
-            market_label = "유가증권"
-        elif (market or "").upper() == "KOSDAQ":
-            market_label = "코스닥"
+        if credit_df is None:
+            credit_df = await self._load_market_credit_frame(
+                market=market,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        if not credit_df.empty:
+            credit_df = credit_df.sort_values("biz_date")
+            prev_balance = credit_df["market_credit_balance_million"].shift(1)
+            credit_df["market_credit_change_ratio"] = (
+                credit_df["market_credit_balance_million"] - prev_balance
+            ) / prev_balance.replace(0, pd.NA)
+            rolling_high = (
+                credit_df["market_credit_balance_million"].rolling(5, min_periods=1).max()
+            )
+            credit_df["market_credit_recent_high_ratio"] = credit_df[
+                "market_credit_balance_million"
+            ] / rolling_high.replace(0, pd.NA)
 
+        merged = ohlcv_df.merge(
+            (
+                personal_df[
+                    [
+                        "biz_date",
+                        "recent_5d_personal_net_buy",
+                        "personal_buy_days_5d",
+                        "personal_buy_ratio_5d_to_volume",
+                    ]
+                ]
+                if not personal_df.empty
+                else pd.DataFrame(columns=["biz_date"])
+            ),
+            on="biz_date",
+            how="left",
+        ).merge(
+            (
+                credit_df[
+                    [
+                        "biz_date",
+                        "market_credit_change_ratio",
+                        "market_credit_recent_high_ratio",
+                    ]
+                ]
+                if not credit_df.empty
+                else pd.DataFrame(columns=["biz_date"])
+            ),
+            on="biz_date",
+            how="left",
+        )
+        return merged.sort_values("timestamp").reset_index(drop=True)
+
+    @staticmethod
+    def _market_credit_label(market: str | None) -> str:
+        market_key = (market or "").upper()
+        if market_key == "KOSPI":
+            return "유가증권"
+        if market_key == "KOSDAQ":
+            return "코스닥"
+        return "전체"
+
+    async def _load_market_credit_frame(
+        self,
+        market: str | None,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
         credit_rows = await MarketCreditSnapshotRepository(self.session).get_by_market_between(
-            market_label=market_label,
+            market_label=self._market_credit_label(market),
             start_date=start_date,
             end_date=end_date,
             session=self.session,
         )
-        credit_df = pd.DataFrame(
+        return pd.DataFrame(
             [
                 {
                     "biz_date": row.biz_date,
@@ -337,44 +409,6 @@ class SellPeakRuleResearchService:
                 for row in credit_rows
             ]
         )
-        if not credit_df.empty:
-            credit_df = credit_df.sort_values("biz_date")
-            prev_balance = credit_df["market_credit_balance_million"].shift(1)
-            credit_df["market_credit_change_ratio"] = (
-                credit_df["market_credit_balance_million"] - prev_balance
-            ) / prev_balance.replace(0, pd.NA)
-            rolling_high = credit_df["market_credit_balance_million"].rolling(5, min_periods=1).max()
-            credit_df["market_credit_recent_high_ratio"] = (
-                credit_df["market_credit_balance_million"] / rolling_high.replace(0, pd.NA)
-            )
-
-        merged = ohlcv_df.merge(
-            personal_df[
-                [
-                    "biz_date",
-                    "recent_5d_personal_net_buy",
-                    "personal_buy_days_5d",
-                    "personal_buy_ratio_5d_to_volume",
-                ]
-            ]
-            if not personal_df.empty
-            else pd.DataFrame(columns=["biz_date"]),
-            on="biz_date",
-            how="left",
-        ).merge(
-            credit_df[
-                [
-                    "biz_date",
-                    "market_credit_change_ratio",
-                    "market_credit_recent_high_ratio",
-                ]
-            ]
-            if not credit_df.empty
-            else pd.DataFrame(columns=["biz_date"]),
-            on="biz_date",
-            how="left",
-        )
-        return merged.sort_values("timestamp").reset_index(drop=True)
 
     def _label_local_peaks(self, df: pd.DataFrame) -> pd.DataFrame:
         labeled = df.copy()
@@ -396,9 +430,8 @@ class SellPeakRuleResearchService:
         labeled["future_max_close"] = future_max
         labeled["future_drawdown_10d"] = (labeled["close"] - future_min) / labeled["close"]
         labeled["future_return_10d"] = (future_max - labeled["close"]) / labeled["close"]
-        labeled["is_peak_label"] = (
-            (labeled["future_drawdown_10d"] >= self.PEAK_DROP_THRESHOLD)
-            & (labeled["high_52week_ratio"] >= 0.97)
+        labeled["is_peak_label"] = (labeled["future_drawdown_10d"] >= self.PEAK_DROP_THRESHOLD) & (
+            labeled["high_52week_ratio"] >= 0.97
         )
         return labeled
 
@@ -461,7 +494,9 @@ class SellPeakRuleResearchService:
         precision = peak_hit_count / trigger_count if trigger_count else 0.0
         avg_drawdown = float(triggered["future_drawdown_10d"].fillna(0).mean())
         avg_return = float(triggered["future_return_10d"].fillna(0).mean())
-        score = precision * 100 + avg_drawdown * 100 - avg_return * 30 + min(trigger_count, 20) * 0.5
+        score = (
+            precision * 100 + avg_drawdown * 100 - avg_return * 30 + min(trigger_count, 20) * 0.5
+        )
         return {
             "rule_id": rule.rule_id,
             "description": rule.description,
@@ -615,14 +650,10 @@ class SellPeakRuleResearchService:
         peak_hit_count = int(triggered["is_peak_label"].sum()) if trigger_count else 0
         precision = peak_hit_count / trigger_count if trigger_count else 0.0
         avg_drawdown = (
-            float(triggered["future_drawdown_10d"].fillna(0).mean())
-            if trigger_count
-            else 0.0
+            float(triggered["future_drawdown_10d"].fillna(0).mean()) if trigger_count else 0.0
         )
         avg_return = (
-            float(triggered["future_return_10d"].fillna(0).mean())
-            if trigger_count
-            else 0.0
+            float(triggered["future_return_10d"].fillna(0).mean()) if trigger_count else 0.0
         )
         avg_trade_impact = avg_drawdown - avg_return
         return {
@@ -702,13 +733,25 @@ class SellPeakRuleResearchService:
 
         frames: list[pd.DataFrame] = []
         symbol_summaries: list[dict[str, Any]] = []
+        credit_frames: dict[str, pd.DataFrame] = {}
         for row in symbol_rows:
-            frame = await self._load_symbol_frame(
-                symbol=row["symbol"] or "",
-                market=row.get("market"),
-                start_date=resolved_start,
-                end_date=resolved_end,
-            )
+            market = row.get("market")
+            market_label = self._market_credit_label(market)
+            if self.session is not None and market_label not in credit_frames:
+                credit_frames[market_label] = await self._load_market_credit_frame(
+                    market=market,
+                    start_date=resolved_start,
+                    end_date=resolved_end,
+                )
+            load_kwargs: dict[str, Any] = {
+                "symbol": row["symbol"] or "",
+                "market": market,
+                "start_date": resolved_start,
+                "end_date": resolved_end,
+            }
+            if market_label in credit_frames:
+                load_kwargs["credit_df"] = credit_frames[market_label]
+            frame = await self._load_symbol_frame(**load_kwargs)
             if len(frame) < self.MIN_ROWS_PER_SYMBOL:
                 continue
             labeled = self._label_local_peaks(frame)
@@ -732,10 +775,7 @@ class SellPeakRuleResearchService:
             }
 
         combined = pd.concat(frames, ignore_index=True)
-        scored_rules = [
-            self._score_candidate(rule, combined)
-            for rule in self._candidate_rules()
-        ]
+        scored_rules = [self._score_candidate(rule, combined) for rule in self._candidate_rules()]
         scored_rules.sort(key=lambda item: item["score"], reverse=True)
 
         return {
@@ -756,9 +796,7 @@ class SellPeakRuleResearchService:
         resolved_end = max(window.test_end_date for window in windows)
 
         if config.fixture_rows:
-            combined = pd.DataFrame(
-                [row.model_dump(mode="json") for row in config.fixture_rows]
-            )
+            combined = pd.DataFrame([row.model_dump(mode="json") for row in config.fixture_rows])
             symbol_summaries = [
                 {
                     "symbol": symbol,
@@ -777,6 +815,7 @@ class SellPeakRuleResearchService:
             )
 
         symbol_rows = await self._resolve_symbols(list(config.symbols) if config.symbols else None)
+        symbol_rows = symbol_rows[: config.symbol_limit]
 
         frames: list[pd.DataFrame] = []
         symbol_summaries: list[dict[str, Any]] = []
