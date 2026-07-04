@@ -320,7 +320,6 @@ from src.application.interface.api.backtest_router import router as backtest_rou
 from src.application.interface.api.market_data_router import router as market_data_router
 from src.application.interface.api.ops_router import router as ops_router
 
-# from src.application.interface.api.ohlcv_router import router as ohlcv_router  # TODO: apscheduler 의존성 필요
 from src.application.interface.api.order_router import router as order_router
 from src.application.interface.api.recommendation_router import router as recommendation_router
 from src.application.interface.api.screener_router import router as screener_router
@@ -344,7 +343,6 @@ if settings.enable_admin_strategy_routes:
         tags=["Strategy(Admin)"],
     )
 
-# app.include_router(ohlcv_router, prefix="/api/v1/ohlcv", tags=["OHLCV Cache"])  # TODO: apscheduler 의존성 필요
 app.include_router(screener_router)  # 내부 prefix: /api/v1/screener
 app.include_router(recommendation_router)  # 내부 prefix: /api/v1/recommendations
 app.include_router(backtest_router)  # 내부 prefix: /api/v1/backtest
