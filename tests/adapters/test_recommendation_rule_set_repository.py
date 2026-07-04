@@ -9,6 +9,8 @@ RecommendationRuleSetRepository / RecommendationRuleValidationRepository 테스�
 from datetime import date
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.connection import AsyncSessionLocal, engine
@@ -35,6 +37,10 @@ async def session():
     dispose해 다음 테스트가 새 루프에서 새 커넥션을 맺도록 한다.
     """
     async with AsyncSessionLocal() as db:
+        try:
+            await db.execute(text("SELECT 1"))
+        except (ConnectionRefusedError, OSError, OperationalError) as exc:
+            pytest.skip(f"local docker postgres is unavailable: {exc}")
         yield db
         await db.rollback()
     await engine.dispose()

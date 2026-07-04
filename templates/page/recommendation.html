@@ -1,0 +1,182 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Recommendation - Stock API Admin{% endblock %}
+
+{% block extra_css_links %}
+<link rel="stylesheet" href="/static/styles/recommendation.css?v={{ static_version }}" />
+{% endblock %}
+
+{% block content %}
+<h1>추천 후보 및 룰셋</h1>
+<p>추천 후보 스캔과 검색식 룰셋 등록, walk-forward 검증을 실행합니다.</p>
+
+<section class="recommendation-tabs" aria-label="Recommendation tabs">
+  <button type="button" class="tab-button active" data-tab="candidates">Candidates</button>
+  <button type="button" class="tab-button" data-tab="rule_sets">Rule Sets</button>
+</section>
+
+<section class="recommendation-panel" data-panel="candidates">
+  <div class="panel-header">
+    <div>
+      <h2>후보 스캔</h2>
+      <p>가치주 스크리너와 골든크로스 스캔을 병합합니다. 자동 실행되지 않습니다.</p>
+    </div>
+    <button type="button" id="scan_candidates_btn">스캔 실행</button>
+  </div>
+
+  <div class="form-grid">
+    <label>시장
+      <select id="rec_market">
+        <option value="">전체</option>
+        <option value="KOSPI">KOSPI</option>
+        <option value="KOSDAQ">KOSDAQ</option>
+        <option value="ETF">ETF</option>
+      </select>
+    </label>
+    <label>Stoch 임계값
+      <input id="rec_stoch_threshold" type="number" value="30" min="10" max="50" step="1" />
+    </label>
+    <label>스캔 제한
+      <input id="rec_limit" type="number" value="300" min="1" max="5000" step="10" />
+    </label>
+    <label>Active 룰셋
+      <select id="rec_rule_set_id">
+        <option value="">기본 파라미터</option>
+      </select>
+    </label>
+  </div>
+  <div class="check-row">
+    <label><input id="rec_gc_only" type="checkbox" checked /> 골든크로스 활성만</label>
+    <label><input id="rec_include_etf" type="checkbox" checked /> ETF 포함</label>
+    <span class="cost-note">limit 300 기본값. 대량 스캔은 시간이 오래 걸릴 수 있습니다.</span>
+  </div>
+
+  <div id="recommendation_auth_banner" class="status-banner" hidden></div>
+  <div id="candidate_summary" class="summary-strip" hidden></div>
+  <div id="candidate_errors" class="status-banner warning" hidden></div>
+
+  <div class="table-wrap">
+    <table class="recommendation-table">
+      <thead>
+        <tr>
+          <th data-sort="symbol">종목</th>
+          <th data-sort="market">시장</th>
+          <th class="hide-mobile" data-sort="current_price">현재가</th>
+          <th class="hide-mobile" data-sort="technical_state">기술 상태</th>
+          <th class="hide-mobile" data-sort="technical_score">Technical</th>
+          <th class="hide-mobile" data-sort="fundamental_score">Fundamental</th>
+          <th class="hide-mobile" data-sort="quant_score">Quant</th>
+          <th data-sort="final_score">Final</th>
+          <th data-sort="readiness_label">Readiness</th>
+          <th class="hide-mobile">Evidence / Blocks</th>
+        </tr>
+      </thead>
+      <tbody id="candidate_rows">
+        <tr><td colspan="10" class="empty-cell">스캔을 실행하면 후보가 표시됩니다.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="recommendation-panel" data-panel="rule_sets" hidden>
+  <div class="panel-header">
+    <div>
+      <h2>룰셋 관리</h2>
+      <p>Draft 룰셋을 등록하고 walk-forward 검증 후 active로 전환합니다.</p>
+    </div>
+    <button type="button" class="secondary" id="refresh_rule_sets_btn">룰셋 새로고침</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="recommendation-table compact">
+      <thead>
+        <tr>
+          <th>Rule ID</th>
+          <th>Name</th>
+          <th>Status</th>
+          <th>후보</th>
+          <th>Frozen Hash</th>
+        </tr>
+      </thead>
+      <tbody id="rule_set_rows">
+        <tr><td colspan="5" class="empty-cell">룰셋 목록을 불러오는 중입니다.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="rule-grid">
+    <div class="rule-card">
+      <h3>Draft 등록</h3>
+      <label>룰셋 이름
+        <input id="rule_set_name" type="text" placeholder="golden-cross-swing" />
+      </label>
+      <label>후보 목록 JSON
+        <textarea id="rule_candidates_json" spellcheck="false">[
+  {
+    "candidate_id": "baseline",
+    "name": "baseline",
+    "rules": {
+      "short_period": 55,
+      "long_period": 165,
+      "stoch_oversold": 30.0
+    }
+  }
+]</textarea>
+      </label>
+      <button type="button" id="create_rule_set_btn">룰셋 등록</button>
+    </div>
+
+    <div class="rule-card">
+      <h3>Walk-forward 검증</h3>
+      <div class="form-grid two">
+        <label>Draft 룰셋
+          <select id="validate_rule_id"></select>
+        </label>
+        <label>Benchmark
+          <input id="validate_benchmark" type="text" value="069500" />
+        </label>
+        <label>Train 시작
+          <input id="validate_train_start" type="date" value="2024-01-01" />
+        </label>
+        <label>Train 종료
+          <input id="validate_train_end" type="date" value="2024-06-30" />
+        </label>
+        <label>Test 시작
+          <input id="validate_test_start" type="date" value="2024-07-01" />
+        </label>
+        <label>Test 종료
+          <input id="validate_test_end" type="date" value="2024-12-31" />
+        </label>
+        <label>시장
+          <select id="validate_market">
+            <option value="">전체</option>
+            <option value="KOSPI">KOSPI</option>
+            <option value="KOSDAQ">KOSDAQ</option>
+          </select>
+        </label>
+        <label>Limit
+          <input id="validate_limit" type="number" value="20" min="1" max="100" />
+        </label>
+        <label>선정 지표
+          <select id="validate_metric">
+            <option value="cagr">CAGR</option>
+            <option value="excess_return">Excess Return</option>
+            <option value="sharpe">Sharpe</option>
+          </select>
+        </label>
+      </div>
+      <div class="check-row">
+        <label><input id="validate_eligible_only" type="checkbox" checked /> 적격 종목만</label>
+      </div>
+      <button type="button" id="validate_rule_set_btn">검증 실행</button>
+    </div>
+  </div>
+
+  <div id="validation_result" class="validation-result" hidden></div>
+</section>
+{% endblock %}
+
+{% block extra_script_tags %}
+<script src="/static/js/pages/strategy_shared.js?v={{ static_version }}"></script>
+<script src="/static/js/pages/recommendation.js?v={{ static_version }}"></script>
+{% endblock %}

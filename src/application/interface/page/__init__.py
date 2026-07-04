@@ -25,6 +25,9 @@ from src.application.interface.page.ops_page_router import router as ops_page_ro
 from src.application.interface.page.public_strategy_page_router import (
     router as public_strategy_page_router,
 )
+from src.application.interface.page.recommendation_page_router import (
+    router as recommendation_page_router,
+)
 from src.application.interface.page.sell_strategy_page_router import (
     router as sell_strategy_page_router,
 )
@@ -47,6 +50,7 @@ mypage_routers = [
     strategy_page_router,
     strategy_dashboard_page_router,
     sell_strategy_page_router,
+    recommendation_page_router,
     backtest_page_router,
     websocket_page_router,
     ohlcv_page_router,
@@ -70,6 +74,7 @@ __all__ = [
     "strategy_page_router",
     "strategy_dashboard_page_router",
     "sell_strategy_page_router",
+    "recommendation_page_router",
     "backtest_page_router",
     "websocket_page_router",
     "ohlcv_page_router",

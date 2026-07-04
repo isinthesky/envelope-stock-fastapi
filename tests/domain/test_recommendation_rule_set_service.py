@@ -13,6 +13,8 @@ from decimal import Decimal
 
 import pandas as pd
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import src.application.domain.recommendation.rule_set_validation_service as validation_service_module
@@ -42,6 +44,10 @@ from src.application.domain.strategy.dto import GoldenCrossScanItemDTO, GoldenCr
 @pytest.fixture
 async def session():
     async with AsyncSessionLocal() as db:
+        try:
+            await db.execute(text("SELECT 1"))
+        except (ConnectionRefusedError, OSError, OperationalError) as exc:
+            pytest.skip(f"local docker postgres is unavailable: {exc}")
         yield db
         await db.rollback()
     await engine.dispose()
