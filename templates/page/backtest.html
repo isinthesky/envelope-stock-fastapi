@@ -2,6 +2,10 @@
 
 {% block title %}Backtest - Stock API Admin{% endblock %}
 
+{% block extra_css_links %}
+<link rel="stylesheet" href="/static/styles/backtest.css?v={{ static_version }}" />
+{% endblock %}
+
 {% block extra_styles %}
 .result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
 .result-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; text-align: center; }
@@ -19,7 +23,7 @@
 <h1>Backtest</h1>
 <p>전략 백테스팅 실행 및 결과 분석</p>
 
-<section>
+<section class="backtest-universe-panel">
   <h2>백테스트 설정</h2>
   <div class="row">
     <label style="min-width: auto;">심볼</label>
@@ -41,6 +45,30 @@
   "backtest_config": {"initial_cash": 1000000}
 }</textarea>
   </div>
+  <div class="backtest-config-panel">
+    <h3>Backtest Config Overrides</h3>
+    <div class="row">
+      <label style="min-width: auto;">체결 시점</label>
+      <select id="bt_execution_timing" style="width: 180px;">
+        <option value="">JSON/서버 기본값 유지</option>
+        <option value="next_open">next_open</option>
+        <option value="next_close">next_close</option>
+        <option value="same_close">same_close</option>
+      </select>
+      <label style="min-width: auto;"><input id="bt_auto_cost" type="checkbox" /> 날짜별 비용 스케줄 적용</label>
+      <label style="min-width: auto;">비용 기준일</label>
+      <input id="bt_cost_schedule_date" type="date" style="width: 150px;" />
+    </div>
+    <div class="row" id="bt_manual_cost_fields">
+      <label style="min-width: auto;">수수료</label>
+      <input id="bt_commission_rate" type="number" min="0" max="0.01" step="0.00001" placeholder="0.00015" style="width: 120px;" />
+      <label style="min-width: auto;">세금</label>
+      <input id="bt_tax_rate" type="number" min="0" max="0.01" step="0.00001" placeholder="0.0018" style="width: 120px;" />
+      <label style="min-width: auto;">슬리피지</label>
+      <input id="bt_slippage_rate" type="number" min="0" max="0.01" step="0.00001" placeholder="0.0005" style="width: 120px;" />
+    </div>
+    <p class="config-note">체결 시점과 비용 필드는 값을 명시한 경우에만 JSON payload를 덮어씁니다. 날짜별 비용 스케줄을 켜면 수동 commission/tax/slippage는 전송하지 않습니다.</p>
+  </div>
   <div class="row" style="margin-top: 8px;">
     <button onclick="runBacktestUI()">단일 종목 실행</button>
     <button onclick="runMultiBacktest()" class="secondary">다중 종목 실행</button>
@@ -51,6 +79,36 @@
     <button onclick="runMultiFromSavedScan('gc')" class="secondary">GC 스캔 다중 백테스트</button>
     <button onclick="runMultiFromSavedScan('ma5')" class="secondary">MA5 스캔 다중 백테스트</button>
   </div>
+</section>
+
+<section>
+  <h2>유니버스 골든크로스 백테스트</h2>
+  <p class="config-note">POST 실행과 GET 조회형 진입점은 같은 폼 파라미터를 사용합니다.</p>
+  <div class="row">
+    <label style="min-width: auto;">시장</label>
+    <select id="universe_market_filter" style="width: 120px;">
+      <option value="">전체</option>
+      <option value="KOSPI">KOSPI</option>
+      <option value="KOSDAQ">KOSDAQ</option>
+    </select>
+    <label style="min-width: auto;">종목 수</label>
+    <input id="universe_limit" type="number" value="20" min="1" max="100" style="width: 80px;" />
+    <label style="min-width: auto;"><input id="universe_eligible_only" type="checkbox" checked /> 적격 종목만</label>
+  </div>
+  <div class="row">
+    <label style="min-width: auto;">시작일</label>
+    <input id="universe_start_date" type="date" value="2024-01-01" style="width: 150px;" />
+    <label style="min-width: auto;">종료일</label>
+    <input id="universe_end_date" type="date" value="2024-12-31" style="width: 150px;" />
+    <label style="min-width: auto;"><input id="universe_portfolio" type="checkbox" /> Portfolio</label>
+    <label style="min-width: auto;">Max Positions</label>
+    <input id="universe_max_positions" type="number" value="5" min="1" max="100" style="width: 80px;" />
+  </div>
+  <div class="row">
+    <button onclick="runUniverseBacktest('POST')">유니버스 실행(POST)</button>
+    <button onclick="runUniverseBacktest('GET')" class="secondary">조회형 실행(GET)</button>
+  </div>
+  <div id="universe_result_section" class="universe-result"></div>
 </section>
 
 <section id="result_section" style="display:none;">
@@ -64,76 +122,6 @@
 </section>
 {% endblock %}
 
-{% block extra_scripts %}
-const toggleAdvanced = () => {
-  const el = document.getElementById('json_advanced');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-};
-
-const renderBacktestResult = (data) => {
-  const section = document.getElementById('result_section');
-  const grid = document.getElementById('result_cards');
-  if (!data || typeof data !== 'object') { section.style.display = 'none'; return; }
-
-  const fmtPct = (n) => n != null ? Number(n).toFixed(2) + '%' : '-';
-  const fmtNum = (n) => n != null ? Number(n).toLocaleString('ko-KR') : '-';
-  const signClass = (n) => (n > 0 ? 'positive' : n < 0 ? 'negative' : '');
-
-  const cards = [
-    { label: '총 수익률', value: fmtPct(data.total_return), cls: signClass(data.total_return) },
-    { label: '승률', value: fmtPct(data.win_rate), cls: '' },
-    { label: 'MDD', value: fmtPct(data.mdd), cls: 'negative' },
-    { label: 'Sharpe', value: data.sharpe_ratio != null ? Number(data.sharpe_ratio).toFixed(2) : '-', cls: '' },
-    { label: '총 거래', value: fmtNum(data.total_trades), cls: '' },
-    { label: '보유일(평균)', value: data.avg_holding_days != null ? Number(data.avg_holding_days).toFixed(1) + '일' : '-', cls: '' },
-  ];
-
-  grid.innerHTML = cards.map(c => `
-    <div class="result-card">
-      <div class="label">${c.label}</div>
-      <div class="value ${c.cls}">${c.value}</div>
-    </div>
-  `).join('');
-  section.style.display = 'block';
-};
-
-const runBacktestUI = () => {
-  const symbol = document.getElementById('bt_symbol').value.trim();
-  const start = document.getElementById('bt_start').value;
-  const end = document.getElementById('bt_end').value;
-
-  const raw = document.getElementById('backtest_json').value.trim();
-  let payload;
-  try {
-    payload = raw ? JSON.parse(raw) : {};
-  } catch (e) {
-    document.getElementById('backtest_output').textContent = '입력 오류: JSON 형식이 올바르지 않습니다.';
-    return;
-  }
-
-  if (symbol) payload.symbol = symbol;
-  if (start) payload.start_date = start;
-  if (end) payload.end_date = end;
-
-  document.getElementById('backtest_json').value = JSON.stringify(payload, null, 2);
-  runBacktest();
-};
-{% endblock %}
-
 {% block extra_script_tags %}
-<script src="/static/js/pages/backtest.js"></script>
-<script>
-const _origSetOutput = typeof setOutput !== 'undefined' ? setOutput : null;
-document.addEventListener('DOMContentLoaded', () => {
-  const out = document.getElementById('backtest_output');
-  if (!out) return;
-  const observer = new MutationObserver(() => {
-    try {
-      const data = JSON.parse(out.textContent);
-      renderBacktestResult(data);
-    } catch (e) {}
-  });
-  observer.observe(out, { childList: true, characterData: true, subtree: true });
-});
-</script>
+<script src="/static/js/pages/backtest.js?v={{ static_version }}"></script>
 {% endblock %}

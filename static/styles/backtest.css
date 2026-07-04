@@ -1,0 +1,75 @@
+.backtest-config-panel {
+  background: var(--surface-secondary, #f8fafc);
+  border: 1px solid var(--border-default, #e2e8f0);
+  border-radius: var(--radius-lg, 8px);
+  padding: 16px;
+  margin: 12px 0;
+}
+
+.backtest-config-panel h3 {
+  color: var(--text-primary, #1e293b);
+  font-size: 16px;
+  margin-bottom: 12px;
+}
+
+.backtest-config-panel label,
+.backtest-universe-panel label {
+  white-space: nowrap;
+}
+
+.backtest-config-panel label input[type="checkbox"],
+.backtest-universe-panel label input[type="checkbox"] {
+  margin-right: 6px;
+}
+
+.config-note {
+  color: var(--text-secondary, #64748b);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.universe-result {
+  margin-top: 16px;
+}
+
+.universe-result .panel {
+  background: var(--surface-secondary, #f8fafc);
+  border: 1px solid var(--border-default, #e2e8f0);
+  border-radius: var(--radius-lg, 8px);
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.universe-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.universe-summary-card {
+  background: var(--surface-primary, #fff);
+  border: 1px solid var(--border-default, #e2e8f0);
+  border-radius: var(--radius-md, 6px);
+  padding: 14px;
+}
+
+.universe-summary-card .label {
+  color: var(--text-secondary, #64748b);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.universe-summary-card .value {
+  color: var(--text-primary, #1e293b);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.positive {
+  color: var(--status-success, #16a34a);
+}
+
+.negative {
+  color: var(--status-error, #dc2626);
+}

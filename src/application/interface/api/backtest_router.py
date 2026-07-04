@@ -7,8 +7,22 @@ from datetime import date, datetime, time
 
 from fastapi import APIRouter, Depends, Query
 
-from src.application.common.dependencies import AdminAccessDep, DatabaseSession, get_kis_client, get_redis_client
-from src.application.domain.backtest.dto import BacktestRequestDTO, BacktestResultDTO, MultiSymbolBacktestRequestDTO, MultiSymbolBacktestResultDTO, UniverseBacktestRequestDTO, UniverseBacktestResultDTO
+from src.application.common.dependencies import (
+    AdminAccessDep,
+    DatabaseSession,
+    get_kis_client,
+    get_redis_client,
+)
+from src.application.domain.backtest.dto import (
+    BacktestConfigDTO,
+    BacktestRequestDTO,
+    BacktestResultDTO,
+    ExecutionTiming,
+    MultiSymbolBacktestRequestDTO,
+    MultiSymbolBacktestResultDTO,
+    UniverseBacktestRequestDTO,
+    UniverseBacktestResultDTO,
+)
 from src.application.domain.backtest.service import BacktestService
 from src.application.domain.market_data.service import MarketDataService
 from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
@@ -17,23 +31,40 @@ from src.application.domain.strategy.dto import StrategyConfigDTO
 router = APIRouter(prefix="/api/v1/backtest", tags=["Backtest"])
 
 
-async def get_backtest_service(session: DatabaseSession, kis_client=Depends(get_kis_client), redis_client=Depends(get_redis_client)) -> BacktestService:
+async def get_backtest_service(
+    session: DatabaseSession,
+    kis_client=Depends(get_kis_client),
+    redis_client=Depends(get_redis_client),
+) -> BacktestService:
     market_data_service = MarketDataService(kis_client, redis_client)
     return BacktestService(market_data_service, db_session=session)
 
 
 @router.post("/run", response_model=BacktestResultDTO)
-async def run_backtest(request: BacktestRequestDTO, service: BacktestService = Depends(get_backtest_service), admin_access: AdminAccessDep = None):
+async def run_backtest(
+    request: BacktestRequestDTO,
+    service: BacktestService = Depends(get_backtest_service),
+    admin_access: AdminAccessDep = None,
+):
     return await service.run_backtest(request)
 
 
 @router.post("/run-multi", response_model=MultiSymbolBacktestResultDTO)
-async def run_multi_symbol_backtest(request: MultiSymbolBacktestRequestDTO, service: BacktestService = Depends(get_backtest_service), admin_access: AdminAccessDep = None):
+async def run_multi_symbol_backtest(
+    request: MultiSymbolBacktestRequestDTO,
+    service: BacktestService = Depends(get_backtest_service),
+    admin_access: AdminAccessDep = None,
+):
     return await service.run_multi_symbol_backtest(request)
 
 
 @router.post("/run-universe-golden-cross", response_model=UniverseBacktestResultDTO)
-async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO, session: DatabaseSession, service: BacktestService = Depends(get_backtest_service), admin_access: AdminAccessDep = None):
+async def run_universe_golden_cross_backtest(
+    request: UniverseBacktestRequestDTO,
+    session: DatabaseSession,
+    service: BacktestService = Depends(get_backtest_service),
+    admin_access: AdminAccessDep = None,
+):
     base_strategy_params = {
         "short_period": 55,
         "long_period": 165,
@@ -65,9 +96,13 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
     )
 
     preferred_states = ["OPTIMAL_BUY", "READY_TO_BUY", "BUY_INTEREST", "WAITING_FOR_PULLBACK"]
-    selected_scan_items = [item for state in preferred_states for item in scan.stocks if item.gc_state == state]
+    selected_scan_items = [
+        item for state in preferred_states for item in scan.stocks if item.gc_state == state
+    ]
     if request.eligible_only:
-        selected_scan_items = [item for item in selected_scan_items if item.screening_score is not None]
+        selected_scan_items = [
+            item for item in selected_scan_items if item.screening_score is not None
+        ]
 
     symbols, seen_symbols = [], set()
     for item in selected_scan_items:
@@ -79,11 +114,15 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
             break
 
     if not symbols:
-        diagnostic_summary = service.summarize_multi_symbol_results(MultiSymbolBacktestResultDTO(results={}, total_count=0, success_count=0, failed_count=0))
+        diagnostic_summary = service.summarize_multi_symbol_results(
+            MultiSymbolBacktestResultDTO(results={}, total_count=0, success_count=0, failed_count=0)
+        )
         portfolio_summary = None
         if request.portfolio:
             portfolio_summary = service.simulate_universe_portfolio(
-                MultiSymbolBacktestResultDTO(results={}, total_count=0, success_count=0, failed_count=0),
+                MultiSymbolBacktestResultDTO(
+                    results={}, total_count=0, success_count=0, failed_count=0
+                ),
                 request.backtest_config.initial_capital,
                 request.max_positions,
             )
@@ -114,8 +153,26 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
         return strategy_config
 
     variant_defs = [
-        ("baseline_v1", "기존형: 과매수 즉시 청산", {**base_strategy_params, "disable_stoch_overbought_sell": False, "partial_take_profit_1": 9.99, "partial_take_profit_2": 19.99}),
-        ("no_overbought_sell", "개선형 1: 과매수 즉시 청산 제거", {**base_strategy_params, "disable_stoch_overbought_sell": True, "partial_take_profit_1": 9.99, "partial_take_profit_2": 19.99}),
+        (
+            "baseline_v1",
+            "기존형: 과매수 즉시 청산",
+            {
+                **base_strategy_params,
+                "disable_stoch_overbought_sell": False,
+                "partial_take_profit_1": 9.99,
+                "partial_take_profit_2": 19.99,
+            },
+        ),
+        (
+            "no_overbought_sell",
+            "개선형 1: 과매수 즉시 청산 제거",
+            {
+                **base_strategy_params,
+                "disable_stoch_overbought_sell": True,
+                "partial_take_profit_1": 9.99,
+                "partial_take_profit_2": 19.99,
+            },
+        ),
         ("swing_v2", "개선형 2: 스윙형 부분익절/본전보호/트레일링", base_strategy_params),
     ]
 
@@ -134,16 +191,18 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
         )
         multi_result = await service.run_multi_symbol_backtest(multi_request)
         summary = service.summarize_multi_symbol_results(multi_result)
-        comparison_results.append({
-            "key": key,
-            "label": label,
-            "summary_type": summary.summary_type,
-            "diagnostic_average_return": summary.average_return,
-            "diagnostic_average_win_rate": summary.average_win_rate,
-            "average_holding_days": summary.average_holding_days,
-            "profitable_ratio": summary.profitable_ratio,
-            "total_trades": summary.total_trades,
-        })
+        comparison_results.append(
+            {
+                "key": key,
+                "label": label,
+                "summary_type": summary.summary_type,
+                "diagnostic_average_return": summary.average_return,
+                "diagnostic_average_win_rate": summary.average_win_rate,
+                "average_holding_days": summary.average_holding_days,
+                "profitable_ratio": summary.profitable_ratio,
+                "total_trades": summary.total_trades,
+            }
+        )
         if key == "swing_v2":
             final_multi_result = multi_result
             final_request = multi_request
@@ -164,7 +223,16 @@ async def run_universe_golden_cross_backtest(request: UniverseBacktestRequestDTO
         "comparison_results": comparison_results,
     }
 
-    return service.build_universe_backtest_result(market=request.market, eligible_only=request.eligible_only, symbols=symbols, request=final_request, multi_result=final_multi_result, config_summary=config_summary, portfolio_enabled=request.portfolio, max_positions=request.max_positions)
+    return service.build_universe_backtest_result(
+        market=request.market,
+        eligible_only=request.eligible_only,
+        symbols=symbols,
+        request=final_request,
+        multi_result=final_multi_result,
+        config_summary=config_summary,
+        portfolio_enabled=request.portfolio,
+        max_positions=request.max_positions,
+    )
 
 
 @router.get("/universe/golden-cross", response_model=UniverseBacktestResultDTO)
@@ -179,7 +247,19 @@ async def get_universe_golden_cross_backtest(
     end_date: date = Query(...),
     portfolio: bool = Query(default=False),
     max_positions: int = Query(default=5, ge=1, le=100),
+    execution_timing: ExecutionTiming = Query(default="next_open"),
+    cost_schedule_date: date | None = Query(default=None),
+    commission_rate: float | None = Query(default=None, ge=0.0, le=0.01),
+    tax_rate: float | None = Query(default=None, ge=0.0, le=0.01),
+    slippage_rate: float | None = Query(default=None, ge=0.0, le=0.01),
 ):
+    backtest_config = BacktestConfigDTO(
+        execution_timing=execution_timing,
+        cost_schedule_date=cost_schedule_date,
+        commission_rate=commission_rate,
+        tax_rate=tax_rate,
+        slippage_rate=slippage_rate,
+    )
     request = UniverseBacktestRequestDTO(
         market=market,
         eligible_only=eligible_only,
@@ -188,12 +268,19 @@ async def get_universe_golden_cross_backtest(
         end_date=datetime.combine(end_date, time.min),
         portfolio=portfolio,
         max_positions=max_positions,
+        backtest_config=backtest_config,
     )
     return await run_universe_golden_cross_backtest(request, session, service, admin_access)
 
 
 @router.post("/validate-data")
-async def validate_data_quality(symbol: str, start_date: date = Query(..., description="시작일 (YYYY-MM-DD)"), end_date: date = Query(..., description="종료일 (YYYY-MM-DD)"), service: BacktestService = Depends(get_backtest_service), admin_access: AdminAccessDep = None):
+async def validate_data_quality(
+    symbol: str,
+    start_date: date = Query(..., description="시작일 (YYYY-MM-DD)"),
+    end_date: date = Query(..., description="종료일 (YYYY-MM-DD)"),
+    service: BacktestService = Depends(get_backtest_service),
+    admin_access: AdminAccessDep = None,
+):
     start_dt = datetime.combine(start_date, time.min)
     end_dt = datetime.combine(end_date, time.min)
     return await service.validate_data_quality(symbol, start_dt, end_dt)
