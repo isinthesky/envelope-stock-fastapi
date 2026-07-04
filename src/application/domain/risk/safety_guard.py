@@ -203,3 +203,133 @@ class SafetyGuard:
         if not self.account.daily_stats or self.account.daily_stats.date != date.today():
             self.account.daily_stats = TradingDayStats(date=date.today())
         return self.account.daily_stats
+
+    def record_trade_result(
+        self,
+        symbol: str,
+        is_win: bool,
+        realized_pnl: Decimal,
+    ) -> None:
+        stats = self._get_today_stats()
+        stats.trades += 1
+        stats.realized_pnl += realized_pnl
+        self.account.cash += realized_pnl
+        self.account.current_capital += realized_pnl
+
+        if is_win:
+            stats.wins += 1
+            stats.consecutive_losses = 0
+        else:
+            stats.losses += 1
+            stats.consecutive_losses += 1
+            stats.last_loss_time = datetime.now()
+
+        self.daily_pnl_history.append((stats.date, realized_pnl))
+        self.account.positions.pop(symbol, None)
+        self.account.position_value = self.account.total_invested
+
+    def calculate_position_size(
+        self,
+        symbol: str,
+        current_price: Decimal,
+    ) -> tuple[Decimal, int]:
+        _ = symbol
+        sizing = self.config.position_sizing
+        max_position_amount = self.initial_capital * Decimal(str(sizing.max_position_ratio))
+        max_daily_amount = self.initial_capital * Decimal(
+            str(sizing.max_daily_investment_ratio)
+        )
+        remaining_daily_amount = max(max_daily_amount - self.account.total_invested, Decimal("0"))
+        amount = min(max_position_amount, self.account.available_cash, remaining_daily_amount)
+        if current_price <= 0 or amount <= 0:
+            return Decimal("0"), 0
+
+        quantity = int(amount // current_price)
+        invested_amount = current_price * quantity
+        return invested_amount, quantity
+
+    def open_position(self, symbol: str, amount: Decimal) -> bool:
+        if amount <= 0 or amount > self.account.available_cash:
+            return False
+        if (
+            symbol not in self.account.positions
+            and self.account.position_count >= self.config.position_sizing.max_concurrent_positions
+        ):
+            return False
+
+        previous_amount = self.account.positions.get(symbol, Decimal("0"))
+        self.account.positions[symbol] = amount
+        cash_delta = amount - previous_amount
+        self.account.cash -= cash_delta
+        self.account.position_value = self.account.total_invested
+        self._get_today_stats().total_invested = self.account.total_invested
+        return True
+
+    def update_market_change(self, market_change: float) -> None:
+        self.account.market_change = market_change
+
+    def get_status(self) -> dict[str, object]:
+        can_trade, reason, message = self.can_trade()
+        stats = self._get_today_stats()
+        return {
+            "can_trade": can_trade,
+            "block_reason": reason.value if reason else None,
+            "message": message,
+            "account": {
+                "initial_capital": float(self.account.initial_capital),
+                "current_capital": float(self.account.current_capital),
+                "cash": float(self.account.cash),
+                "position_value": float(self.account.position_value),
+                "position_count": self.account.position_count,
+                "positions": {
+                    symbol: float(amount)
+                    for symbol, amount in self.account.positions.items()
+                },
+            },
+            "daily_stats": {
+                "date": stats.date.isoformat(),
+                "trades": stats.trades,
+                "wins": stats.wins,
+                "losses": stats.losses,
+                "consecutive_losses": stats.consecutive_losses,
+                "realized_pnl": float(stats.realized_pnl),
+                "unrealized_pnl": float(stats.unrealized_pnl),
+                "total_invested": float(stats.total_invested),
+            },
+            "periodic_pnl": {
+                "daily": float(stats.total_pnl),
+                "weekly": float(self.account.weekly_pnl),
+                "monthly": float(self.account.monthly_pnl),
+            },
+            "limits": {
+                "max_daily_trades": self.config.risk_limits.max_daily_trades,
+                "max_consecutive_losses": self.config.risk_limits.max_consecutive_losses,
+                "max_concurrent_positions": (
+                    self.config.position_sizing.max_concurrent_positions
+                ),
+                "max_position_ratio": self.config.position_sizing.max_position_ratio,
+                "max_daily_investment_ratio": (
+                    self.config.position_sizing.max_daily_investment_ratio
+                ),
+            },
+        }
+
+    def reset_daily_stats(self) -> None:
+        self.account.daily_stats = TradingDayStats(date=date.today())
+
+    def get_position_size_recommendation(
+        self,
+        symbol: str,
+        current_price: Decimal,
+    ) -> dict[str, object]:
+        amount, quantity = self.calculate_position_size(symbol, current_price)
+        can_trade, reason, message = self.can_trade()
+        return {
+            "symbol": symbol,
+            "current_price": float(current_price),
+            "recommended_amount": float(amount),
+            "recommended_quantity": quantity,
+            "can_trade": can_trade,
+            "block_reason": reason.value if reason else None,
+            "message": message,
+        }

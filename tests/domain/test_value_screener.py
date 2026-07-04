@@ -184,16 +184,15 @@ class TestValueScreenerIntegration:
     @pytest.mark.asyncio
     async def test_screening_criteria_filter(self, client):
         """스크리닝 조건 필터 테스트"""
-        # 매우 관대한 조건
-        criteria = ValueScreenerCriteria(
-            max_market_cap=1_000_000_000_000_000,  # 1000조
-            min_retention_ratio=0,
-            min_quick_ratio=0,
-        )
-
         data = await client.get_stock_financial_data("005930")
 
         assert data is not None
+
+        criteria = ValueScreenerCriteria(
+            max_market_cap=data.market_cap + 1,
+            min_retention_ratio=0,
+            min_quick_ratio=0,
+        )
         # 관대한 조건에서는 삼성전자도 통과
         assert data.market_cap <= criteria.max_market_cap
         assert data.retention_ratio >= criteria.min_retention_ratio
