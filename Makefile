@@ -3,7 +3,7 @@ VENV ?= .venv
 PY ?= $(VENV)/bin/python
 PIP ?= $(VENV)/bin/pip
 
-.PHONY: sync lint test test-domain test-interface test-adapters smoke qa
+.PHONY: sync lint test test-domain test-interface test-adapters smoke qa docker-smoke docker-test
 
 sync:
 	$(PYTHON) -m venv $(VENV)
@@ -28,5 +28,11 @@ test-adapters:
 
 smoke:
 	$(PY) -c "from src.main import app; print('APP_OK')"
+
+docker-smoke:
+	docker compose --profile test run --rm --no-deps test /app/.venv/bin/python -c "from src.main import app; print('APP_OK')"
+
+docker-test:
+	docker compose --profile test run --rm --no-deps test /app/.venv/bin/python -m pytest -q $(TEST)
 
 qa: sync lint smoke test-domain

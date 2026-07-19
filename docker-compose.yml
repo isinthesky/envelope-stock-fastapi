@@ -80,6 +80,26 @@ services:
     env_file:
       - .env
 
+  # Test-only image. It contains dev dependencies and the test suite, unlike api.
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-kis_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kis_trading}
+      REDIS_URL: redis://${REDIS_PASSWORD:+:$REDIS_PASSWORD@}redis:6379/0
+      # Settings currently accepts development/staging/production only.
+      ENV: development
+      DEBUG: "false"
+    networks:
+      - kis-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["test"]
+
 networks:
   kis-network:
     name: kis-strategy-alert-server_kis-network
