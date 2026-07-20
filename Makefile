@@ -3,7 +3,8 @@ VENV ?= .venv
 PY ?= $(VENV)/bin/python
 PIP ?= $(VENV)/bin/pip
 TEST ?= tests
-DOCKER_TEST_COMPOSE := docker compose -p kis-stock-pipeline-test -f docker-compose.test.yml
+DOCKER_TEST_PROJECT ?= kis-stock-pipeline-test-$(shell date +%s)-$(shell printf '%s' "$$PPID")
+DOCKER_TEST_COMPOSE := docker compose -p $(DOCKER_TEST_PROJECT) -f docker-compose.test.yml
 
 .PHONY: sync lint test test-domain test-interface test-adapters smoke qa docker-smoke docker-test
 
