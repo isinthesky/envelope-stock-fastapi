@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,12 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv==0.11.29
 
-COPY pyproject.toml README.md ./
-# The current auto worktree does not track uv.lock. Resolve inside the disposable test image
-# rather than requiring a host virtual environment.
-RUN uv sync --all-groups --no-install-project
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --all-groups --no-install-project
 
 COPY alembic.ini ./
 COPY alembic ./alembic
@@ -25,6 +23,6 @@ COPY static ./static
 COPY tests ./tests
 COPY Makefile ./
 
-RUN uv sync --all-groups
+RUN uv sync --frozen --all-groups
 
 CMD ["sh"]
