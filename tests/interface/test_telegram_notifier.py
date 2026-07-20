@@ -46,7 +46,9 @@ async def test_sell_signals_summary_uses_stage_only_message(monkeypatch) -> None
     assert sent is True
     message = captured["message"]
     assert "RISE 코스닥150" in message
-    assert "2차 비중 축소 - 30~40% 매도 권장 | 현재가: 19,210원" in message
+    assert "단계: 2차 비중 축소" in message
+    assert "— 19,210원" in message
+    assert "👉 보유분 30~40% 매도 권장" in message
     assert "거래량: 1.13x (20일 평균 대비) · ETF라 보조지표로 참고" in message
     assert "개인수급 과열" in message
     assert "보조확인: 대장주 확인: 1/2 약세 (강매도 1) | 알테오젠:REDUCE_2, 에코프로비엠:HOLD" in message

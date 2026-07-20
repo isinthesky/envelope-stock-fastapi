@@ -22,6 +22,345 @@ from src.settings.config import settings
 logger = logging.getLogger(__name__)
 
 
+# ==================== 메시지 빌더 (순수 함수, 단위 테스트 대상) ====================
+
+GC_STATE_LABELS: dict[str, str] = {
+    "OPTIMAL_BUY": "매수 적기",
+    "BUY_INTEREST": "매수 관심",
+    "READY_TO_BUY": "매수 준비",
+}
+
+GC_STATE_ACTIONS: dict[str, str] = {
+    "OPTIMAL_BUY": "신규 매수 검토 (골든크로스 + 눌림목 도달)",
+    "READY_TO_BUY": "매수 준비 — 눌림목 진입 대기",
+    "BUY_INTEREST": "관심 종목 등록 후 관찰",
+}
+
+# final_stage → (표시 이름, 권장 행동) 매핑 (알림 기준을 Stage로 단일화)
+SELL_STAGE_DISPLAY: dict[str, tuple[str, str]] = {
+    "HOLD": ("보유 유지", "현 상태 유지"),
+    "REDUCE_1": ("1차 비중 축소", "보유분 20~30% 매도 검토"),
+    "REDUCE_2": ("2차 비중 축소", "보유분 30~40% 매도 권장"),
+    "EXIT_ALL": ("전량 청산", "즉시 전량 매도 검토"),
+}
+
+_ETF_KEYWORDS = (
+    "ETF", "ETN", "TIGER", "KODEX", "RISE", "SOL", "KOSEF", "ACE", "HANARO", "TIMEFOLIO",
+)
+
+
+def _to_float(value: object) -> float | None:
+    """Decimal/str/int 등을 float로 안전 변환 (실패 시 None)"""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_golden_cross_recommendations_message(
+    recommendations: dict,
+    slot_label: str | None = None,
+    max_stocks: int = 5,
+) -> str:
+    """골든크로스 매수 추천 요약 메시지 생성 (HTML)
+
+    Args:
+        recommendations: GoldenCrossRecommendationDTO를 dict로 dump한 값
+        slot_label: 알림 슬롯 라벨 (예: "11:30")
+        max_stocks: 표시할 최대 종목 수
+    """
+    top_stocks = recommendations.get("top_stocks") or []
+    top_industries = recommendations.get("top_industries") or []
+    buy_candidate_count = recommendations.get("buy_candidate_count")
+    scan_time = recommendations.get("scan_time")
+    errors = recommendations.get("errors") or []
+
+    scan_time_str = ""
+    try:
+        if hasattr(scan_time, "strftime"):
+            scan_time_str = scan_time.strftime("%Y-%m-%d %H:%M")
+        elif isinstance(scan_time, str) and scan_time:
+            scan_time_str = scan_time.replace("T", " ")[:16]
+    except Exception:
+        scan_time_str = ""
+
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+    slot_part = f" ({slot_label})" if slot_label else ""
+    header_emoji = "🟢" if top_stocks else "⚪"
+
+    lines: list[str] = [
+        f"{header_emoji} <b>매수 신호 알림{slot_part}</b>",
+        f"📅 {now} KST",
+        "전략: MA55/165 골든크로스 + Stochastic 눌림목",
+    ]
+    if buy_candidate_count is not None:
+        lines.append(f"매수 적기 후보: {buy_candidate_count}개")
+    if scan_time_str:
+        lines.append(f"스캔 시각: {scan_time_str}")
+    if errors:
+        lines.append(f"⚠️ 데이터/분석 경고: {len(errors)}건")
+    lines.append("")
+
+    if not top_stocks:
+        lines.append("오늘은 매수 후보 종목이 없습니다.")
+        lines.append("(조건: 골든크로스 활성 + Stochastic 과매도 눌림목)")
+        lines.append("")
+        lines.append("👉 오늘은 신규 매수 없이 관망")
+    else:
+        shown = top_stocks[:max_stocks]
+        lines.append(f"📌 <b>매수 후보 Top {len(shown)}</b> (점수순)")
+        for rank, s in enumerate(shown, start=1):
+            symbol = html_mod.escape(str(s.get("symbol") or ""))
+            name = html_mod.escape(str(s.get("name") or symbol))
+            gc_state = str(s.get("gc_state") or "")
+            state_label = GC_STATE_LABELS.get(gc_state, gc_state or "-")
+
+            price = _to_float(s.get("current_price"))
+            price_part = f" — {price:,.0f}원" if price is not None else ""
+
+            detail_bits: list[str] = [f"상태: {state_label}"]
+            score = _to_float(s.get("recommendation_score"))
+            if score is not None:
+                detail_bits.append(f"점수: {score:.1f}")
+
+            indicator_bits: list[str] = []
+            stoch_k = _to_float(s.get("stoch_k"))
+            if stoch_k is not None:
+                indicator_bits.append(f"Stoch K {stoch_k:.1f}")
+            ma_gap = _to_float(s.get("ma_gap_ratio"))
+            if ma_gap is not None:
+                indicator_bits.append(f"MA55/165갭 {ma_gap:+.1f}%")
+            industry_name = s.get("industry_name")
+            if industry_name:
+                indicator_bits.append(html_mod.escape(str(industry_name)))
+
+            lines.append(f"{rank}. <b>{name}</b> ({symbol}){price_part}")
+            lines.append("   ├ " + " | ".join(detail_bits))
+            if indicator_bits:
+                lines.append("   ├ 지표: " + " / ".join(indicator_bits))
+            reasons = [str(r) for r in (s.get("recommendation_reasons") or []) if r]
+            if reasons:
+                lines.append("   ├ 근거: " + html_mod.escape(", ".join(reasons[:2])))
+            action = GC_STATE_ACTIONS.get(gc_state, "차트 확인 후 판단")
+            lines.append(f"   └ 👉 {action}")
+
+        # 상세 표시(max_stocks) 다음 5개는 한 줄 요약으로 표시, 그 이상만 축약
+        brief_limit = max_stocks + 5
+        for rank, s in enumerate(
+            top_stocks[max_stocks:brief_limit], start=max_stocks + 1
+        ):
+            symbol = html_mod.escape(str(s.get("symbol") or ""))
+            name = html_mod.escape(str(s.get("name") or symbol))
+            price = _to_float(s.get("current_price"))
+            price_part = f" — {price:,.0f}원" if price is not None else ""
+            score = _to_float(s.get("recommendation_score"))
+            score_part = f" | 점수 {score:.1f}" if score is not None else ""
+            lines.append(f"{rank}. {name} ({symbol}){price_part}{score_part}")
+
+        if len(top_stocks) > brief_limit:
+            lines.append(f"... 외 {len(top_stocks) - brief_limit}개")
+
+    if top_industries:
+        lines.append("")
+        lines.append("🏷️ <b>Top 업종</b>")
+        for ind in top_industries:
+            code = html_mod.escape(str(ind.get("industry_code") or ""))
+            ind_name = html_mod.escape(str(ind.get("industry_name") or "(unknown)"))
+            cnt = ind.get("count")
+            if code and cnt is not None:
+                lines.append(f"• {ind_name} ({code}) : {cnt}종목")
+            else:
+                lines.append(f"• {ind_name}")
+
+    if errors:
+        lines.append("")
+        lines.append("⚠️ <b>경고 요약</b>")
+        for error in errors[:3]:
+            lines.append(f"• {html_mod.escape(str(error))}")
+        if len(errors) > 3:
+            lines.append(f"• ... 외 {len(errors) - 3}건")
+
+    return "\n".join(lines)
+
+
+def build_sell_signals_summary_message(
+    stocks: list[dict],
+    slot_label: str | None = None,
+    status_summary: list[str] | None = None,
+) -> str:
+    """매도 신호 요약 메시지 생성 (HTML)
+
+    Args:
+        stocks: 매도 신호 종목 리스트 (notification_scheduler의 pending_sell_alerts)
+        slot_label: 알림 슬롯 라벨 (예: "09:30")
+        status_summary: 추적 종목 현황 요약
+    """
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+    slot_part = f" ({slot_label})" if slot_label else ""
+    lines: list[str] = [
+        f"🔴 <b>매도 신호 알림{slot_part}</b>",
+        f"📅 {now} KST",
+        f"매도 신호 {len(stocks)}개 종목",
+        "",
+    ]
+
+    for stock in stocks[:10]:  # 최대 10개
+        is_strong = (
+            stock.get("sell_phase") == "PHASE_5" or stock.get("final_stage") == "EXIT_ALL"
+        )
+        emoji = "🔴" if is_strong else "🟠"
+        raw_name = str(stock.get("name") or stock.get("symbol") or "")
+        name = html_mod.escape(raw_name)
+        symbol = html_mod.escape(str(stock.get("symbol", "")))
+
+        price = _to_float(stock.get("current_price"))
+        price_part = f" — {price:,.0f}원" if price is not None else ""
+
+        # final_stage 기반으로 핵심 권고를 단일 표시 (phase와 혼용 금지)
+        final_stage_val = str(stock.get("final_stage") or "")
+        stage_name_raw, stage_action_raw = SELL_STAGE_DISPLAY.get(
+            final_stage_val,
+            (stock.get("sell_stage_name") or final_stage_val or "-", ""),
+        )
+        stage_name = html_mod.escape(str(stage_name_raw))
+
+        block_lines: list[str] = [f"{emoji} <b>{name}</b> ({symbol}){price_part}"]
+
+        # 단계 + 보유 수익률
+        stage_bits = [f"단계: {stage_name}"]
+        profit_ratio = _to_float(stock.get("profit_ratio"))
+        entry_price = _to_float(stock.get("entry_price"))
+        if profit_ratio is not None:
+            profit_part = f"수익률: {profit_ratio:+.1f}%"
+            if entry_price is not None:
+                profit_part += f" (진입 {entry_price:,.0f}원)"
+            stage_bits.append(profit_part)
+        block_lines.append("   ├ " + " | ".join(stage_bits))
+
+        # 핵심 지표 값
+        indicator_bits: list[str] = []
+        stoch_k = _to_float(stock.get("stoch_k"))
+        if stoch_k is not None:
+            indicator_bits.append(f"Stoch K {stoch_k:.1f}")
+        rsi = _to_float(stock.get("rsi"))
+        if rsi is not None:
+            indicator_bits.append(f"RSI {rsi:.1f}")
+        ma_gap = _to_float(stock.get("ma_gap_ratio"))
+        if ma_gap is not None:
+            indicator_bits.append(f"MA55/165갭 {ma_gap:+.1f}%")
+        if indicator_bits:
+            block_lines.append("   ├ 지표: " + " / ".join(indicator_bits))
+
+        # 거래량
+        volume_ratio = stock.get("volume_ratio")
+        if volume_ratio is not None:
+            try:
+                ratio = float(volume_ratio)
+                volume_note = f"거래량: {ratio:.2f}x (20일 평균 대비)"
+                if stock.get("is_volume_sell_signal"):
+                    volume_note += ", 하락 동반 매도 신호"
+                elif stock.get("is_volume_peak"):
+                    volume_note += ", 피크 경고"
+                elif stock.get("is_volume_spike"):
+                    volume_note += ", 급증"
+
+                upper_name = raw_name.upper().replace(" ", "")
+                if any(keyword in upper_name for keyword in _ETF_KEYWORDS):
+                    volume_note += " · ETF라 보조지표로 참고"
+                block_lines.append("   ├ " + html_mod.escape(volume_note))
+            except (TypeError, ValueError):
+                pass
+
+        # 과열 보조지표
+        heat_tags: list[str] = []
+        if stock.get("is_personal_buying_overheated"):
+            heat_tags.append("개인수급 과열")
+        if stock.get("is_market_credit_overheated"):
+            market_credit_label = html_mod.escape(str(stock.get("market_credit_label") or ""))
+            heat_tags.append(f"시장신용 과열({market_credit_label})")
+        if heat_tags:
+            block_lines.append("   ├ ⚠️ " + " | ".join(heat_tags))
+
+        leader_summary = stock.get("leader_summary")
+        if leader_summary:
+            block_lines.append("   ├ 보조확인: " + html_mod.escape(str(leader_summary)))
+
+        # 매도 사유 (Stochastic/RSI 과매수 문구는 지표 라인과 중복이라 제외)
+        reasons = stock.get("sell_reasons", []) or []
+        filtered_reasons = [
+            r
+            for r in reasons
+            if "Stochastic" not in r
+            and "stochastic" not in r
+            and "RSI 과매수" not in r
+            and "RSI 극단적" not in r
+        ]
+        if filtered_reasons:
+            block_lines.append("   ├ 사유: " + html_mod.escape(", ".join(filtered_reasons[:3])))
+
+        # 권장 액션 한 줄
+        action = stage_action_raw or "차트 확인 후 판단"
+        block_lines.append(f"   └ 👉 {html_mod.escape(str(action))}")
+
+        lines.append("\n".join(block_lines))
+
+    if len(stocks) > 10:
+        lines.append(f"\n... 외 {len(stocks) - 10}개")
+
+    if status_summary:
+        lines.append("")
+        lines.append("ℹ️ 추적 종목 현황")
+        for item in status_summary[:4]:
+            lines.append(f"- {html_mod.escape(str(item))}")
+
+    return "\n".join(lines)
+
+
+def build_no_sell_signals_message(
+    total_tracked: int = 0,
+    slot_label: str | None = None,
+    failed_count: int = 0,
+    failed_summary: list[str] | None = None,
+    status_summary: list[str] | None = None,
+) -> str:
+    """매도 신호 없음 메시지 생성 (HTML)"""
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+    slot_part = f" ({slot_label})" if slot_label else ""
+
+    lines: list[str] = [
+        f"⚪ <b>매도 신호 알림{slot_part}</b>",
+        f"📅 {now} KST",
+        "",
+        f"오늘은 매도 신호 종목이 없습니다. (추적 {total_tracked}개 종목)",
+        "기준: PHASE_4/5(매도 권장/강력 매도) 또는 REDUCE_2/EXIT_ALL(강한 매도 단계)",
+        "",
+    ]
+    if failed_count:
+        # 분석 실패 종목이 있으면 '전 종목 보유 유지'로 단정하지 않는다
+        lines.append(
+            f"👉 분석 성공 종목 기준 매도 신호 없음 — 실패 {failed_count}종목은 수동 확인 필요"
+        )
+    else:
+        lines.append("👉 전 종목 보유 유지 — 오늘 매도 조치 불필요")
+
+    if failed_count:
+        lines.append("")
+        lines.append(f"⚠️ {failed_count}개 종목 분석 실패")
+        if failed_summary:
+            for item in failed_summary[:3]:
+                lines.append(f"- {html_mod.escape(str(item))}")
+
+    if status_summary:
+        lines.append("")
+        lines.append("ℹ️ 추적 종목 현황")
+        for item in status_summary[:4]:
+            lines.append(f"- {html_mod.escape(str(item))}")
+
+    return "\n".join(lines)
+
+
 class TelegramNotifier:
     """
     Telegram 알림 클라이언트
@@ -144,8 +483,15 @@ class TelegramNotifier:
                     chunks.append("\n".join(current))
                     current = []
                     current_len = 0
-                for i in range(0, len(line), limit):
-                    chunks.append(line[i:i + limit])
+                start = 0
+                while start < len(line):
+                    end = min(start + limit, len(line))
+                    if end < len(line):
+                        # HTML entity(&...;)/태그(<...>) 중간 절단 시 Telegram이
+                        # 해당 청크를 parse error로 거부하므로 경계를 보정한다.
+                        end = self._html_safe_split_point(line, start, end)
+                    chunks.append(line[start:end])
+                    start = end
                 continue
 
             line_len = len(line) + 1  # +1 for newline
@@ -159,6 +505,40 @@ class TelegramNotifier:
         if current:
             chunks.append("\n".join(current))
         return chunks
+
+    @staticmethod
+    def _html_safe_split_point(line: str, start: int, end: int) -> int:
+        """강제 분할 절단 지점이 HTML entity/태그 내부에 걸리지 않도록 보정
+
+        end 직전 최대 64자 범위를 뒤로 스캔하며:
+        - 아직 ';'로 닫히지 않은 마지막 '&' (entity 중간) 앞에서 절단
+        - 아직 '>'로 닫히지 않은 마지막 '<' (태그 중간) 앞에서 절단
+        64자 내에 안전 지점이 없으면 end를 그대로 반환한다 (무한루프 방지).
+        반환값은 항상 start보다 크므로 분할 루프는 반드시 전진한다.
+        """
+        lower_bound = max(start + 1, end - 64)
+        entity_start: int | None = None  # 아직 ';'로 닫히지 않은 '&' 위치
+        tag_start: int | None = None  # 아직 '>'로 닫히지 않은 '<' 위치
+        seen_entity_close = False
+        seen_tag_close = False
+        for i in range(end - 1, lower_bound - 1, -1):
+            ch = line[i]
+            if ch == ";":
+                seen_entity_close = True
+            elif ch == ">":
+                seen_tag_close = True
+            elif ch == "&" and not seen_entity_close and entity_start is None:
+                entity_start = i
+            elif ch == "<" and not seen_tag_close and tag_start is None:
+                tag_start = i
+            if entity_start is not None and tag_start is not None:
+                break
+        # 태그 내부의 entity처럼 두 토큰이 겹칠 수 있으므로 첫 후보에서 멈추지
+        # 않고 더 이른 시작점 앞에서 절단한다 (예: <a href="...&amp 는 '<' 앞).
+        candidates = [pos for pos in (entity_start, tag_start) if pos is not None]
+        if candidates:
+            return min(candidates)
+        return end
 
     # ==================== 매수 알림 포맷 ====================
 
@@ -269,85 +649,9 @@ class TelegramNotifier:
         if not recommendations:
             return False
 
-        top_stocks = recommendations.get("top_stocks") or []
-        top_industries = recommendations.get("top_industries") or []
-        buy_candidate_count = recommendations.get("buy_candidate_count")
-        scan_time = recommendations.get("scan_time")
-        errors = recommendations.get("errors") or []
-
-        # scan_time 표기 정리
-        scan_time_str = ""
-        try:
-            if hasattr(scan_time, "strftime"):
-                scan_time_str = scan_time.strftime("%Y-%m-%d %H:%M")
-            elif isinstance(scan_time, str) and scan_time:
-                scan_time_str = scan_time.replace("T", " ")[:16]
-        except Exception:
-            scan_time_str = ""
-
-        now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-
-        slot_part = f" ({slot_label})" if slot_label else ""
-        lines: list[str] = [
-            f"🧭 <b>매수 추천 알림{slot_part}</b>",
-            f"📅 {now}",
-        ]
-
-        if buy_candidate_count is not None:
-            lines.append(f"매수 적기 후보: {buy_candidate_count}개")
-
-        if scan_time_str:
-            lines.append(f"스캔 시각: {scan_time_str}")
-
-        if errors:
-            lines.append(f"⚠️ 데이터/분석 경고: {len(errors)}건")
-
-        lines.append("")
-
-        if top_industries:
-            lines.append("🏷️ <b>Top 업종</b>")
-            for ind in top_industries:
-                code = html_mod.escape(str(ind.get("industry_code") or ""))
-                name = html_mod.escape(ind.get("industry_name") or "(unknown)")
-                cnt = ind.get("count")
-                if code and cnt is not None:
-                    lines.append(f"• {name} ({code}) : {cnt}")
-                else:
-                    lines.append(f"• {name}")
-            lines.append("")
-
-        if top_stocks:
-            lines.append("📌 <b>Top 종목</b>")
-            for s in top_stocks[:10]:
-                symbol = html_mod.escape(s.get("symbol") or "")
-                name = html_mod.escape(s.get("name") or "")
-                gc_state = s.get("gc_state")
-                ind_name = html_mod.escape(s.get("industry_name") or "")
-                ind_part = f" | 업종: {ind_name}" if ind_name else ""
-                state_label = {
-                    "OPTIMAL_BUY": "매수 적기",
-                    "BUY_INTEREST": "매수 관심",
-                    "READY_TO_BUY": "매수 준비",
-                }.get(gc_state, gc_state or "-")
-                price = s.get("current_price")
-                price_part = f" | 현재가: {float(price):,.0f}원" if price is not None else ""
-                lines.append(
-                    f"• <b>{name}</b> ({symbol})\n"
-                    f"  상태: {state_label}{price_part}{ind_part}"
-                )
-
-            if len(top_stocks) > 10:
-                lines.append(f"\n... 외 {len(top_stocks) - 10}개")
-
-        if errors:
-            lines.append("")
-            lines.append("⚠️ <b>경고 요약</b>")
-            for error in errors[:3]:
-                lines.append(f"• {html_mod.escape(str(error))}")
-            if len(errors) > 3:
-                lines.append(f"• ... 외 {len(errors) - 3}건")
-
-        message = "\n".join(lines)
+        message = build_golden_cross_recommendations_message(
+            recommendations, slot_label=slot_label
+        )
         return await self.send_message(message)
 
     async def send_no_buy_signals_alert(self, total_scanned: int = 0) -> bool:
@@ -440,29 +744,13 @@ class TelegramNotifier:
             total_tracked: 추적 중인 총 종목 수
             failed_count: 분석 실패 종목 수
         """
-        now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-
-        slot_part = f" ({slot_label})" if slot_label else ""
-        fail_part = f"\n⚠️ {failed_count}개 종목 분석 실패" if failed_count else ""
-        summary_part = ""
-        if failed_summary:
-            summary_lines = "\n".join([f"- {item}" for item in failed_summary[:3]])
-            summary_part = f"\n원인 요약:\n{summary_lines}"
-        status_part = ""
-        if status_summary:
-            status_lines = "\n".join([f"- {item}" for item in status_summary[:4]])
-            status_part = f"\n\nℹ️ 시스템 상태\n{status_lines}"
-        message = f"""⚪ <b>매도 권장 종목 알림{slot_part}</b>
-
-📅 {now}
-
-오늘은 매도 권장 종목이 없습니다.
-(총 {total_tracked}개 종목 추적 중)
-
-PHASE_4/5(매도 권장/강력 매도) 또는
-REDUCE_2/EXIT_ALL(강한 매도 단계)에
-해당하는 종목이 없습니다.{fail_part}{summary_part}{status_part}"""
-
+        message = build_no_sell_signals_message(
+            total_tracked=total_tracked,
+            slot_label=slot_label,
+            failed_count=failed_count,
+            failed_summary=failed_summary,
+            status_summary=status_summary,
+        )
         return await self.send_message(message)
 
     async def send_sell_signals_summary(
@@ -480,101 +768,9 @@ REDUCE_2/EXIT_ALL(강한 매도 단계)에
         if not stocks:
             return False
 
-        now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-
-        slot_part = f" ({slot_label})" if slot_label else ""
-        lines = [
-            f"🔴 <b>매도 권장 종목 알림{slot_part}</b>",
-            f"📅 {now} (KST)",
-            f"총 {len(stocks)}개 종목",
-            "",
-        ]
-
-        # final_stage → 표시 이름/행동 매핑 (알림 기준을 Stage로 단일화)
-        stage_display = {
-            "HOLD": ("보유 유지", "현 상태 유지"),
-            "REDUCE_1": ("1차 비중 축소", "20~30% 매도 고려"),
-            "REDUCE_2": ("2차 비중 축소", "30~40% 매도 권장"),
-            "EXIT_ALL": ("전량 청산", "즉시 전량 매도"),
-        }
-        etf_keywords = ("ETF", "ETN", "TIGER", "KODEX", "RISE", "SOL", "KOSEF", "ACE", "HANARO", "TIMEFOLIO")
-
-        for stock in stocks[:10]:  # 최대 10개
-            is_strong = stock.get("sell_phase") == "PHASE_5" or stock.get("final_stage") == "EXIT_ALL"
-            emoji = "🔴" if is_strong else "🟠"
-            raw_name = stock.get("name") or stock.get("symbol") or ""
-            name = html_mod.escape(raw_name)
-
-            # Stochastic/RSI 과매수 관련 메시지 필터링
-            reasons = stock.get("sell_reasons", [])
-            filtered_reasons = [
-                r for r in reasons
-                if "Stochastic" not in r and "stochastic" not in r
-                and "RSI 과매수" not in r and "RSI 극단적" not in r
-            ]
-            reasons_text = html_mod.escape(", ".join(filtered_reasons[:3])) if filtered_reasons else ""
-
-            # final_stage 기반으로 핵심 권고를 단일 표시 (phase와 혼용 금지)
-            final_stage_val = str(stock.get("final_stage") or "")
-            stage_name_raw, stage_action_raw = stage_display.get(
-                final_stage_val,
-                (stock.get("sell_stage_name") or final_stage_val or "-", "")
-            )
-            stage_name = html_mod.escape(stage_name_raw)
-            stage_action = html_mod.escape(stage_action_raw)
-            heat_tags: list[str] = []
-            if stock.get("is_personal_buying_overheated"):
-                heat_tags.append("개인수급 과열")
-            market_credit_label = html_mod.escape(stock.get("market_credit_label") or "")
-            if stock.get("is_market_credit_overheated"):
-                heat_tags.append(f"시장신용 과열({market_credit_label})")
-
-            current_price = stock.get("current_price")
-            price_part = f" | 현재가: {float(current_price):,.0f}원" if current_price is not None else ""
-            symbol = html_mod.escape(stock.get("symbol", ""))
-            action_part = f" - {stage_action}" if stage_action else ""
-            heat_part = " | ".join(heat_tags)
-            block = f"{emoji} <b>{name}</b> ({symbol})\n  {stage_name}{action_part}{price_part}"
-
-            volume_ratio = stock.get("volume_ratio")
-            if volume_ratio is not None:
-                try:
-                    ratio = float(volume_ratio)
-                    volume_note = f"거래량: {ratio:.2f}x (20일 평균 대비)"
-                    if stock.get("is_volume_sell_signal"):
-                        volume_note += ", 하락 동반 매도 신호"
-                    elif stock.get("is_volume_peak"):
-                        volume_note += ", 피크 경고"
-                    elif stock.get("is_volume_spike"):
-                        volume_note += ", 급증"
-
-                    upper_name = raw_name.upper().replace(" ", "")
-                    if any(keyword in upper_name for keyword in etf_keywords):
-                        volume_note += " · ETF라 보조지표로 참고"
-
-                    block += f"\n  {html_mod.escape(volume_note)}"
-                except (TypeError, ValueError):
-                    pass
-
-            if heat_part:
-                block += f"\n  {heat_part.strip()}"
-            leader_summary = stock.get("leader_summary")
-            if leader_summary:
-                block += f"\n  보조확인: {html_mod.escape(str(leader_summary))}"
-            if reasons_text:
-                block += f"\n  💡 {reasons_text}"
-            lines.append(block)
-
-        if len(stocks) > 10:
-            lines.append(f"\n... 외 {len(stocks) - 10}개")
-
-        if status_summary:
-            lines.append("")
-            lines.append("ℹ️ 시스템 상태")
-            for item in status_summary[:4]:
-                lines.append(f"- {item}")
-
-        message = "\n".join(lines)
+        message = build_sell_signals_summary_message(
+            stocks, slot_label=slot_label, status_summary=status_summary
+        )
         return await self.send_message(message)
 
 
