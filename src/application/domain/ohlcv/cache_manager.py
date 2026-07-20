@@ -6,7 +6,7 @@ OHLCV Cache Manager - OHLCV 캐시 수명주기 관리
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +41,15 @@ class OHLCVCacheManager:
         self.ohlcv_repo = OHLCVRepository(session)
         self.calendar = get_trading_calendar()
 
+    @staticmethod
+    def _ensure_aware_utc(value: datetime | None) -> datetime | None:
+        """naive datetime이 섞여 들어와도 aware(UTC)로 정규화 (비교 TypeError 방지)"""
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
     # ==================== 데이터 정리 ====================
 
     async def cleanup_old_data(
@@ -65,7 +74,9 @@ class OHLCVCacheManager:
         if policy is None:
             policy = CacheRetentionPolicyDTO()
 
-        before_date = datetime.now() - timedelta(days=policy.retention_days)
+        # DB의 timestamp 컬럼이 timezone-aware(timestamptz)이므로
+        # 기준 시각도 aware(UTC)로 통일한다 (naive/aware 비교 TypeError 방지)
+        before_date = datetime.now(timezone.utc) - timedelta(days=policy.retention_days)
 
         # 영향받을 종목 조회
         symbols = await self.ohlcv_repo.get_all_symbols()
@@ -73,7 +84,8 @@ class OHLCVCacheManager:
 
         for symbol in symbols:
             stats = await self.ohlcv_repo.get_symbol_stats(symbol)
-            if stats["earliest_date"] and stats["earliest_date"] < before_date:
+            earliest_date = self._ensure_aware_utc(stats["earliest_date"])
+            if earliest_date and earliest_date < before_date:
                 affected_symbols.append(symbol)
 
         deleted_count = 0
@@ -152,8 +164,8 @@ class OHLCVCacheManager:
         """
         issues = []
 
-        # 데이터 조회 (최근 1년)
-        end_date = datetime.now()
+        # 데이터 조회 (최근 1년) - timestamptz 컬럼과의 비교를 위해 aware(UTC) 사용
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=365)
 
         candles = await self.ohlcv_repo.get_candles_by_date_range(
