@@ -2,6 +2,8 @@ PYTHON ?= /opt/homebrew/bin/python3.11
 VENV ?= .venv
 PY ?= $(VENV)/bin/python
 PIP ?= $(VENV)/bin/pip
+TEST ?= tests
+DOCKER_TEST_COMPOSE := docker compose -p kis-stock-pipeline-test -f docker-compose.test.yml
 
 .PHONY: sync lint test test-domain test-interface test-adapters smoke qa docker-smoke docker-test
 
@@ -30,9 +32,13 @@ smoke:
 	$(PY) -c "from src.main import app; print('APP_OK')"
 
 docker-smoke:
-	docker compose --profile test run --rm --no-deps test /app/.venv/bin/python -c "from src.main import app; print('APP_OK')"
+	$(DOCKER_TEST_COMPOSE) build test
+	$(DOCKER_TEST_COMPOSE) run --rm --no-deps test /app/.venv/bin/python -c "from src.main import app; print('APP_OK')"
 
 docker-test:
-	docker compose --profile test run --rm --no-deps test /app/.venv/bin/python -m pytest -q $(TEST)
+	@set -e; \
+	cleanup() { $(DOCKER_TEST_COMPOSE) down --volumes --remove-orphans >/dev/null 2>&1 || true; }; \
+	trap cleanup EXIT; \
+	$(DOCKER_TEST_COMPOSE) run --build --rm test /app/.venv/bin/python -m pytest -q $(TEST)
 
 qa: sync lint smoke test-domain
