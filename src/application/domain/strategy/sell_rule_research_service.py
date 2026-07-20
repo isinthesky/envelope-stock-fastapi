@@ -24,6 +24,7 @@ from src.adapters.database.models.stock_universe import StockUniverseModel
 from src.adapters.database.repositories.analysis_history_repository import (
     AnalysisHistoryRepository,
 )
+from src.application.domain.strategy.symbol_validation import filter_tradable_items
 from src.adapters.database.repositories.market_credit_snapshot_repository import (
     MarketCreditSnapshotRepository,
 )
@@ -260,6 +261,7 @@ class SellPeakRuleResearchService:
             "sell",
             session=self.session,
         )
+        rows, _skipped = filter_tradable_items(rows)
         return rows
 
     async def _load_symbol_frame(

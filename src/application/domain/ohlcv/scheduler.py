@@ -48,7 +48,14 @@ class OHLCVCacheScheduler:
             logger.warning("[OHLCVScheduler] Already running")
             return
 
-        self._scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
+        self._scheduler = AsyncIOScheduler(
+            timezone="Asia/Seoul",
+            job_defaults={
+                # 이벤트 루프 지연으로 초 단위 지각 시에도 잡을 건너뛰지 않도록
+                "coalesce": True,
+                "misfire_grace_time": 300,
+            },
+        )
 
         # 매일 새벽 2시: 오래된 데이터 정리
         self._scheduler.add_job(

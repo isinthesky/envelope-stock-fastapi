@@ -54,7 +54,14 @@ class StrategyScheduler:
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
             from apscheduler.triggers.cron import CronTrigger
 
-            self.scheduler = AsyncIOScheduler(timezone=KST)
+            self.scheduler = AsyncIOScheduler(
+                timezone=KST,
+                job_defaults={
+                    # 이벤트 루프 지연으로 초 단위 지각 시에도 잡을 건너뛰지 않도록
+                    "coalesce": True,
+                    "misfire_grace_time": 300,
+                },
+            )
 
             # 장 마감 후 전략 실행 (월~금 15:35)
             self.scheduler.add_job(
@@ -68,6 +75,10 @@ class StrategyScheduler:
                 id="daily_strategy_execution",
                 name="Daily Strategy Execution",
                 replace_existing=True,
+                # 실주문(dry_run=False) 경로: 기본 misfire_grace_time=300(5분)을 쓰면
+                # 5분 지각 주문까지 실행될 수 있음. 관측된 이벤트 루프 지연은 ~2초라
+                # 90초면 충분히 흡수하면서 지각 실주문을 차단한다.
+                misfire_grace_time=90,
             )
 
             # 유니버스 갱신 (B-1: 기존 유니버스 데이터 갱신 + 스크리닝 재적용)

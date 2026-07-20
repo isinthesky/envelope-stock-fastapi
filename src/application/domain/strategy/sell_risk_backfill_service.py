@@ -7,6 +7,7 @@ Sell risk data backfill service
 
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from typing import Any
 
@@ -17,8 +18,14 @@ from src.adapters.database.models.stock_universe import StockUniverseModel
 from src.adapters.database.repositories.analysis_history_repository import (
     AnalysisHistoryRepository,
 )
+from src.application.domain.strategy.symbol_validation import (
+    filter_tradable_items,
+    split_valid_symbols,
+)
 from src.adapters.external.kofia_client import get_kofia_client
 from src.adapters.external.naver.stock_client import get_naver_stock_client
+
+logger = logging.getLogger(__name__)
 
 
 class SellRiskBackfillService:
@@ -29,7 +36,15 @@ class SellRiskBackfillService:
 
     async def resolve_symbols(self, symbols: list[str] | None = None) -> list[dict[str, str | None]]:
         if symbols:
-            return await self._resolve_symbol_metadata(symbols)
+            # 명시적 입력도 형식 검증을 통과한 종목만 사용 (메모 행 등 우회 차단)
+            valid_symbols, skipped = split_valid_symbols(symbols)
+            if skipped:
+                logger.warning(
+                    "[SellRiskBackfill] Skipping invalid symbols: %s", skipped
+                )
+            if not valid_symbols:
+                return []
+            return await self._resolve_symbol_metadata(valid_symbols)
 
         if self.session is None:
             return []
@@ -38,6 +53,7 @@ class SellRiskBackfillService:
             "sell",
             session=self.session,
         )
+        rows, _skipped = filter_tradable_items(rows)
         return rows
 
     async def _resolve_symbol_metadata(

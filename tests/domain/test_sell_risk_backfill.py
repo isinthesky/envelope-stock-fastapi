@@ -2,6 +2,28 @@ import asyncio
 
 from src.adapters.external.kofia_client import KofiaClient
 from src.adapters.external.naver.stock_client import NaverStockClient
+from src.application.domain.strategy.sell_risk_backfill_service import (
+    SellRiskBackfillService,
+)
+
+
+def test_resolve_symbols_filters_invalid_explicit_input() -> None:
+    # 명시적 symbols 인자도 형식 검증을 우회하지 않아야 한다 (메모 행 차단 + strip 정규화)
+    service = SellRiskBackfillService(session=None)
+
+    resolved = asyncio.run(
+        service.resolve_symbols(["005930", "MEMO-BROADCAST-1", " 000660 "])
+    )
+
+    assert [row["symbol"] for row in resolved] == ["005930", "000660"]
+
+
+def test_resolve_symbols_all_invalid_explicit_input_returns_empty() -> None:
+    service = SellRiskBackfillService(session=None)
+
+    resolved = asyncio.run(service.resolve_symbols(["MEMO-BROADCAST-1", "HALLOWEEN-STRAT"]))
+
+    assert resolved == []
 
 
 def test_market_credit_backfill_chunks_two_year_range() -> None:

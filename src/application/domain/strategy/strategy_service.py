@@ -66,6 +66,7 @@ from src.application.domain.strategy.dto import (
     SymbolStateDTO,
     SymbolStateListDTO,
 )
+from src.application.domain.strategy.symbol_validation import split_valid_symbol_pairs
 from src.settings.config import settings
 
 if TYPE_CHECKING:
@@ -1775,26 +1776,37 @@ class StrategyService:
         updated_items: list[AnalysisHistoryDTO] = []
 
         history_repo = self._get_analysis_repo(session)
-        active_symbols = await history_repo.get_active_symbols(analysis_type, session=session)
+        raw_active_symbols = await history_repo.get_active_symbols(analysis_type, session=session)
 
-        if not active_symbols:
+        # 메모 행(MEMO-BROADCAST-* 등) 등 종목코드 형식이 아닌 값은 분석 대상에서 제외.
+        # 공백만 다른 원본 행이 공존해도 각 행을 개별 조회/갱신할 수 있도록
+        # (raw, stripped) 쌍을 보존한다. DB 행 조회/갱신=raw, 외부 조회=stripped.
+        symbol_pairs, skipped_symbols = split_valid_symbol_pairs(raw_active_symbols)
+        if skipped_symbols:
+            logger.info(
+                f"[Refresh] Skipping non-symbol rows (memo etc.): {', '.join(skipped_symbols)}"
+            )
+
+        if not symbol_pairs:
             return AnalysisHistoryRefreshResultDTO(
                 updated_count=0,
                 items=[],
                 errors=["No active tracking items found"],
             )
 
-        logger.info(f"[Refresh] Refreshing {len(active_symbols)} {analysis_type} items")
+        logger.info(f"[Refresh] Refreshing {len(symbol_pairs)} {analysis_type} items")
 
         # 종목명 조회를 위한 유니버스 레포지토리
         universe_repo = StockUniverseRepository(session)
 
-        for symbol in active_symbols:
+        for db_symbol, symbol in symbol_pairs:
+            # DB 행 조회/갱신에는 원본(raw) 값, KIS/유니버스 등 외부·정규화 조회에는
+            # stripped 값(symbol)을 사용한다.
             try:
                 # 종목명 조회 (DB에 없는 경우)
                 stock_name = None
                 latest = await history_repo.get_latest_by_symbol(
-                    symbol, analysis_type, is_active=True, session=session
+                    db_symbol, analysis_type, is_active=True, session=session
                 )
                 if latest and not latest.name:
                     # DB 유니버스에서 조회

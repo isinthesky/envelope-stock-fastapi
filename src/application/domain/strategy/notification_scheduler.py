@@ -35,6 +35,10 @@ from src.adapters.external.naver.stock_client import get_naver_stock_client
 from src.adapters.external.telegram import get_telegram_notifier
 from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
 from src.application.domain.strategy.strategy_service import StrategyService
+from src.application.domain.strategy.symbol_validation import (
+    filter_tradable_items,
+    is_valid_krx_symbol,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -84,7 +88,7 @@ class NotificationScheduler:
         cls, symbol: str, analyzed_results: dict[str, dict]
     ) -> str | None:
         """ETF 본체 알림에 붙일 대장주 보조 판정 요약 생성"""
-        leader_symbols = cls.ETF_LEADER_MAP.get(symbol)
+        leader_symbols = cls.ETF_LEADER_MAP.get((symbol or "").strip())
         if not leader_symbols:
             return None
 
@@ -114,9 +118,9 @@ class NotificationScheduler:
     def _filter_duplicate_leader_alerts(cls, pending_sell_alerts: list[dict]) -> list[dict]:
         """ETF 본체가 알림 대상이면 해당 대장주 개별 알림은 숨긴다."""
         etf_alert_symbols = {
-            item.get("symbol")
+            (item.get("symbol") or "").strip()
             for item in pending_sell_alerts
-            if item.get("symbol") in cls.ETF_LEADER_MAP
+            if (item.get("symbol") or "").strip() in cls.ETF_LEADER_MAP
         }
         hidden_leader_symbols = {
             leader_symbol
@@ -125,7 +129,9 @@ class NotificationScheduler:
         }
 
         return [
-            item for item in pending_sell_alerts if item.get("symbol") not in hidden_leader_symbols
+            item
+            for item in pending_sell_alerts
+            if (item.get("symbol") or "").strip() not in hidden_leader_symbols
         ]
 
     @staticmethod
@@ -382,7 +388,15 @@ class NotificationScheduler:
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
             from apscheduler.triggers.cron import CronTrigger
 
-            self.scheduler = AsyncIOScheduler(timezone=KST)
+            self.scheduler = AsyncIOScheduler(
+                timezone=KST,
+                job_defaults={
+                    # 이벤트 루프 지연으로 초 단위 지각 시에도 잡을 건너뛰지 않도록
+                    # 기본 misfire_grace_time(1초)을 5분으로 완화한다.
+                    "coalesce": True,
+                    "misfire_grace_time": 300,
+                },
+            )
 
             for update_hour, update_minute, notify_hour, notify_minute, label in self.BUY_SLOTS:
                 self.scheduler.add_job(
@@ -486,8 +500,13 @@ class NotificationScheduler:
                 history_repo = AnalysisHistoryRepository(session)
                 active_items = await history_repo.get_active_symbols_with_names("sell")
             naver_client = get_naver_stock_client()
+            # 외부(네이버) 조회에는 strip 정규화된 심볼을 전달한다
             symbols = list(
-                dict.fromkeys(item.get("symbol") for item in active_items if item.get("symbol"))
+                dict.fromkeys(
+                    (item.get("symbol") or "").strip()
+                    for item in active_items
+                    if is_valid_krx_symbol(item.get("symbol"))
+                )
             )
 
             sem = asyncio.Semaphore(5)
@@ -583,6 +602,13 @@ class NotificationScheduler:
                 history_repo = AnalysisHistoryRepository(session)
                 active_items = await history_repo.get_active_symbols_with_names("sell")
 
+                active_items, skipped_symbols = filter_tradable_items(active_items)
+                if skipped_symbols:
+                    logger.info(
+                        "[NotificationScheduler] Skipping non-symbol rows (memo etc.) "
+                        f"in sell tracking: {', '.join(skipped_symbols)}"
+                    )
+
                 if not active_items:
                     logger.info("[NotificationScheduler] No active sell tracking items to update")
                     payload = {
@@ -631,6 +657,7 @@ class NotificationScheduler:
                     "success": warmup_success,
                     "slot": slot_label,
                     "tracked_count": len(symbols),
+                    "skipped_non_symbol_count": len(skipped_symbols),
                     "updated_count": result.success_count,
                     "failed_count": int(getattr(result, "failed_count", 0) or 0),
                     "errors": warmup_errors[:5],
@@ -874,7 +901,11 @@ class NotificationScheduler:
                     active_items = await history_repo.get_active_symbols_with_names("sell")
 
                 tracked_symbols = list(
-                    dict.fromkeys(item.get("symbol") for item in active_items if item.get("symbol"))
+                    dict.fromkeys(
+                        item.get("symbol")
+                        for item in active_items
+                        if is_valid_krx_symbol(item.get("symbol"))
+                    )
                 )
                 notifier = get_telegram_notifier()
                 if not tracked_symbols:
@@ -945,7 +976,8 @@ class NotificationScheduler:
 
                 for item in analyzed_items:
                     stage_value = str(item.sell_stage or "HOLD")
-                    analyzed_results[item.symbol] = {
+                    # ETF 대장주 맵/요약 조회 키와 일치하도록 strip 정규화 키 사용
+                    analyzed_results[(item.symbol or "").strip()] = {
                         "symbol": item.symbol,
                         "name": item.name,
                         "final_stage": stage_value,
@@ -962,11 +994,30 @@ class NotificationScheduler:
                     if not qualifies:
                         continue
 
+                    entry_price = getattr(item, "entry_price", None)
+                    profit_ratio = None
+                    try:
+                        if entry_price:
+                            profit_ratio = (
+                                (float(item.current_price) - float(entry_price))
+                                / float(entry_price)
+                                * 100.0
+                            )
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        profit_ratio = None
+
                     pending_sell_alerts.append(
                         {
                             "symbol": item.symbol,
                             "name": item.name,
                             "current_price": float(item.current_price),
+                            "entry_price": float(entry_price) if entry_price else None,
+                            "profit_ratio": profit_ratio,
+                            "stoch_k": getattr(item, "stoch_k", None),
+                            "rsi": getattr(item, "rsi", None),
+                            "ma_gap_ratio": getattr(item, "ma_gap_ratio", None),
+                            "sell_ratio_min": getattr(item, "sell_ratio_min", None),
+                            "sell_ratio_max": getattr(item, "sell_ratio_max", None),
                             "sell_phase": item.sell_phase,
                             "sell_reasons": item.sell_reasons or [],
                             "final_stage": stage_value,
