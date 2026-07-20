@@ -119,6 +119,17 @@ class Settings(BaseSettings):
     kis_api_rate_window_seconds: int = Field(default=1, ge=1, description="Rate Limit 윈도우 (초)")
     kis_api_retry_count: int = Field(default=3, ge=0, description="API 호출 실패 시 재시도 횟수")
     kis_api_timeout: int = Field(default=10, ge=1, description="API 호출 타임아웃 (초)")
+    kis_api_rate_limit_max_retries: int = Field(
+        default=3, ge=0, description="EGW00201(초당 거래건수 초과) 응답 시 지수 백오프 재시도 최대 횟수"
+    )
+    kis_api_rate_limit_backoff_base_seconds: float = Field(
+        default=0.5, gt=0, description="EGW00201 재시도 지수 백오프 기본 대기 시간 (초, 0.5→1.0→2.0)"
+    )
+    kis_api_rate_min_interval_ms: int = Field(
+        default=0,
+        ge=0,
+        description="KIS REST 연속 호출 간 최소 간격 (ms). 0이면 window/capacity로 자동 산출",
+    )
     scan_concurrency_limit: int = Field(
         default=5, ge=1, description="스캔 동시 처리 수 (골든크로스/MA5)"
     )

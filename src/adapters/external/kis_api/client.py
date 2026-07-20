@@ -23,16 +23,32 @@ from src.settings.config import settings
 
 
 class SlidingWindowRateLimiter:
-    """초당 요청 제한을 위한 슬라이딩 윈도우 Rate Limiter"""
+    """초당 요청 제한을 위한 슬라이딩 윈도우 Rate Limiter
 
-    def __init__(self, capacity: int, window_seconds: int = 1) -> None:
+    - capacity/window_seconds: 윈도우당 최대 허용 요청 수 (버스트 상한)
+    - min_interval: 연속 요청 간 최소 간격 (초). 0이면 간격 페이싱 없이
+      윈도우 상한만 적용. 간격을 주면 윈도우 시작 시점에 capacity만큼
+      몰아서 나가는 버스트를 균등 페이싱으로 완화한다.
+    """
+
+    def __init__(
+        self,
+        capacity: int,
+        window_seconds: float = 1,
+        min_interval: float = 0.0,
+    ) -> None:
         self.capacity = capacity
         self.window_seconds = window_seconds
+        self.min_interval = max(min_interval, 0.0)
         self.timestamps: deque[float] = deque()
+        # 마지막 허용 시각. timestamps는 window 경과 시 evict되므로
+        # min_interval > window_seconds 설정에서도 간격 페이싱이 유지되도록
+        # evict와 무관한 별도 변수로 관리한다.
+        self._last_grant: float | None = None
         self.lock = asyncio.Lock()
 
     async def acquire(self) -> None:
-        """허용량 이내일 때까지 대기"""
+        """허용량/최소 간격을 만족할 때까지 대기"""
         loop = asyncio.get_event_loop()
         while True:
             async with self.lock:
@@ -40,13 +56,21 @@ class SlidingWindowRateLimiter:
                 while self.timestamps and now - self.timestamps[0] >= self.window_seconds:
                     self.timestamps.popleft()
 
-                if len(self.timestamps) < self.capacity:
+                spacing_ok = (
+                    self._last_grant is None
+                    or now - self._last_grant >= self.min_interval
+                )
+                if len(self.timestamps) < self.capacity and spacing_ok:
                     self.timestamps.append(now)
+                    self._last_grant = now
                     return
 
-                sleep_for = self.window_seconds - (now - self.timestamps[0])
+                if len(self.timestamps) >= self.capacity:
+                    sleep_for = self.window_seconds - (now - self.timestamps[0])
+                else:
+                    sleep_for = self.min_interval - (now - self._last_grant)
 
-            await asyncio.sleep(max(sleep_for, 0))
+            await asyncio.sleep(max(sleep_for, 0.001))
 
 
 class KISAPIClient:
@@ -61,9 +85,17 @@ class KISAPIClient:
         self.auth = get_kis_auth()
         self.base_url = settings.kis_base_url
         self.rate_limit_semaphore = asyncio.Semaphore(settings.kis_api_rate_limit)
+        # 연속 호출 최소 간격: 명시 설정(ms)이 있으면 사용, 없으면 window/capacity 균등 분배
+        if settings.kis_api_rate_min_interval_ms > 0:
+            min_interval = settings.kis_api_rate_min_interval_ms / 1000.0
+        else:
+            min_interval = settings.kis_api_rate_window_seconds / max(
+                settings.kis_api_rate_limit, 1
+            )
         self.rate_limiter = SlidingWindowRateLimiter(
             capacity=settings.kis_api_rate_limit,
             window_seconds=settings.kis_api_rate_window_seconds,
+            min_interval=min_interval,
         )
         self._backoff_lock = asyncio.Lock()
         self._consecutive_backoff_errors = 0
@@ -142,15 +174,21 @@ class KISAPIClient:
         async with self.rate_limit_semaphore:
             loop = asyncio.get_event_loop()
             started_at = loop.time()
-            await self.rate_limiter.acquire()
             url = f"{self.base_url}{path}"
             client = await self._get_client()
 
-            for attempt in range(2):
-                auth_headers = await self.auth.get_auth_headers(force_refresh=(attempt == 1))
+            token_refreshed = False
+            rate_limit_retries = 0
+
+            while True:
+                # 헤더(토큰) 확보를 먼저 하고, 실제 HTTP 호출 직전에 acquire.
+                # 반대로 하면 콜드 토큰 갱신 시 auth lock에 대기하던 요청들이
+                # 이미 rate limit 슬롯을 쥔 채 갱신 직후 일제히 나가 버스트가 됨.
+                auth_headers = await self.auth.get_auth_headers(force_refresh=False)
                 if headers:
                     auth_headers.update(headers)
 
+                await self.rate_limiter.acquire()
                 try:
                     response = await client.get(
                         url,
@@ -164,27 +202,33 @@ class KISAPIClient:
                     return data
                 except httpx.HTTPStatusError as e:
                     mapped_error = self._map_http_error(e)
-                    if self._should_retry_with_token_refresh(mapped_error, attempt):
+                    if self._should_retry_with_token_refresh(
+                        mapped_error, attempt=1 if token_refreshed else 0
+                    ):
+                        token_refreshed = True
                         await self.auth.refresh_token()
                         continue
-                    if self._should_retry_rate_limited(mapped_error, attempt):
-                        await asyncio.sleep(0.6)
+                    if self._should_retry_rate_limited(mapped_error, rate_limit_retries):
+                        await asyncio.sleep(self._rate_limit_backoff_seconds(rate_limit_retries))
+                        rate_limit_retries += 1
                         continue
                     await self._record_metrics(loop.time() - started_at, success=False)
                     await self._handle_backoff(mapped_error)
                     raise mapped_error
                 except KISAPIError as e:
-                    if self._should_retry_with_token_refresh(e, attempt):
+                    if self._should_retry_with_token_refresh(
+                        e, attempt=1 if token_refreshed else 0
+                    ):
+                        token_refreshed = True
                         await self.auth.refresh_token()
                         continue
-                    if self._should_retry_rate_limited(e, attempt):
-                        await asyncio.sleep(0.6)
+                    if self._should_retry_rate_limited(e, rate_limit_retries):
+                        await asyncio.sleep(self._rate_limit_backoff_seconds(rate_limit_retries))
+                        rate_limit_retries += 1
                         continue
                     await self._record_metrics(loop.time() - started_at, success=False)
                     await self._handle_backoff(e)
                     raise
-
-            raise KISAuthError("Authentication failed after token refresh retry")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -218,15 +262,21 @@ class KISAPIClient:
         async with self.rate_limit_semaphore:
             loop = asyncio.get_event_loop()
             started_at = loop.time()
-            await self.rate_limiter.acquire()
             url = f"{self.base_url}{path}"
             client = await self._get_client()
 
-            for attempt in range(2):
-                auth_headers = await self.auth.get_auth_headers(force_refresh=(attempt == 1))
+            token_refreshed = False
+            rate_limit_retries = 0
+
+            while True:
+                # 헤더(토큰) 확보를 먼저 하고, 실제 HTTP 호출 직전에 acquire.
+                # 반대로 하면 콜드 토큰 갱신 시 auth lock에 대기하던 요청들이
+                # 이미 rate limit 슬롯을 쥔 채 갱신 직후 일제히 나가 버스트가 됨.
+                auth_headers = await self.auth.get_auth_headers(force_refresh=False)
                 if headers:
                     auth_headers.update(headers)
 
+                await self.rate_limiter.acquire()
                 try:
                     response = await client.post(
                         url,
@@ -240,21 +290,29 @@ class KISAPIClient:
                     return data
                 except httpx.HTTPStatusError as e:
                     mapped_error = self._map_http_error(e)
-                    if self._should_retry_with_token_refresh(mapped_error, attempt):
+                    if self._should_retry_with_token_refresh(
+                        mapped_error, attempt=1 if token_refreshed else 0
+                    ):
+                        token_refreshed = True
                         await self.auth.refresh_token()
                         continue
-                    if self._should_retry_rate_limited(mapped_error, attempt):
-                        await asyncio.sleep(0.6)
+                    if self._should_retry_rate_limited(mapped_error, rate_limit_retries):
+                        await asyncio.sleep(self._rate_limit_backoff_seconds(rate_limit_retries))
+                        rate_limit_retries += 1
                         continue
                     await self._record_metrics(loop.time() - started_at, success=False)
                     await self._handle_backoff(mapped_error)
                     raise mapped_error
                 except KISAPIError as e:
-                    if self._should_retry_with_token_refresh(e, attempt):
+                    if self._should_retry_with_token_refresh(
+                        e, attempt=1 if token_refreshed else 0
+                    ):
+                        token_refreshed = True
                         await self.auth.refresh_token()
                         continue
-                    if self._should_retry_rate_limited(e, attempt):
-                        await asyncio.sleep(0.6)
+                    if self._should_retry_rate_limited(e, rate_limit_retries):
+                        await asyncio.sleep(self._rate_limit_backoff_seconds(rate_limit_retries))
+                        rate_limit_retries += 1
                         continue
                     await self._record_metrics(loop.time() - started_at, success=False)
                     await self._handle_backoff(e)
@@ -270,8 +328,6 @@ class KISAPIClient:
                         ),
                         error_code="POST_OUTCOME_UNKNOWN",
                     ) from e
-
-            raise KISAuthError("Authentication failed after token refresh retry")
 
     # ==================== 응답 처리 ====================
 
@@ -322,9 +378,9 @@ class KISAPIClient:
             or "기간이 만료된 token" in msg1
         )
 
-    def _should_retry_rate_limited(self, error: KISAPIError, attempt: int) -> bool:
-        """초당 거래건수 초과(EGW00201)는 1회 짧게 대기 후 재시도"""
-        if attempt >= 1:
+    def _should_retry_rate_limited(self, error: KISAPIError, retries_done: int) -> bool:
+        """초당 거래건수 초과(EGW00201)는 지수 백오프로 최대 N회 재시도"""
+        if retries_done >= settings.kis_api_rate_limit_max_retries:
             return False
 
         error_code = getattr(error, "error_code", None)
@@ -332,6 +388,10 @@ class KISAPIClient:
         msg_cd = response_data.get("msg_cd") if isinstance(response_data, dict) else None
         msg1 = response_data.get("msg1", "") if isinstance(response_data, dict) else ""
         return error_code == "EGW00201" or msg_cd == "EGW00201" or "초당 거래건수를 초과" in msg1
+
+    def _rate_limit_backoff_seconds(self, retries_done: int) -> float:
+        """EGW00201 재시도 지수 백오프 대기 시간 (기본 0.5 → 1.0 → 2.0초)"""
+        return settings.kis_api_rate_limit_backoff_base_seconds * (2**retries_done)
 
     def _map_http_error(self, error: httpx.HTTPStatusError) -> KISAPIError:
         """
