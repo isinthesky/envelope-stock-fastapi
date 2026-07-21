@@ -59,6 +59,23 @@ def _to_float(value: object) -> float | None:
         return None
 
 
+def _format_kst_minute(value: object) -> str:
+    """datetime/ISO 문자열을 알림 표시용 KST 분 단위 문자열로 변환."""
+    try:
+        if isinstance(value, datetime):
+            dt = value
+        elif isinstance(value, str) and value:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            return ""
+
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(KST)
+        return dt.strftime("%Y-%m-%d %H:%M KST")
+    except Exception:
+        return ""
+
+
 def build_golden_cross_recommendations_message(
     recommendations: dict,
     slot_label: str | None = None,
@@ -77,14 +94,7 @@ def build_golden_cross_recommendations_message(
     scan_time = recommendations.get("scan_time")
     errors = recommendations.get("errors") or []
 
-    scan_time_str = ""
-    try:
-        if hasattr(scan_time, "strftime"):
-            scan_time_str = scan_time.strftime("%Y-%m-%d %H:%M")
-        elif isinstance(scan_time, str) and scan_time:
-            scan_time_str = scan_time.replace("T", " ")[:16]
-    except Exception:
-        scan_time_str = ""
+    scan_time_str = _format_kst_minute(scan_time)
 
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
     slot_part = f" ({slot_label})" if slot_label else ""
@@ -104,10 +114,16 @@ def build_golden_cross_recommendations_message(
     lines.append("")
 
     if not top_stocks:
-        lines.append("오늘은 매수 후보 종목이 없습니다.")
-        lines.append("(조건: 골든크로스 활성 + Stochastic 과매도 눌림목)")
-        lines.append("")
-        lines.append("👉 오늘은 신규 매수 없이 관망")
+        if errors:
+            lines.append("분석 성공 종목 기준 매수 후보 종목이 없습니다.")
+            lines.append("(일부 종목은 데이터/분석 경고로 제외됨)")
+            lines.append("")
+            lines.append("👉 신규 매수 없이 관망 — 경고 종목은 수동 확인 필요")
+        else:
+            lines.append("오늘은 매수 후보 종목이 없습니다.")
+            lines.append("(조건: 골든크로스 활성 + Stochastic 과매도 눌림목)")
+            lines.append("")
+            lines.append("👉 오늘은 신규 매수 없이 관망")
     else:
         shown = top_stocks[:max_stocks]
         lines.append(f"📌 <b>매수 후보 Top {len(shown)}</b> (점수순)")

@@ -220,6 +220,20 @@ async def test_start_sets_misfire_grace_time_and_coalesce():
     assert job_defaults.get("misfire_grace_time", 0) >= 60
 
 
+def test_extract_candle_warning_symbols_includes_insufficient_data():
+    scheduler = NotificationScheduler()
+
+    symbols = scheduler._extract_candle_warning_symbols(
+        [
+            "042670: Insufficient data for 042670: need 160 candles, got 151",
+            "005380: No candle data available for 005380",
+            "noise",
+        ]
+    )
+
+    assert symbols == {"042670": "insufficient", "005380": "none"}
+
+
 class TestEtfLeaderMapWhitespaceNormalization:
     """공백 변형 심볼도 ETF 대장주 맵/요약 조회에 매칭되어야 한다 (R4 회귀)."""
 

@@ -171,6 +171,19 @@ class TestBuildGoldenCrossRecommendationsMessage:
         assert "오늘은 매수 후보 종목이 없습니다." in message
         assert "👉 오늘은 신규 매수 없이 관망" in message
 
+    def test_no_candidates_with_errors_avoids_absolute_all_clear(self):
+        recommendations = self._recommendations()
+        recommendations["top_stocks"] = []
+        recommendations["top_industries"] = []
+        recommendations["buy_candidate_count"] = 0
+        recommendations["errors"] = ["042670: Insufficient data for 042670"]
+
+        message = build_golden_cross_recommendations_message(recommendations)
+
+        assert "분석 성공 종목 기준 매수 후보 종목이 없습니다." in message
+        assert "경고 종목은 수동 확인 필요" in message
+        assert "오늘은 신규 매수 없이 관망" not in message
+
     def test_max_stocks_limit(self):
         recommendations = self._recommendations()
         recommendations["top_stocks"] = [
@@ -226,6 +239,14 @@ class TestBuildGoldenCrossRecommendationsMessage:
 
         assert "데이터/분석 경고: 1건" in message
         assert "경고 요약" in message
+
+    def test_scan_time_string_is_displayed_as_kst(self):
+        recommendations = self._recommendations()
+        recommendations["scan_time"] = "2026-07-21T05:30:00Z"
+
+        message = build_golden_cross_recommendations_message(recommendations)
+
+        assert "스캔 시각: 2026-07-21 14:30 KST" in message
 
 
 class TestBuildNoSellSignalsMessage:

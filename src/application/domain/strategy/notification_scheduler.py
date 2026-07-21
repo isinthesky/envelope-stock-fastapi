@@ -690,30 +690,44 @@ class NotificationScheduler:
 
     # ==================== 매수 알림 Job ====================
 
-    async def _extract_no_candle_symbols(self, warnings: list[str]) -> list[str]:
-        """경고 메시지에서 OHLCV가 전혀 없는 종목코드 추출"""
-        symbols: list[str] = []
-        marker = "No candle data available for"
+    def _extract_candle_warning_symbols(self, warnings: list[str]) -> dict[str, str]:
+        """캔들 데이터 경고 메시지에서 자동 제외 검토 대상 종목코드 추출."""
+        symbols: dict[str, str] = {}
 
         for warning in warnings:
-            if marker not in warning:
-                continue
             symbol = warning.split(":", 1)[0].strip()
-            if symbol and symbol not in symbols:
-                symbols.append(symbol)
+            if not symbol:
+                continue
+            if "No candle data available for" in warning:
+                symbols[symbol] = "none"
+            elif "Insufficient data for" in warning:
+                symbols[symbol] = "insufficient"
 
-        if not symbols:
+        return symbols
+
+    async def _extract_no_candle_symbols(self, warnings: list[str]) -> list[str]:
+        """경고 메시지에서 OHLCV가 없거나 오래 끊긴 종목코드 추출"""
+        symbol_reasons = self._extract_candle_warning_symbols(warnings)
+        if not symbol_reasons:
             return []
 
+        stale_cutoff = datetime.now(KST) - timedelta(days=30)
+        valid_symbols: list[str] = []
         async with get_async_session() as session:
-            valid_symbols: list[str] = []
-            for symbol in symbols:
-                stmt = (
-                    select(func.count()).select_from(OHLCVModel).where(OHLCVModel.symbol == symbol)
-                )
-                count = (await session.execute(stmt)).scalar_one()
+            for symbol, reason in symbol_reasons.items():
+                stmt = select(
+                    func.count(),
+                    func.max(OHLCVModel.timestamp),
+                ).where(OHLCVModel.symbol == symbol)
+                count, latest = (await session.execute(stmt)).one()
                 if count == 0:
                     valid_symbols.append(symbol)
+                    continue
+                if reason == "insufficient" and latest:
+                    if latest.tzinfo is None:
+                        latest = latest.replace(tzinfo=KST)
+                    if latest.astimezone(KST) < stale_cutoff:
+                        valid_symbols.append(symbol)
 
         return valid_symbols
 
