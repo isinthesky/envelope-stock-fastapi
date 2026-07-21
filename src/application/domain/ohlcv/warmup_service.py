@@ -19,9 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.connection import AsyncSessionLocal
 from src.adapters.database.repositories.ohlcv_repository import OHLCVRepository
-from src.adapters.database.repositories.stock_universe_repository import (
-    StockUniverseRepository,
-)
 from src.adapters.external.kis_api.client import get_kis_client
 from src.application.domain.market_data.service import MarketDataService
 from src.application.domain.ohlcv.dto import WarmupRequestDTO, WarmupResultDTO
@@ -297,55 +294,6 @@ class OHLCVWarmupService:
 
         return saved_count, api_calls
 
-    # ==================== 유니버스 워밍업 ====================
-
-    async def warmup_universe(
-        self,
-        universe_ids: list[int] | None = None,
-        days: int = 240,
-        concurrency: int = 3,
-    ) -> WarmupResultDTO:
-        """
-        유니버스 전체 종목 워밍업
-
-        Args:
-            universe_ids: 유니버스 ID 목록 (None이면 모든 활성 종목)
-            days: 조회 기간
-            concurrency: 동시 처리 수
-
-        Returns:
-            WarmupResultDTO: 워밍업 결과
-        """
-        universe_repo = StockUniverseRepository(self.session)
-
-        if universe_ids:
-            # 특정 유니버스의 종목
-            symbols = []
-            for universe_id in universe_ids:
-                stocks = await universe_repo.get_stocks_by_universe(universe_id)
-                symbols.extend([stock.symbol for stock in stocks])
-        else:
-            # 모든 활성 종목
-            stocks = await universe_repo.get_all_active_stocks()
-            symbols = [stock.symbol for stock in stocks]
-
-        # 중복 제거
-        symbols = list(set(symbols))
-
-        if not symbols:
-            return WarmupResultDTO(
-                total_symbols=0,
-                errors=["No symbols found in universe"],
-            )
-
-        request = WarmupRequestDTO(
-            symbols=symbols,
-            days=days,
-            interval="1d",
-        )
-
-        return await self.warmup_symbols(request, concurrency)
-
     # ==================== 증분 업데이트 ====================
 
     async def update_stale_symbols(
@@ -595,75 +543,3 @@ class OHLCVWarmupService:
         await self.session.commit()
 
         return saved_count, api_calls
-    # ==================== 스마트 로딩 ====================
-
-    async def smart_load_ohlcv(
-        self,
-        symbol: str,
-        days: int = 240,
-        min_candles: int = 165,
-        interval: str = "1d",
-    ) -> "pd.DataFrame":
-        """
-        스마트 OHLCV 로딩
-
-        1. DB 캐시 확인
-        2. 결측 구간만 API 호출 (전체 재호출 아님)
-        3. 병합 후 반환
-
-        Args:
-            symbol: 종목코드
-            days: 조회 기간
-            min_candles: 최소 필요 캔들 수
-            interval: 캔들 간격
-
-        Returns:
-            pd.DataFrame: OHLCV DataFrame
-        """
-        import pandas as pd
-
-        # naive UTC now (모듈 상단 NOTE 참조)
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-
-        # 캐시 확인
-        availability = await self.ohlcv_repo.check_data_availability(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval,
-        )
-
-        if availability.get("is_complete") and availability.get("count", 0) >= min_candles:
-            # 캐시에서 바로 반환
-            df = await self.ohlcv_repo.get_candles_to_dataframe(
-                symbol=symbol,
-                start_date=start_date,
-                end_date=end_date,
-                interval=interval,
-            )
-            if len(df) >= min_candles:
-                return df
-
-        # 결측 구간 확인 후 워밍업
-        await self._warmup_symbol(
-            symbol=symbol,
-            days=days,
-            interval=interval,
-            force_refresh=False,
-        )
-
-        # 다시 조회
-        df = await self.ohlcv_repo.get_candles_to_dataframe(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval,
-        )
-
-        if df.empty or len(df) < min_candles:
-            raise ValueError(
-                f"Insufficient data for {symbol}: need {min_candles} candles, got {len(df)}"
-            )
-
-        return df
