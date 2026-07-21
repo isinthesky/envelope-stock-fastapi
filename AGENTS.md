@@ -77,6 +77,21 @@ Ignore generated or local-state directories when mapping the project: `.venv/`, 
 - API/path naming for KIS-style examples follows `docs/base/convention.md`: REST path segments
   become snake_case folders/files, and check scripts use `chk_<module>.py`.
 
+## ROOT-CAUSE RESOLUTION
+- Fix the mechanism that causes a failure, not only the specific case that revealed it.
+- State the intended result and the observed behavior that violates it before selecting a fix.
+- Identify the root cause, relevant constraints, and invariants. Prefer changes that handle the
+  entire class of similar failures across code paths, inputs, and timing.
+- Do not hide symptoms by weakening or narrowing requirements, or by adding a narrowly scoped
+  prohibition. If a temporary mitigation is necessary, document its limitation and the follow-up
+  needed for a structural solution.
+- Before considering the work complete, ask: “Would this solution still work if the same failure
+  occurred through another path, with different input, or at a different time?” If not, seek a
+  more structural solution. Apply judgment when the issue is genuinely local.
+
+Trade-off: prioritize sustainable, generalizable solutions over the fastest local patch, while
+remaining proportionate for issues that are truly local.
+
 ## ANTI-PATTERNS (THIS PROJECT)
 - Do not commit `.env`, token caches, real KIS keys, account numbers, Telegram tokens, or DB URLs
   with credentials.
