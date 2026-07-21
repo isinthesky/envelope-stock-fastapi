@@ -1,5 +1,7 @@
 # KIS Strategy Alert Design System
 
+> 토큰은 backtest.css·recommendation.css에만 적용됨. mypage/strategy/sell_strategy.css는 hex 하드코딩(리팩터 대상)
+
 ## 1. Atmosphere & Identity
 
 A compact operations dashboard for trading strategy checks. It should feel quiet, dense, and readable: tables, badges, and small status cards expose decision data without marketing decoration. The signature is muted financial control, using slate surfaces with restrained blue, green, amber, red, and pink status accents.
@@ -136,4 +138,3 @@ Mixed, but restrained: section cards use borders, strategy overview panels use t
 | Radius/sm | 4px | Compact buttons and badges |
 | Radius/md | 6px | Inputs, tabs, strategy steps |
 | Radius/lg | 8px | Sections, stat cards, last-search |
-

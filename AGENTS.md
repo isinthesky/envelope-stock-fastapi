@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-06-28
-**Commit:** 82b89a4
+**Generated:** 2026-07-21
+**Commit:** 26e0226
 **Branch:** main
 
 ## OVERVIEW
@@ -12,12 +12,22 @@ split: inbound routers/pages, domain orchestration, outbound adapters, and typed
 ## STRUCTURE
 ```text
 kis-strategy-alert-server/
-|-- src/main.py                  # ASGI app, lifespan, middleware, router mounting
-|-- src/application/domain/      # business services, engines, schedulers, DTOs
-|-- src/application/interface/   # REST, WebSocket, and Jinja page routers
-|-- src/application/common/      # ResponseDTO, DI aliases, exceptions, decorators, metrics
-|-- src/adapters/                # DB, Redis, KIS, DART, Naver, Telegram, WebSocket I/O
-|-- src/settings/                # Pydantic settings and exception-handler registration
+|-- src/
+|   |-- main.py                  # ASGI app, lifespan, middleware, router mounting
+|   |-- application/
+|   |   |-- common/              # ResponseDTO, DI aliases, exceptions, decorators, metrics
+|   |   |-- domain/
+|   |   |   |-- account/, auth/, backtest/, market_data/, ohlcv/, order/
+|   |   |   |-- recommendation/  # readiness, scan, rule-set services and DTOs
+|   |   |   |-- risk/            # SafetyGuard and risk/position-sizing DTOs
+|   |   |   |-- screener/, strategy/  # strategies, schedulers, symbol validation
+|   |   |-- interface/
+|   |       |-- api/             # REST and WebSocket routers, including ops/recommendation
+|   |       `-- page/            # Jinja page routers, including /ops
+|   |-- adapters/
+|   |   |-- cache/, database/    # Redis and async SQLAlchemy models/repositories
+|   |   `-- external/            # KIS, DART, KOFIA, Naver, Telegram, WebSocket I/O
+|   `-- settings/                # Pydantic settings and exception-handler registration
 |-- templates/                   # Jinja page templates used by interface/page routers
 |-- static/                      # dashboard JavaScript and CSS
 |-- tests/                       # pytest suite; domain/adapters/interface grouping
@@ -46,22 +56,31 @@ Ignore generated or local-state directories when mapping the project: `.venv/`, 
 | Ops runbook | `README.md`, `docs/ops/` | Swagger/OpenAPI disabled; ops routes are protected |
 
 ## CODE MAP
-| Symbol | Type | Location | Refs | Role |
-|--------|------|----------|------|------|
-| `app` | FastAPI | `src/main.py` | central | ASGI entrypoint and router registry |
-| `lifespan` | function | `src/main.py` | central | startup/shutdown resource orchestration |
-| `DatabaseSession` | DI alias | `src/application/common/dependencies.py` | high | async DB session injection |
-| `KISClientDep` | DI alias | `src/application/common/dependencies.py` | high | KIS REST client injection |
-| `ResponseDTO` | DTO | `src/application/common/dto.py` | high | standard REST response envelope |
-| `StrategyService` | service | `src/application/domain/strategy/strategy_service.py` | high | strategy CRUD/universe/analysis orchestration |
-| `BuyStrategyService` | service | `src/application/domain/strategy/buy_strategy_service.py` | high | golden-cross scan and candidate filtering |
-| `SellStrategyService` | service | `src/application/domain/strategy/sell_strategy_service.py` | high | sell signal scoring and overlays |
-| `NotificationScheduler` | scheduler | `src/application/domain/strategy/notification_scheduler.py` | 18 callers | Telegram data/alert schedule orchestration |
-| `OrderService` | service | `src/application/domain/order/service.py` | 22 callers | order create/query/cancel/modify workflow |
-| `BacktestService` | service | `src/application/domain/backtest/service.py` | 17 callers | backtest facade and summary generation |
-| `OHLCVRepository` | repository | `src/adapters/database/repositories/ohlcv_repository.py` | 16 callers | OHLCV cache persistence |
-| `KISAPIClient` | client | `src/adapters/external/kis_api/client.py` | high | REST calls, auth refresh, rate limit, metrics |
-| `Settings` | config | `src/settings/config.py` | global | typed env contract and KIS environment switching |
+| Symbol | Type | Location | Role |
+|--------|------|----------|------|
+| `app` | FastAPI | `src/main.py` | ASGI entrypoint and router registry |
+| `lifespan` | function | `src/main.py` | startup/shutdown resource orchestration |
+| `DatabaseSession` | DI alias | `src/application/common/dependencies.py` | async DB session injection |
+| `KISClientDep` | DI alias | `src/application/common/dependencies.py` | KIS REST client injection |
+| `ResponseDTO` | DTO | `src/application/common/dto.py` | standard REST response envelope |
+| `StrategyService` | service | `src/application/domain/strategy/strategy_service.py` | strategy CRUD/universe/analysis orchestration |
+| `BuyStrategyService` | service | `src/application/domain/strategy/buy_strategy_service.py` | golden-cross scan and candidate filtering |
+| `SellStrategyService` | service | `src/application/domain/strategy/sell_strategy_service.py` | sell signal scoring and overlays |
+| `StrategyScheduler` | scheduler | `src/application/domain/strategy/scheduler.py` | 08:00 universe refresh and 15:35 golden-cross execution |
+| `NotificationScheduler` | scheduler | `src/application/domain/strategy/notification_scheduler.py` | 09:20/11:20/12:20/14:20 data refresh and 09:30/11:30/12:30/14:30 Telegram alerts |
+| `is_valid_krx_symbol` | function | `src/application/domain/strategy/symbol_validation.py` | `^[0-9A-Z]{6}$` KRX symbol check; filters memo rows before the pipeline |
+| `RecommendationScanService` | service | `src/application/domain/recommendation/recommendation_scan_service.py` | recommendation scan/readiness orchestration |
+| `SafetyGuard` | guard | `src/application/domain/risk/safety_guard.py` | GoldenCross order pre-check using `RiskLimitConfigDTO` and `PositionSizingConfigDTO` for daily/weekly/monthly loss, consecutive losses, cooldown, and max positions |
+| `OrderService` | service | `src/application/domain/order/service.py` | order create/query/cancel/modify workflow |
+| `BacktestService` | service | `src/application/domain/backtest/service.py` | backtest facade and summary generation |
+| `OHLCVRepository` | repository | `src/adapters/database/repositories/ohlcv_repository.py` | OHLCV cache persistence |
+| `KISAPIClient` / `SlidingWindowRateLimiter` | client / limiter | `src/adapters/external/kis_api/client.py` | KIS REST calls; production `.env` uses `KIS_API_RATE_LIMIT=8` (40% of `20/s`); EGW00201 backs off `0.5 → 1.0 → 2.0` seconds for up to 3 retries |
+| `build_golden_cross_recommendations_message` | builder | `src/adapters/external/telegram/notifier.py` | Telegram buy recommendation message builder |
+| `build_sell_signals_summary_message` | builder | `src/adapters/external/telegram/notifier.py` | Telegram sell-signal summary builder |
+| `TelegramNotifier` / `get_telegram_notifier` | notifier / factory | `src/adapters/external/telegram/notifier.py` | Telegram Bot API notifier singleton |
+| `ops_summary` / `notification_scheduler_status` | API handlers | `src/application/interface/api/ops_router.py` | Admin-protected operations summary and notification scheduler status |
+| `operations_dashboard` | page handler | `src/application/interface/page/ops_page_router.py` | Admin-protected operations dashboard |
+| `Settings` | config | `src/settings/config.py` | typed env contract; config default `kis_api_rate_limit=10`, production `.env` value `8`, and admin route switch |
 
 ## CONVENTIONS
 - Architecture direction is `interface -> domain -> adapters`; `settings` and
@@ -103,24 +122,16 @@ remaining proportionate for issues that are truly local.
 
 ## COMMANDS
 ```bash
-uv sync
-uvicorn src.main:app --reload
-pytest
-pytest tests/domain
-pytest tests/interface
-pytest tests/adapters
-pytest --cov=src tests/
-black src/ tests/
-isort src/ tests/
-mypy src/
-make qa
+# Rebuild/redeploy: kis_token_cache named volume preserves the KIS token cache.
+docker compose build
 docker compose up -d --build
+
+# Full test: host has no uv and the API image has no tests/ directory.
+docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -e PYTHONPATH=/work -e UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv kis-strategy-alert-server-api uv run pytest tests/ -q
 ```
 
 ## NOTES
-- `Makefile qa` runs `sync lint smoke test-domain`, not the full suite.
-- `pyproject.toml` configures pytest to emit coverage and `htmlcov/` by default.
-- There is no committed `.github/workflows/`; local verification is Makefile, pytest, and targeted
-  scripts.
-- `ruff` is referenced by the Makefile, but previous local notes recorded that the executable may
-  be absent until `make sync` installs it.
+- ⚠️ `force_refresh=True`를 남발하지 않는다. KIS 토큰은 1일 1회 발급 원칙이다.
+- `docker compose build`와 `docker compose up -d --build`는 `kis_token_cache:/root/KIS/config` named volume을 유지하므로 토큰 재발급 없이 안전하다.
+- 전체 테스트의 현재 확인값은 `490 passed, 13 skipped`다.
+- `/ops`, `/api/v1/ops/summary`, `/api/v1/ops/notification-scheduler-status`는 구현되어 있으며 `AdminAccessDep`로 보호된다.

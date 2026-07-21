@@ -24,8 +24,15 @@ src/application/interface  -> src/application/domain  ->  src/adapters/*
 ## 실행/개발 명령
 - **의존성 설치**: `uv sync`
 - **개발 서버**: `uvicorn src.main:app --reload`
-- **테스트**: `pytest`
+- **테스트**:
+  ```bash
+  docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -e PYTHONPATH=/work -e UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv kis-strategy-alert-server-api uv run pytest tests/ -q
+  ```
 - **품질 도구**: `black src/ tests/`, `isort src/ tests/`, `mypy src/`
+
+## ⚠️ 운영 함정
+- **전략 등록/활성화는 실주문으로 이어질 수 있음**: 월~금 `15:35`에 `StrategyScheduler._execute_strategies_job`가 활성 `golden_cross` 전략을 `dry_run=False`로 실행한다. 현재 안전한 이유는 `strategies` 테이블이 0행이고 전략 CRUD admin router가 `enable_admin_strategy_routes=False` 기본값으로 미마운트된 것뿐이며, 명시적 kill-switch는 없다. 이 실주문 job만 `misfire_grace_time=90`초이고 나머지 스케줄러는 `300`초/`coalesce`다.
+- **재빌드·재배포는 안전함**: `kis_token_cache:/root/KIS/config` named volume이 KIS 토큰 캐시를 보존하므로 `docker compose build`와 `docker compose up -d --build`는 토큰을 재발급하지 않는다. 단, `force_refresh=True`를 남발하지 말고 토큰은 1일 1회 발급 원칙을 지킨다.
 
 ## 코드 추가 위치 가이드
 - **새 REST API**: `src/application/interface/api/*_router.py` + `src/main.py`에 `include_router`
@@ -45,8 +52,6 @@ src/application/interface  -> src/application/domain  ->  src/adapters/*
 - `src/application/CLAUDE.md` (application 하위 레이어 개요)
 - `src/application/common/CLAUDE.md` (DTO/DI/데코레이터/태스크)
 - `src/application/domain/CLAUDE.md` (도메인 서비스/엔진/스케줄러)
-- `src/application/domain/news_trading/CLAUDE.md` (뉴스 트레이딩 서브도메인)
 - `src/application/interface/CLAUDE.md` (API/WS/Page 라우팅 규칙)
 - `src/adapters/CLAUDE.md` (DB/Redis/KIS/Naver/Telegram/WS 인프라)
 - `src/settings/CLAUDE.md` (설정 규칙/환경 변수)
-
