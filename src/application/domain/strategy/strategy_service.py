@@ -1893,7 +1893,9 @@ class StrategyService:
                             updated_items.append(self._history_to_dto(updated))
 
             except Exception as e:
-                error_msg = f"{symbol}: {str(e)}"
+                # 공백만 다른 행이 공존해도 구분되도록 raw(db_symbol) 기준.
+                # 제어문자 포함 값이 로그/알림 형식을 깨지 않도록 repr 이스케이프.
+                error_msg = f"{db_symbol!r}: {str(e)}"
                 logger.warning(f"[Refresh] Error: {error_msg}")
                 errors.append(error_msg)
 

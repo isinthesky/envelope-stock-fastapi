@@ -32,6 +32,25 @@ logger = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
 MAX_API_DAYS_PER_CALL = 100
 
+# NOTE(naive datetime 관례, 2026-07 검토 완료):
+# 이 모듈의 naive datetime.now()는 "컨테이너 TZ=UTC" 전제에서 UTC 벽시계로 동작하며,
+# 이는 저장/조회 관례와 일치한다:
+#   - 캔들 timestamp는 KIS 응답(YYYYMMDD)을 naive 자정으로 파싱해 timestamptz에 저장
+#     (asyncpg가 naive를 UTC로 해석 → "거래일 00:00 UTC 라벨")
+#   - OHLCVRepository.check_data_availability 등도 naive를 UTC로 정규화(to_utc)해 비교
+# KST/UTC 날짜 스큐(KST 00:00~09:00 = UTC 전일 15:00~24:00)가 실질 영향이 없는 이유:
+#   - 이 경로를 실행하는 스케줄 잡은 전부 KST 09:20~16:00(=UTC 00:20~07:00)에 돌아
+#     UTC 날짜 == KST 날짜인 시간대만 사용한다 (ohlcv/scheduler.py 16:00 update,
+#     notification_scheduler BUY/SELL 슬롯 09:20/11:20/12:20/14:20)
+#   - 스큐 창에 도는 08:00 warmup 잡은 datetime.now(KST) + warmup_symbol_until을 써서
+#     이 모듈의 naive now()를 경유하지 않는다
+#   - 스큐 창에서 수동 호출되더라도 end 경계가 "KST 어제"로 줄어들 뿐인데, KST 09:00
+#     장 시작 전에는 당일 일봉이 존재하지 않으므로 조회 결과는 동일하다
+# ⚠️ 위 근거는 전부 "컨테이너 TZ=UTC" 배포 전제에 의존한다. TZ를 바꾸면 naive 자정
+# 파싱 → timestamptz 저장 라벨 자체가 이동해 증분 날짜 판단이 어긋날 수 있으므로,
+# TZ 변경이나 aware 통일은 repo 저장 관례(UTC 자정 라벨)와 함께 별도 정비로만
+# 진행할 것. 이 모듈 단독 변경은 금지.
+
 
 def is_trading_day_kst(target: date) -> bool:
     """거래일 여부 (주말 + 간단 공휴일 캘린더 기반)"""
@@ -213,6 +232,7 @@ class OHLCVWarmupService:
         Returns:
             tuple[int, int]: (캐시된 캔들 수, API 호출 수)
         """
+        # naive UTC now (모듈 상단 NOTE 참조) — repo/차트API 모두 naive-UTC 관례와 일치
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
 
@@ -446,10 +466,11 @@ class OHLCVWarmupService:
         Returns:
             tuple[int, int]: (캐시된 캔들 수, API 호출 수)
         """
-        # 타임존 정규화
+        # 타임존 정규화 — DB timestamptz(거래일 00:00 UTC 라벨)를 naive로 벗겨 모듈 관례에 맞춤
         if from_date.tzinfo is not None:
             from_date = from_date.replace(tzinfo=None)
 
+        # naive UTC now (모듈 상단 NOTE 참조)
         end_date = datetime.now()
         start_date = from_date + timedelta(days=1)  # 다음 날부터
 
@@ -601,6 +622,7 @@ class OHLCVWarmupService:
         """
         import pandas as pd
 
+        # naive UTC now (모듈 상단 NOTE 참조)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
 
