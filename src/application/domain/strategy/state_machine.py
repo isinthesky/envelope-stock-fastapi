@@ -29,7 +29,9 @@ from src.application.domain.strategy.dto import (
     StochasticConfig,
 )
 from src.application.domain.strategy.strategy_contract import (
+    GoldenCrossScanContext,
     GoldenCrossRiskExitReason,
+    GoldenCrossStrategyContract,
     GoldenCrossTradeSignal,
     GoldenCrossTransitionReason,
 )
@@ -217,9 +219,7 @@ class GoldenCrossStateMachine:
 
         조건:
         - GC 무효화: 단기 MA < 장기 MA -> 초기화
-        - 매수 시그널:
-          1) Stoch K가 recovery_threshold 상향 돌파
-          2) Stoch K가 strong_recovery_threshold 초과
+        - 매수 시그널: 스캔과 같은 풀백 회복 진입 계약 충족
         """
         # GC 무효화 체크
         if not current.is_gc_active:
@@ -229,20 +229,27 @@ class GoldenCrossStateMachine:
                 reason=GoldenCrossTransitionReason.GC_INVALIDATED_DURING_READY.value,
             )
 
-        # 회복 시그널 1: Stoch K 상향 돌파
-        recovery_crossover = (
-            current.stoch_k > self.stoch_config.recovery_threshold
-            and prev.stoch_k <= self.stoch_config.recovery_threshold
+        ma_gap_ratio = float((current.ma_short - current.ma_long) / current.ma_long * 100)
+        buy_entry_ready = GoldenCrossStrategyContract.is_buy_entry_ready(
+            GoldenCrossScanContext(
+                is_gc_active=current.is_gc_active,
+                stoch_k=current.stoch_k,
+                stoch_d=current.stoch_d,
+                stoch_threshold=self.stoch_config.oversold_threshold,
+                ma_gap_ratio=ma_gap_ratio,
+                prev_stoch_k=prev.stoch_k,
+                recent_oversold=pullback_date is not None,
+                recovery_threshold=self.stoch_config.recovery_threshold,
+                strong_recovery_threshold=self.stoch_config.strong_recovery_threshold,
+                require_momentum_turn=self.stoch_config.require_momentum_turn,
+            )
         )
 
-        # 회복 시그널 2: 강한 회복
-        strong_recovery = current.stoch_k > self.stoch_config.strong_recovery_threshold
-
-        if recovery_crossover or strong_recovery:
+        if buy_entry_ready:
             reason = (
-                GoldenCrossTransitionReason.STOCH_RECOVERY_CROSSOVER.value
-                if recovery_crossover
-                else GoldenCrossTransitionReason.STOCH_STRONG_RECOVERY.value
+                GoldenCrossTransitionReason.STOCH_STRONG_RECOVERY.value
+                if current.stoch_k >= self.stoch_config.strong_recovery_threshold
+                else GoldenCrossTransitionReason.STOCH_RECOVERY_CROSSOVER.value
             )
             return StateTransition(
                 new_state=SymbolState.IN_POSITION,

@@ -176,3 +176,43 @@ def test_non_golden_cross_fixture_never_reaches_buy_or_ready_state() -> None:
     assert live_transition.new_state == SymbolState.WAITING_FOR_GC
     assert live_transition.signal == Signal.HOLD
     assert live_transition.reason == GoldenCrossTransitionReason.GC_INVALIDATED.value
+
+
+def test_live_entry_rejects_falling_or_non_momentum_recovery() -> None:
+    """A READY_TO_BUY state cannot bypass the scanner's recovery predicate."""
+    machine = GoldenCrossStateMachine(
+        GoldenCrossConfigDTO(
+            stochastic_config=StochasticConfig(
+                oversold_threshold=30.0,
+                recovery_threshold=20.0,
+                strong_recovery_threshold=30.0,
+                require_momentum_turn=True,
+            )
+        )
+    )
+    previous = IndicatorSnapshot(
+        timestamp=datetime(2024, 1, 2),
+        close=Decimal("35"),
+        ma_short=Decimal("105"),
+        ma_long=Decimal("100"),
+        stoch_k=40.0,
+        stoch_d=25.0,
+    )
+    current = IndicatorSnapshot(
+        timestamp=datetime(2024, 1, 3),
+        close=Decimal("34"),
+        ma_short=Decimal("105"),
+        ma_long=Decimal("100"),
+        stoch_k=35.0,
+        stoch_d=40.0,
+    )
+
+    transition = machine.process(
+        current=current,
+        prev=previous,
+        current_state=SymbolState.READY_TO_BUY,
+        pullback_date=datetime(2024, 1, 1),
+    )
+
+    assert transition.new_state == SymbolState.READY_TO_BUY
+    assert transition.signal == Signal.HOLD
