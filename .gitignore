@@ -98,7 +98,6 @@ Thumbs.db
 
 # UV
 .uv/
-uv.lock
 
 # Documentation (local only)
 /docs

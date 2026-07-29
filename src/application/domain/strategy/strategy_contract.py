@@ -90,6 +90,14 @@ GOLDEN_CROSS_BUY_CANDIDATE_STATES: tuple[GoldenCrossScanState, ...] = (
 
 class GoldenCrossStrategyContract:
     @staticmethod
+    def is_buy_entry_ready(context: GoldenCrossScanContext) -> bool:
+        """Return whether a pullback recovery satisfies the canonical entry rule."""
+        return (
+            GoldenCrossStrategyContract.classify_scan_state(context)
+            == GoldenCrossScanState.OPTIMAL_BUY
+        )
+
+    @staticmethod
     def classify_scan_state(context: GoldenCrossScanContext) -> GoldenCrossScanState:
         if not context.is_gc_active:
             return GoldenCrossScanState.NOT_GC

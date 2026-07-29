@@ -74,7 +74,7 @@ def test_golden_cross_pullback_recovery_uses_one_buy_contract() -> None:
     current_snapshot = IndicatorSnapshot(
         timestamp=datetime(2024, 1, 3),
         close=Decimal("31"),
-        ma_short=Decimal("110"),
+        ma_short=Decimal("105"),
         ma_long=Decimal("100"),
         stoch_k=31.0,
         stoch_d=25.0,
@@ -176,3 +176,113 @@ def test_non_golden_cross_fixture_never_reaches_buy_or_ready_state() -> None:
     assert live_transition.new_state == SymbolState.WAITING_FOR_GC
     assert live_transition.signal == Signal.HOLD
     assert live_transition.reason == GoldenCrossTransitionReason.GC_INVALIDATED.value
+
+
+def test_live_entry_rejects_falling_or_non_momentum_recovery() -> None:
+    """A READY_TO_BUY state cannot bypass the scanner's recovery predicate."""
+    machine = GoldenCrossStateMachine(
+        GoldenCrossConfigDTO(
+            stochastic_config=StochasticConfig(
+                oversold_threshold=30.0,
+                recovery_threshold=20.0,
+                strong_recovery_threshold=30.0,
+                require_momentum_turn=True,
+            )
+        )
+    )
+    previous = IndicatorSnapshot(
+        timestamp=datetime(2024, 1, 2),
+        close=Decimal("35"),
+        ma_short=Decimal("105"),
+        ma_long=Decimal("100"),
+        stoch_k=40.0,
+        stoch_d=25.0,
+    )
+    current = IndicatorSnapshot(
+        timestamp=datetime(2024, 1, 3),
+        close=Decimal("34"),
+        ma_short=Decimal("105"),
+        ma_long=Decimal("100"),
+        stoch_k=35.0,
+        stoch_d=40.0,
+    )
+
+    transition = machine.process(
+        current=current,
+        prev=previous,
+        current_state=SymbolState.READY_TO_BUY,
+        pullback_date=datetime(2024, 1, 1),
+    )
+
+    assert transition.new_state == SymbolState.READY_TO_BUY
+    assert transition.signal == Signal.HOLD
+
+
+def test_bootstrapped_ready_state_allows_recovery_without_pullback_date() -> None:
+    machine = GoldenCrossStateMachine(
+        GoldenCrossConfigDTO(
+            stochastic_config=StochasticConfig(
+                oversold_threshold=30.0,
+                recovery_threshold=20.0,
+                strong_recovery_threshold=30.0,
+            )
+        )
+    )
+    oversold = IndicatorSnapshot(
+        timestamp=datetime(2024, 1, 2),
+        close=Decimal("25"),
+        ma_short=Decimal("105"),
+        ma_long=Decimal("100"),
+        stoch_k=25.0,
+        stoch_d=25.0,
+    )
+    recovered = IndicatorSnapshot(
+        timestamp=datetime(2024, 1, 3),
+        close=Decimal("31"),
+        ma_short=Decimal("105"),
+        ma_long=Decimal("100"),
+        stoch_k=31.0,
+        stoch_d=25.0,
+    )
+
+    initial_state = machine.get_initial_state(oversold)
+    transition = machine.process(
+        current=recovered,
+        prev=oversold,
+        current_state=initial_state,
+        pullback_date=None,
+    )
+
+    assert initial_state == SymbolState.READY_TO_BUY
+    assert transition.new_state == SymbolState.IN_POSITION
+    assert transition.signal == Signal.BUY
+
+
+def test_ready_state_holds_when_long_ma_is_non_positive() -> None:
+    machine = GoldenCrossStateMachine()
+    previous = IndicatorSnapshot(
+        timestamp=datetime(2024, 1, 2),
+        close=Decimal("25"),
+        ma_short=Decimal("1"),
+        ma_long=Decimal("0"),
+        stoch_k=25.0,
+        stoch_d=25.0,
+    )
+    current = IndicatorSnapshot(
+        timestamp=datetime(2024, 1, 3),
+        close=Decimal("31"),
+        ma_short=Decimal("1"),
+        ma_long=Decimal("0"),
+        stoch_k=31.0,
+        stoch_d=25.0,
+    )
+
+    transition = machine.process(
+        current=current,
+        prev=previous,
+        current_state=SymbolState.READY_TO_BUY,
+        pullback_date=previous.timestamp,
+    )
+
+    assert transition.new_state == SymbolState.READY_TO_BUY
+    assert transition.signal == Signal.HOLD

@@ -54,6 +54,23 @@ class TestEnvelope:
         assert abs(env["lower"] - expected_lower) < 0.01
 
 
+class TestStochastic:
+    """Stochastic oscillator input validation tests."""
+
+    def test_returns_none_for_misaligned_ohlcv_lists(self):
+        """Mismatched OHLCV rows must not cause DataFrame construction errors."""
+        stoch_k, stoch_d = TechnicalIndicators.calculate_stochastic_from_prices(
+            closes=[100.0] * 17,
+            highs=[101.0] * 16,
+            lows=[99.0] * 17,
+            k_period=14,
+            d_period=3,
+        )
+
+        assert stoch_k is None
+        assert stoch_d is None
+
+
 class TestCombinedSignal:
     """결합 시그널 테스트"""
 

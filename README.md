@@ -13,7 +13,8 @@
 
 ## 핵심 운영 포인트
 
-- FastAPI 기본 Swagger/ReDoc/OpenAPI는 비활성화되어 있습니다.
+- FastAPI 기본 Swagger/ReDoc/OpenAPI는 모든 환경에서 의도적으로 비활성화되어 있습니다.
+  - API 문서는 운영 인증으로 우회 노출하지 않습니다. 재노출은 별도 보안 검토와 정책 변경을 거쳐야 합니다.
   - `docs_url=None`
   - `redoc_url=None`
   - `openapi_url=None`

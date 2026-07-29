@@ -42,3 +42,21 @@ async def test_get_chart_data_formats_dates_in_kst():
     p = kis.last["params"]
     assert p["FID_INPUT_DATE_1"] == "20260203"
     assert p["FID_INPUT_DATE_2"] == "20260203"
+
+
+@pytest.mark.asyncio
+async def test_get_chart_data_accepts_naive_start_with_aware_end():
+    kis = DummyKis()
+    svc = MarketDataService(kis, DummyRedis())
+
+    await svc.get_chart_data(
+        symbol="005930",
+        interval="1d",
+        start_date=datetime(2026, 2, 3),
+        end_date=datetime(2026, 2, 4, tzinfo=timezone.utc),
+        use_cache=False,
+    )
+
+    assert kis.last is not None
+    assert kis.last["params"]["FID_INPUT_DATE_1"] == "20260203"
+    assert kis.last["params"]["FID_INPUT_DATE_2"] == "20260204"
