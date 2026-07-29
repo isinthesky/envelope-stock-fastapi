@@ -130,7 +130,7 @@ class GoldenCrossStateMachine:
 
         # 3. READY_TO_BUY 상태
         elif current_state == SymbolState.READY_TO_BUY:
-            return self._process_ready_to_buy(current, prev, pullback_date)
+            return self._process_ready_to_buy(current, prev)
 
         # 4. IN_POSITION 상태
         elif current_state == SymbolState.IN_POSITION:
@@ -212,7 +212,6 @@ class GoldenCrossStateMachine:
         self,
         current: IndicatorSnapshot,
         prev: IndicatorSnapshot,
-        pullback_date: datetime | None,
     ) -> StateTransition:
         """
         매수 준비 상태 처리
@@ -229,6 +228,13 @@ class GoldenCrossStateMachine:
                 reason=GoldenCrossTransitionReason.GC_INVALIDATED_DURING_READY.value,
             )
 
+        # 잘못된 장기 MA로는 신뢰할 수 있는 갭을 계산할 수 없으므로 보수적으로 대기한다.
+        if current.ma_long <= 0:
+            return StateTransition(
+                new_state=SymbolState.READY_TO_BUY,
+                signal=Signal.HOLD,
+            )
+
         ma_gap_ratio = float((current.ma_short - current.ma_long) / current.ma_long * 100)
         buy_entry_ready = GoldenCrossStrategyContract.is_buy_entry_ready(
             GoldenCrossScanContext(
@@ -238,7 +244,9 @@ class GoldenCrossStateMachine:
                 stoch_threshold=self.stoch_config.oversold_threshold,
                 ma_gap_ratio=ma_gap_ratio,
                 prev_stoch_k=prev.stoch_k,
-                recent_oversold=pullback_date is not None,
+                # READY_TO_BUY 자체가 풀백 발생을 보장한다. 초기화되거나 기존에
+                # 저장된 상태에는 pullback_date가 없을 수 있다.
+                recent_oversold=True,
                 recovery_threshold=self.stoch_config.recovery_threshold,
                 strong_recovery_threshold=self.stoch_config.strong_recovery_threshold,
                 require_momentum_turn=self.stoch_config.require_momentum_turn,
