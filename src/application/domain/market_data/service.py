@@ -286,14 +286,16 @@ class MarketDataService:
 
                 return chart_response
 
-            def _to_kst_yyyymmdd(dt: datetime) -> str:
-                """KIS는 KST 날짜(YYYYMMDD)로 조회하므로, 입력 datetime을 KST 기준 날짜 문자열로 정규화한다."""
-                if dt.tzinfo is not None:
-                    dt = dt.astimezone(KST)
-                return dt.strftime("%Y%m%d")
+            def _as_kst(dt: datetime) -> datetime:
+                """Normalize aware datetimes to KST and treat naive values as KST."""
+                if dt.tzinfo is None:
+                    return dt.replace(tzinfo=KST)
+                return dt.astimezone(KST)
 
-            resolved_end = end_date or datetime.now(KST)
-            resolved_start = start_date or (resolved_end - timedelta(days=90))
+            resolved_end = _as_kst(end_date) if end_date else datetime.now(KST)
+            resolved_start = (
+                _as_kst(start_date) if start_date else resolved_end - timedelta(days=90)
+            )
 
             if resolved_start > resolved_end:
                 resolved_start, resolved_end = resolved_end, resolved_start
@@ -301,8 +303,8 @@ class MarketDataService:
             params = {
                 "FID_COND_MRKT_DIV_CODE": "J",
                 "FID_INPUT_ISCD": symbol,
-                "FID_INPUT_DATE_1": _to_kst_yyyymmdd(resolved_start),
-                "FID_INPUT_DATE_2": _to_kst_yyyymmdd(resolved_end),
+                "FID_INPUT_DATE_1": resolved_start.strftime("%Y%m%d"),
+                "FID_INPUT_DATE_2": resolved_end.strftime("%Y%m%d"),
                 "FID_PERIOD_DIV_CODE": interval_map[interval],
                 "FID_ORG_ADJ_PRC": "0",
             }
