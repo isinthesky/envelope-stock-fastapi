@@ -19,5 +19,6 @@ router = APIRouter(prefix="/mypage/websocket", tags=["MyPage-WebSocket"], includ
 async def websocket_page(request: Request) -> HTMLResponse:
     """WebSocket 상태 페이지"""
     return templates.TemplateResponse(
-        "page/websocket.html", {"request": request, "active_page": "websocket"}
+        request,
+        "page/websocket.html", {"active_page": "websocket"}
     )

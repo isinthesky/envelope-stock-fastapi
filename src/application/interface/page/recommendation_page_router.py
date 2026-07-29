@@ -21,9 +21,9 @@ router = APIRouter(
 @router.get("/", response_class=HTMLResponse)
 async def recommendation_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
+        request,
         "page/recommendation.html",
         {
-            "request": request,
             "active_page": "recommendation",
             "static_version": settings.app_version,
         },

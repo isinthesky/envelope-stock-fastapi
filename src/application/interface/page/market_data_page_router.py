@@ -21,5 +21,6 @@ router = APIRouter(
 async def market_data_page(request: Request) -> HTMLResponse:
     """시세 데이터 페이지"""
     return templates.TemplateResponse(
-        "page/market_data.html", {"request": request, "active_page": "market_data"}
+        request,
+        "page/market_data.html", {"active_page": "market_data"}
     )

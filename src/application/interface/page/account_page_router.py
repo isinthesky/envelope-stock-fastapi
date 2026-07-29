@@ -19,5 +19,6 @@ router = APIRouter(prefix="/mypage/account", tags=["MyPage-Account"], include_in
 async def account_page(request: Request) -> HTMLResponse:
     """계좌 관리 페이지"""
     return templates.TemplateResponse(
-        "page/account.html", {"request": request, "active_page": "account"}
+        request,
+        "page/account.html", {"active_page": "account"}
     )

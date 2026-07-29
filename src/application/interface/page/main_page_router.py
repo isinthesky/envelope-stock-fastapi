@@ -20,5 +20,6 @@ router = APIRouter(prefix="/mypage", tags=["MyPage"], include_in_schema=False)
 async def main_dashboard(request: Request) -> HTMLResponse:
     """메인 대시보드 - 도메인별 페이지 허브"""
     return templates.TemplateResponse(
-        "page/index.html", {"request": request, "active_page": "index"}
+        request,
+        "page/index.html", {"active_page": "index"}
     )

@@ -19,5 +19,6 @@ router = APIRouter(prefix="/mypage/auth", tags=["MyPage-Auth"], include_in_schem
 async def auth_page(request: Request) -> HTMLResponse:
     """인증 관리 페이지"""
     return templates.TemplateResponse(
-        "page/auth.html", {"request": request, "active_page": "auth"}
+        request,
+        "page/auth.html", {"active_page": "auth"}
     )

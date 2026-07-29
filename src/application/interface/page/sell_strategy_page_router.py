@@ -21,6 +21,7 @@ router = APIRouter(prefix="/mypage/sell-strategy", tags=["MyPage-SellStrategy"],
 async def sell_strategy_page(request: Request) -> HTMLResponse:
     """매도 전략 분석 페이지"""
     return templates.TemplateResponse(
+        request,
         "page/sell_strategy.html",
-        {"request": request, "active_page": "sell_strategy", "static_version": settings.app_version},
+        {"active_page": "sell_strategy", "static_version": settings.app_version},
     )

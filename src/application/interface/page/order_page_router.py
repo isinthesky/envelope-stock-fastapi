@@ -19,5 +19,6 @@ router = APIRouter(prefix="/mypage/order", tags=["MyPage-Order"], include_in_sch
 async def order_page(request: Request) -> HTMLResponse:
     """주문 관리 페이지"""
     return templates.TemplateResponse(
-        "page/order.html", {"request": request, "active_page": "order"}
+        request,
+        "page/order.html", {"active_page": "order"}
     )

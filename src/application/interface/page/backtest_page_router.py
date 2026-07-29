@@ -21,9 +21,9 @@ router = APIRouter(prefix="/mypage/backtest", tags=["MyPage-Backtest"], include_
 async def backtest_page(request: Request) -> HTMLResponse:
     """백테스팅 페이지"""
     return templates.TemplateResponse(
+        request,
         "page/backtest.html",
         {
-            "request": request,
             "active_page": "backtest",
             "static_version": settings.app_version,
         },

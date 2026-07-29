@@ -19,5 +19,6 @@ router = APIRouter(prefix="/mypage/ohlcv", tags=["MyPage-OHLCV"], include_in_sch
 async def ohlcv_page(request: Request) -> HTMLResponse:
     """OHLCV 캐시 관리 페이지"""
     return templates.TemplateResponse(
-        "page/ohlcv.html", {"request": request, "active_page": "ohlcv"}
+        request,
+        "page/ohlcv.html", {"active_page": "ohlcv"}
     )

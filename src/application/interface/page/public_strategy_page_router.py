@@ -21,5 +21,6 @@ router = APIRouter(prefix="/page", tags=["Page-Public"], include_in_schema=False
 async def public_strategy_page(request: Request) -> HTMLResponse:
     """공개용 Buy 전략 페이지 (nav bar 없음)"""
     return templates.TemplateResponse(
-        "page/strategy_minimal.html", {"request": request, "active_page": "strategy"}
+        request,
+        "page/strategy_minimal.html", {"active_page": "strategy"}
     )
