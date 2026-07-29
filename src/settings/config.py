@@ -266,6 +266,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", description="Telegram Bot Token")
     telegram_chat_id: str = Field(default="", description="Telegram Chat ID")
     telegram_enabled: bool = Field(default=False, description="Telegram 알림 활성화")
+    buy_notification_enabled: bool = Field(
+        default=True, description="매수 추천 알림(11:30/14:30) 활성화"
+    )
 
     # ==================== DART API 설정 ====================
     dart_open_api_key: str = Field(default="", description="DART Open API 키")

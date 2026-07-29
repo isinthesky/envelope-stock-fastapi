@@ -28,9 +28,12 @@ class _DummyScheduler:
 async def test_start_registers_four_notifications_and_four_updates():
     scheduler = NotificationScheduler()
 
-    with patch(
-        "apscheduler.schedulers.asyncio.AsyncIOScheduler",
-        side_effect=lambda *args, **kwargs: _DummyScheduler(*args, **kwargs),
+    with (
+        patch(
+            "apscheduler.schedulers.asyncio.AsyncIOScheduler",
+            side_effect=lambda *args, **kwargs: _DummyScheduler(*args, **kwargs),
+        ),
+        patch.object(scheduler_module.settings, "buy_notification_enabled", True),
     ):
         await scheduler.start()
 
@@ -50,6 +53,30 @@ async def test_start_registers_four_notifications_and_four_updates():
         "buy_data_update_1430",
         "buy_notification_1430",
     }
+
+
+@pytest.mark.asyncio
+async def test_start_skips_buy_jobs_when_buy_notification_disabled():
+    """BUY_NOTIFICATION_ENABLED=false면 매수 잡을 등록하지 않는다(매도는 유지)."""
+    scheduler = NotificationScheduler()
+
+    with (
+        patch(
+            "apscheduler.schedulers.asyncio.AsyncIOScheduler",
+            side_effect=lambda *args, **kwargs: _DummyScheduler(*args, **kwargs),
+        ),
+        patch.object(scheduler_module.settings, "buy_notification_enabled", False),
+    ):
+        await scheduler.start()
+
+    job_ids = {job["id"] for job in scheduler.scheduler.jobs}
+    assert job_ids == {
+        "sell_data_update_0930",
+        "sell_notification_0930",
+        "sell_data_update_1230",
+        "sell_notification_1230",
+    }
+    assert not any(job_id.startswith("buy_") for job_id in job_ids)
 
 
 @pytest.mark.asyncio

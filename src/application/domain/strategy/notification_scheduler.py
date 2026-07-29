@@ -39,6 +39,7 @@ from src.application.domain.strategy.symbol_validation import (
     filter_tradable_items,
     is_valid_krx_symbol,
 )
+from src.settings.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -367,6 +368,7 @@ class NotificationScheduler:
             "timezone": str(KST),
             "telegram_enabled": bool(getattr(notifier, "enabled", False)),
             "execution_lock_locked": self._execution_lock.locked(),
+            "buy_notification_enabled": settings.buy_notification_enabled,
             "buy_slots": self._slot_definitions(self.BUY_SLOTS, "buy"),
             "sell_slots": self._slot_definitions(self.SELL_SLOTS, "sell"),
             "jobs": jobs,
@@ -398,32 +400,40 @@ class NotificationScheduler:
                 },
             )
 
-            for update_hour, update_minute, notify_hour, notify_minute, label in self.BUY_SLOTS:
-                self.scheduler.add_job(
-                    self._buy_data_update_job,
-                    CronTrigger(
-                        day_of_week="mon-fri",
-                        hour=update_hour,
-                        minute=update_minute,
-                        timezone=KST,
-                    ),
-                    kwargs={"slot_label": label},
-                    id=f"buy_data_update_{notify_hour:02d}{notify_minute:02d}",
-                    name=f"Buy Data Update ({label} alert prep)",
-                    replace_existing=True,
-                )
-                self.scheduler.add_job(
-                    self._buy_notification_job,
-                    CronTrigger(
-                        day_of_week="mon-fri",
-                        hour=notify_hour,
-                        minute=notify_minute,
-                        timezone=KST,
-                    ),
-                    kwargs={"slot_label": label},
-                    id=f"buy_notification_{notify_hour:02d}{notify_minute:02d}",
-                    name=f"Buy Signal Notification ({label})",
-                    replace_existing=True,
+            # 매수 알림은 BUY_NOTIFICATION_ENABLED로 끌 수 있다.
+            # 비활성 시 잡을 등록하지 않아 발송 경로가 열리지 않는다.
+            if settings.buy_notification_enabled:
+                for update_hour, update_minute, notify_hour, notify_minute, label in self.BUY_SLOTS:
+                    self.scheduler.add_job(
+                        self._buy_data_update_job,
+                        CronTrigger(
+                            day_of_week="mon-fri",
+                            hour=update_hour,
+                            minute=update_minute,
+                            timezone=KST,
+                        ),
+                        kwargs={"slot_label": label},
+                        id=f"buy_data_update_{notify_hour:02d}{notify_minute:02d}",
+                        name=f"Buy Data Update ({label} alert prep)",
+                        replace_existing=True,
+                    )
+                    self.scheduler.add_job(
+                        self._buy_notification_job,
+                        CronTrigger(
+                            day_of_week="mon-fri",
+                            hour=notify_hour,
+                            minute=notify_minute,
+                            timezone=KST,
+                        ),
+                        kwargs={"slot_label": label},
+                        id=f"buy_notification_{notify_hour:02d}{notify_minute:02d}",
+                        name=f"Buy Signal Notification ({label})",
+                        replace_existing=True,
+                    )
+            else:
+                logger.info(
+                    "[NotificationScheduler] Buy notifications disabled "
+                    "(BUY_NOTIFICATION_ENABLED=false) - 11:30/14:30 jobs not registered"
                 )
 
             for update_hour, update_minute, notify_hour, notify_minute, label in self.SELL_SLOTS:
