@@ -403,15 +403,18 @@ class TechnicalIndicators:
         리스트 기반 Stochastic Oscillator 계산 (단일 값 반환)
 
         Args:
-            closes: 종가 리스트
-            highs: 고가 리스트
-            lows: 저가 리스트
+            closes: 종가 리스트 (highs, lows와 동일한 길이 필요)
+            highs: 고가 리스트 (closes, lows와 동일한 길이 필요)
+            lows: 저가 리스트 (closes, highs와 동일한 길이 필요)
             k_period: %K 계산 기간 (기본: 14)
             d_period: %D 계산 기간 (기본: 3)
 
         Returns:
             tuple[float | None, float | None]: (stoch_k, stoch_d)
         """
+        if len(closes) != len(highs) or len(closes) != len(lows):
+            return None, None
+
         if len(closes) < k_period + d_period:
             return None, None
 
