@@ -34,6 +34,7 @@ async def test_start_registers_four_notifications_and_four_updates():
             side_effect=lambda *args, **kwargs: _DummyScheduler(*args, **kwargs),
         ),
         patch.object(scheduler_module.settings, "buy_notification_enabled", True),
+        patch.object(scheduler_module.settings, "sell_notification_enabled", True),
     ):
         await scheduler.start()
 
@@ -66,6 +67,7 @@ async def test_start_skips_buy_jobs_when_buy_notification_disabled():
             side_effect=lambda *args, **kwargs: _DummyScheduler(*args, **kwargs),
         ),
         patch.object(scheduler_module.settings, "buy_notification_enabled", False),
+        patch.object(scheduler_module.settings, "sell_notification_enabled", True),
     ):
         await scheduler.start()
 

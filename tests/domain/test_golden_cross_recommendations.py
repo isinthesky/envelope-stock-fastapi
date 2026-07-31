@@ -281,3 +281,68 @@ async def test_recommendation_all_financial_errors_degrades_to_scan_only(
 def test_recommendation_target_states_validation_rejects_typos() -> None:
     with pytest.raises(StrategyError):
         StrategyService._validate_recommendation_target_states(["OPTIMAL_BUYY"])
+
+
+def _fear_buy_stock(symbol: str) -> GoldenCrossScanItemDTO:
+    return GoldenCrossScanItemDTO(
+        symbol=symbol, name=symbol, market="KOSPI",
+        current_price=Decimal("10000"), ma_short=Decimal("95"), ma_long=Decimal("100"),
+        ma_gap_ratio=-5.0, stoch_k=20.0, stoch_d=25.0,
+        is_gc_active=False, gc_state="FEAR_BUY", screening_score=Decimal("70"),
+        financial_filter_status=None,
+    )
+
+
+async def _run_reco_default(service, monkeypatch, stocks):
+    from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
+
+    raw = GoldenCrossScanListDTO(
+        stocks=stocks, total_scanned=len(stocks), gc_active_count=0,
+        pullback_waiting_count=0, buy_interest_count=0, ready_to_buy_count=0,
+        optimal_buy_count=sum(1 for s in stocks if s.gc_state == "OPTIMAL_BUY"),
+        scan_time=datetime(2024, 1, 1), errors=[],
+    )
+
+    async def fake_scan(self, **kwargs):
+        _ = self, kwargs
+        return raw
+
+    monkeypatch.setattr(BuyStrategyService, "scan_golden_cross_candidates", fake_scan)
+    return await StrategyService.get_golden_cross_recommendations.__wrapped__(
+        service, object(), top_n=5
+    )
+
+
+async def test_recommendation_includes_fear_buy_when_notify_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # [#2/#3 end-to-end] fear_pass=True, is_gc_active=False → FEAR_BUY → 알림 opt-in 시 추천 포함
+    import src.application.domain.strategy.strategy_service as ss_mod
+
+    monkeypatch.setattr(ss_mod.settings, "fear_buy_notify_enabled", True, raising=False)
+    monkeypatch.setattr(ss_mod.settings, "fear_buy_window_enabled", True, raising=False)
+
+    service = StrategyService(session=None)
+    result = await _run_reco_default(
+        service, monkeypatch, [_stock("A", "OPTIMAL_BUY"), _fear_buy_stock("F")]
+    )
+
+    symbols = {s.symbol for s in result.top_stocks}
+    assert "F" in symbols  # fear-buy 후보가 추천에 도달
+    assert result.candidate_state_counts.get("FEAR_BUY") == 1
+
+
+async def test_recommendation_excludes_fear_buy_when_notify_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.application.domain.strategy.strategy_service as ss_mod
+
+    monkeypatch.setattr(ss_mod.settings, "fear_buy_notify_enabled", False, raising=False)
+
+    service = StrategyService(session=None)
+    result = await _run_reco_default(
+        service, monkeypatch, [_stock("A", "OPTIMAL_BUY"), _fear_buy_stock("F")]
+    )
+
+    symbols = {s.symbol for s in result.top_stocks}
+    assert symbols == {"A"}  # 기본값에선 fear-buy 미포함(라이브 동작 보존)

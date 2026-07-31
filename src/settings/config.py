@@ -273,6 +273,40 @@ class Settings(BaseSettings):
         default=False, description="매도 신호 알림(09:30/12:30) 활성화"
     )
 
+    # ==================== 매수 전략(Fear Buy / GC) 설정 ====================
+    gc_require_rsi_oversold: bool = Field(
+        default=False,
+        description="[#A] 골든크로스 매수 후보에 RSI 과매도 조건 요구(GC+RSI<=임계). "
+        "기본 False=기존 라이브 동작 보존. True로 켜면 두 스캔 경로 모두 GC+RSI<=임계 적용",
+    )
+    gc_rsi_threshold: float = Field(
+        default=40.0, ge=10, le=60, description="[#A] 골든크로스 매수 RSI 과매도 임계값"
+    )
+    fear_buy_window_enabled: bool = Field(
+        default=True, description="[#3] 시장 공포 발생 후 개별 과매도 진입 허용(윈도우) 사용 여부"
+    )
+    fear_buy_window_days: int = Field(
+        default=7, ge=1, le=20, description="[#3] 시장 공포 트리거 후 개별 과매도 진입 허용 거래일 수(N)"
+    )
+    fear_buy_rsi_threshold: float = Field(
+        default=30.0, ge=10, le=45, description="[#3] Fear Buy 개별 과매도 RSI 임계값"
+    )
+    fear_buy_notify_enabled: bool = Field(
+        default=False,
+        description="[#2/#3] fear-buy 후보를 추천/Telegram 알림에 포함(opt-in, 기본 OFF). "
+        "라이브 외부 알림 변경이므로 백테스트 확인 후 활성화 권장",
+    )
+    sell_regime_aware_enabled: bool = Field(
+        default=False,
+        description="[#8 defer] 매도에 시장 레짐 반영(기본 OFF). 하드 손절은 이 값과 무관하게 항상 적용",
+    )
+    sell_hard_stop_pct: float = Field(
+        default=0.15, ge=0.05, le=0.40, description="[#7] 진입가 대비 하드 손절 비율"
+    )
+    sell_trend_stop_pct: float = Field(
+        default=0.15, ge=0.05, le=0.40, description="[#7] 장기추세(MA165) 대비 이탈 손절 비율"
+    )
+
     # ==================== DART API 설정 ====================
     dart_open_api_key: str = Field(default="", description="DART Open API 키")
     dart_api_base_url: str = Field(

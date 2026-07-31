@@ -12,6 +12,8 @@ class GoldenCrossScanState(StrEnum):
     READY_TO_BUY = "READY_TO_BUY"
     BUY_INTEREST = "BUY_INTEREST"
     OPTIMAL_BUY = "OPTIMAL_BUY"
+    # [#2/#3] 시장 공포 윈도우 중 개별 과매도로 진입하는 비-GC 후보 (fear-buy)
+    FEAR_BUY = "FEAR_BUY"
 
 
 class GoldenCrossTradeSignal(StrEnum):

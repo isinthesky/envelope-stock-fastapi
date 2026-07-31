@@ -34,6 +34,50 @@ MAX_API_DAYS_PER_CALL = 100
 KST = ZoneInfo("Asia/Seoul")
 MARKET_OPEN_TIME_KST = time(9, 0)
 
+# 시장 레짐 프록시용 대형주 (KOSPI 데이터 결측 시 등가중 정규화)
+MAJOR_PROXY_SYMBOLS = ["005930", "000660", "035420", "006400", "207940"]
+
+
+# 최신 N개 캔들 확보용 상한(먼 미래). 리포지토리는 timestamp <= end_date 최신 limit개를 ASC로 반환.
+_FAR_FUTURE = datetime(2100, 1, 1)
+
+
+async def get_kospi_or_proxy_closes(
+    session: AsyncSession, days: int = 600
+) -> tuple[list[float], list[datetime], str]:
+    """시장 레짐용 종가 시계열 로드. KOSPI 우선, 없으면 대형주 등가중 정규화 프록시.
+
+    OHLCVRepository.get_recent_candles_to_dataframe(최신 N개, ASC 정렬)를 사용한다
+    (raw SQL 미사용, 헥사고날 경계 준수).
+    Returns: (closes, timestamps, source) — source ∈ {"KOSPI", "PROXY", "NONE"}.
+    데이터가 전혀 없으면 ([], [], "NONE")를 반환하며 호출측은 fail-open 처리한다.
+    """
+    repo = OHLCVRepository(session)
+
+    async def _closes(sym: str) -> pd.DataFrame:
+        return await repo.get_recent_candles_to_dataframe(
+            symbol=sym, end_date=_FAR_FUTURE, limit=days, interval="1d"
+        )
+
+    kdf = await _closes("KOSPI")
+    if len(kdf) >= 100:  # BB 계산에 충분한 히스토리
+        return kdf["close"].astype(float).tolist(), kdf["timestamp"].tolist(), "KOSPI"
+
+    frames = []
+    for sym in MAJOR_PROXY_SYMBOLS:
+        d = await _closes(sym)
+        if not d.empty:
+            frames.append(d.set_index("timestamp")["close"].astype(float).rename(sym))
+
+    if not frames:
+        return [], [], "NONE"
+
+    proxy_df = pd.concat(frames, axis=1).dropna()
+    norm = proxy_df / proxy_df.mean()  # 등가중 정규화
+    closes = norm.mean(axis=1).tolist()
+    ts = list(proxy_df.index)
+    return closes, ts, "PROXY"
+
 
 def is_trading_day_kst(target: date) -> bool:
     """한국 거래일 여부 (주말 + 간단 공휴일 캘린더 기반)"""

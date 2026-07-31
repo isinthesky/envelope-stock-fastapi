@@ -90,5 +90,3 @@ def simulate_simple_vs_hybrid():
 
 if __name__ == "__main__":
     simulate_simple_vs_hybrid()
-PYEOF
-python3 /Users/m2-dev/Apps/kis-strategy-alert-server/scripts/verify_simple_vs_hybrid_sell.py

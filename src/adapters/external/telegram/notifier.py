@@ -28,12 +28,14 @@ GC_STATE_LABELS: dict[str, str] = {
     "OPTIMAL_BUY": "매수 적기",
     "BUY_INTEREST": "매수 관심",
     "READY_TO_BUY": "매수 준비",
+    "FEAR_BUY": "공포 매수",
 }
 
 GC_STATE_ACTIONS: dict[str, str] = {
     "OPTIMAL_BUY": "신규 매수 검토 (골든크로스 + 눌림목 도달)",
     "READY_TO_BUY": "매수 준비 — 눌림목 진입 대기",
     "BUY_INTEREST": "관심 종목 등록 후 관찰",
+    "FEAR_BUY": "시장 공포 구간 과매도(비-GC) — 분할 매수 검토",
 }
 
 # final_stage → (표시 이름, 권장 행동) 매핑 (알림 기준을 Stage로 단일화)
@@ -105,6 +107,9 @@ def build_golden_cross_recommendations_message(
         f"📅 {now} KST",
         "전략: MA55/165 골든크로스 + Stochastic 눌림목",
     ]
+    # fear-buy 후보가 섞여 있으면 별도 전략 라벨을 추가(골든크로스로 오라벨 방지)
+    if any(str(s.get("gc_state") or "") == "FEAR_BUY" for s in top_stocks):
+        lines.append("+ Fear Buy: 시장 공포 윈도우 내 개별 과매도(비-GC)")
     if buy_candidate_count is not None:
         lines.append(f"매수 적기 후보: {buy_candidate_count}개")
     if scan_time_str:
@@ -585,6 +590,7 @@ class TelegramNotifier:
             "OPTIMAL_BUY": "매수 적기",
             "BUY_INTEREST": "매수 관심",
             "READY_TO_BUY": "매수 관심",
+            "FEAR_BUY": "공포 매수",
         }.get(gc_state, gc_state)
 
         safe_name = html_mod.escape(name or symbol)
@@ -633,6 +639,7 @@ class TelegramNotifier:
                 "OPTIMAL_BUY": "매수 적기",
                 "BUY_INTEREST": "매수 관심",
                 "READY_TO_BUY": "매수 관심",
+                "FEAR_BUY": "공포 매수",
             }.get(stock.get("gc_state"), stock.get("gc_state", "-"))
             s_name = html_mod.escape(stock.get("name") or stock.get("symbol") or "")
             s_symbol = html_mod.escape(stock.get("symbol", ""))

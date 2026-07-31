@@ -127,44 +127,48 @@ class TechnicalIndicators:
         if len(prices) < period + 1:
             return None
 
-        # 가격 변화 계산
-        changes = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
-        recent_changes = changes[-(period):]
-
-        gains = [max(c, 0) for c in recent_changes]
-        losses = [abs(min(c, 0)) for c in recent_changes]
-
-        avg_gain = sum(gains) / period
-        avg_loss = sum(losses) / period
-
-        if avg_loss == 0:
-            return 100.0
-
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-
-        return rsi
+        # 운영 표준 RSI(Wilder)로 라우팅 — series 구현과 값 일치 보장 (#9)
+        series = cls.calculate_rsi_series(pd.DataFrame({"close": prices}), period)
+        value = series.iloc[-1]
+        if pd.isna(value):
+            return None
+        return float(value)
 
     @classmethod
     def calculate_rsi_series(cls, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        """RSI 시리즈 계산 (DataFrame용, Wilder's 스타일 근사).
+        """RSI 시리즈 계산 (DataFrame용, Wilder's smoothing).
 
+        운영 표준 RSI. Wilder smoothing == EMA(alpha=1/period, adjust=False).
+        scalar calculate_rsi 및 백테스트가 모두 이 구현으로 라우팅된다.
         prepare_golden_cross_indicators에서 사용하기 위한 헬퍼.
         """
-        if len(df) < period + 1 or "close" not in df.columns:
-            return pd.Series([50.0] * len(df), index=df.index)
+        n = len(df)
+        if n < period + 1 or "close" not in df.columns:
+            return pd.Series([50.0] * n, index=df.index)
 
-        delta = df["close"].diff()
-        gain = delta.where(delta > 0, 0.0)
-        loss = (-delta.where(delta < 0, 0.0))
+        # NaN 종가는 ffill/bfill로 보정(단일 NaN이 재귀 평균을 오염시키는 것 방지)
+        close = df["close"].astype(float).ffill().bfill().tolist()
+        deltas = [close[i] - close[i - 1] for i in range(1, n)]
+        gains = [d if d > 0 else 0.0 for d in deltas]
+        losses = [-d if d < 0 else 0.0 for d in deltas]
 
-        # Wilder's smoothing 근사 (SMA 초기화 후)
-        avg_gain = gain.rolling(window=period).mean()
-        avg_loss = loss.rolling(window=period).mean()
+        def _rsi(ag: float, al: float) -> float:
+            if al == 0:
+                # gain/loss 모두 0(무변동)이면 중립 50, gain만 있으면 100
+                return 50.0 if ag == 0 else 100.0
+            return 100 - (100 / (1 + ag / al))
 
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        return rsi.fillna(50.0)
+        # Wilder's smoothing: 첫 period-길이 SMA 시드 후 재귀
+        rsi: list[float] = [float("nan")] * n
+        avg_gain = sum(gains[:period]) / period
+        avg_loss = sum(losses[:period]) / period
+        rsi[period] = _rsi(avg_gain, avg_loss)
+        for i in range(period + 1, n):
+            avg_gain = (avg_gain * (period - 1) + gains[i - 1]) / period
+            avg_loss = (avg_loss * (period - 1) + losses[i - 1]) / period
+            rsi[i] = _rsi(avg_gain, avg_loss)
+
+        return pd.Series(rsi, index=df.index).fillna(50.0)
 
     @classmethod
     def generate_bollinger_signal(
@@ -1101,13 +1105,38 @@ class TechnicalIndicators:
         upper = bb["upper"]
         bw = (upper - lower) / middle if middle and middle > 0 else 0
 
-        # 최근 5일 평균 bandwidth
+        # 최근 5일 평균 bandwidth (각 j에서 끝나는 period-길이 후행 윈도우)
         prev_bws = []
         for j in range(-6, -1):
-            w = closes[j - period : j + 1] if j - period >= 0 else []
-            if len(w) >= period:
+            start = j - period + 1  # index j에서 끝나는 period-길이 윈도우의 시작
+            w = closes[start : j + 1] if len(closes) + start >= 0 else []
+            if len(w) == period:
                 b = TechnicalIndicators.calculate_bollinger_bands(w, period=period, std_multiplier=std_mult)
                 if b["middle"]:
                     prev_bws.append((b["upper"] - b["lower"]) / b["middle"])
         avg_prev = sum(prev_bws) / len(prev_bws) if prev_bws else bw
         return close < lower and bw > avg_prev * 1.10
+
+    @staticmethod
+    def is_market_fear_recent(
+        closes: list[float],
+        window: int = 7,
+        period: int = 20,
+        std_mult: float = 2.0,
+    ) -> bool:
+        """최근 `window` 거래일(오늘 포함) 내 시장 공포 트리거 존재 여부.
+
+        공포(급락 초입)와 개별 과매도(바닥권)의 위상차를 흡수하기 위한 fear-window 판정.
+        마지막 봉 기준으로 window일 이전까지 각 종료 시점에서 공포를 재검사한다.
+        """
+        n = len(closes)
+        if n < 25:
+            return False
+        # 오늘(offset 0) 포함 최근 window 거래일 검사 → offset 0..window-1
+        for k in range(window):
+            end = n - k
+            if end < 25:
+                break
+            if TechnicalIndicators.is_market_fear_by_bollinger(closes[:end], period, std_mult):
+                return True
+        return False

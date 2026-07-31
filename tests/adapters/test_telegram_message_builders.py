@@ -157,6 +157,29 @@ class TestBuildGoldenCrossRecommendationsMessage:
         assert "👉 매수 준비 — 눌림목 진입 대기" in message
         assert "반도체 (278) : 2종목" in message
 
+    def test_fear_buy_candidate_is_labeled_and_not_mislabeled_as_gc(self):
+        # FEAR_BUY 후보는 '공포 매수'로 라벨링되고, 골든크로스로 오라벨되지 않아야 한다.
+        reco = self._recommendations()
+        reco["top_stocks"].append(
+            {
+                "symbol": "999999",
+                "name": "공포주",
+                "current_price": "12000",
+                "gc_state": "FEAR_BUY",
+                "stoch_k": 15.0,
+                "ma_gap_ratio": -6.0,
+                "recommendation_score": 65.0,
+                "recommendation_reasons": ["시장 공포 + 개별 과매도"],
+                "industry_name": None,
+            }
+        )
+        message = build_golden_cross_recommendations_message(reco, slot_label="11:30")
+
+        assert "공포 매수" in message  # 번역된 라벨
+        assert "FEAR_BUY" not in message  # 원시 상태 문자열이 노출되지 않음
+        assert "+ Fear Buy:" in message  # 헤더에 fear-buy 전략 라벨 추가
+        assert "시장 공포 구간 과매도" in message  # FEAR_BUY 액션
+
     def test_no_candidates_message_is_explicit(self):
         recommendations = self._recommendations()
         recommendations["top_stocks"] = []

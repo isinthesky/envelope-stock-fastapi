@@ -1068,6 +1068,11 @@ class StrategyService:
         buy_service = BuyStrategyService(session=session)
         if target_states is None:
             target_states = ["OPTIMAL_BUY"]
+            # [#2/#3] fear-buy 알림 opt-in: 켜져 있으면 FEAR_BUY 후보도 추천/알림에 포함
+            if getattr(settings, "fear_buy_notify_enabled", False) and getattr(
+                settings, "fear_buy_window_enabled", False
+            ):
+                target_states = target_states + ["FEAR_BUY"]
         target_states = self._validate_recommendation_target_states(target_states)
         target_state_set = set(target_states)
 
@@ -1182,6 +1187,7 @@ class StrategyService:
             "WAITING_FOR_PULLBACK",
             "GC_ACTIVE",
             "NOT_GC",
+            "FEAR_BUY",
         }
         invalid = sorted(set(target_states) - allowed_states)
         if invalid:
@@ -1195,11 +1201,12 @@ class StrategyService:
     def _recommendation_state_rank(gc_state: str) -> int:
         return {
             "OPTIMAL_BUY": 0,
-            "BUY_INTEREST": 1,
-            "READY_TO_BUY": 2,
-            "WAITING_FOR_PULLBACK": 3,
-            "GC_ACTIVE": 4,
-            "NOT_GC": 5,
+            "FEAR_BUY": 1,
+            "BUY_INTEREST": 2,
+            "READY_TO_BUY": 3,
+            "WAITING_FOR_PULLBACK": 4,
+            "GC_ACTIVE": 5,
+            "NOT_GC": 6,
         }.get(gc_state, 99)
 
     @staticmethod

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.exceptions import StrategyError
 from src.application.common.indicators import TechnicalIndicators
+from src.settings.config import settings
 from src.application.domain.strategy.dto import (
     DynamicSellThresholdConfig,
     PHASE_TO_STAGE_MAP,
@@ -1889,32 +1890,51 @@ class SellStrategyService:
         reasons = []
         should_sell = False
 
-        # 1. RSI >=70 + 하락 시작 확인 (사용자 요청 반영)
+        # 1. RSI >=70 + 하락 시작 확인 (#6: 1틱 whipsaw 방지 — 3일선 하회 & 2봉 연속 하락)
         if rsi is not None and rsi >= 70:
             decline_confirmed = False
             decline_detail = ""
 
             if len(df) >= 2 and "close" in df.columns:
-                prev_close = float(df["close"].iloc[-2])
-                if current_price < prev_close:
+                closes = df["close"].astype(float)
+                prev_close = float(closes.iloc[-2])
+                ma_window = min(3, len(closes))
+                ma_short = float(closes.tail(ma_window).mean())
+                below_ma = current_price < ma_short
+                rolling_down = False
+                if len(closes) >= 3:
+                    prev2_close = float(closes.iloc[-3])
+                    rolling_down = prev2_close >= prev_close >= current_price
+                # 히스토리 부족 시(3봉 미만) 단일 하락 폴백
+                if (below_ma and rolling_down) or (
+                    len(closes) < 3 and current_price < prev_close
+                ):
                     decline_confirmed = True
-                    decline_detail = f" (전일 종가 {prev_close:.0f} → 현재 하락)"
+                    decline_detail = f" (3일선 {ma_short:.0f} 하회 + 연속 하락)"
 
             if decline_confirmed:
                 should_sell = True
                 reasons.append(f"RSI 과매수 + 하락 시작 (RSI={rsi:.1f}){decline_detail}")
             else:
-                # RSI 70 넘었지만 하락 미확인 → 매도 사유로 추가하지 않음
+                # RSI 70 넘었지만 하락 미확인 → 매도 사유로 추가하지 않음 (승자 유지)
                 reasons.append(f"RSI 과매수 상태 (RSI={rsi:.1f}) — 하락 시작 미확인 (매도 보류)")
         # 참고: RSI < 70이면 이 블록 스킵
 
-        # 2. 20일 고점 대비 15% 이탈 (일봉 종가) — 기계적 손절
-        if len(df) >= 20 and "close" in df.columns:
-            recent_20d_high = float(df["close"].tail(20).max())
-            if current_price < recent_20d_high * 0.85:
+        # 2. 기계적 손절 (#7): 진입가 하드 손절 + 장기추세(MA165) 이탈.
+        #    기존 '20일 고점 -15%' 고아 규칙 제거 — 85% 트레일링과 중복/오작동(회복장 조기청산).
+        if entry_price and current_price < entry_price * (1 - settings.sell_hard_stop_pct):
+            should_sell = True
+            dd = (entry_price - current_price) / entry_price
+            reasons.append(f"하드 손절: 진입가 대비 {dd:.1%} 하락")
+        if "ma_long" in df.columns and len(df) >= 1:
+            ma_long_last = df["ma_long"].iloc[-1]
+            if (
+                pd.notna(ma_long_last)
+                and float(ma_long_last) > 0
+                and current_price < float(ma_long_last) * (1 - settings.sell_trend_stop_pct)
+            ):
                 should_sell = True
-                dd = (recent_20d_high - current_price) / recent_20d_high
-                reasons.append(f"20일 고점 15% 이탈 (고점={recent_20d_high:.0f}, DD={dd:.1%})")
+                reasons.append(f"추세 이탈: MA165 {settings.sell_trend_stop_pct:.0%} 하회")
 
         # 3. 85% 수익 지키기 — 기계적 보호
         if entry_price and highest_price and highest_price > entry_price and current_price:
@@ -1931,7 +1951,7 @@ class SellStrategyService:
         }
 
 
-    def analyze_sell_signal_hybrid(
+    async def analyze_sell_signal_hybrid(
         self,
         symbol: str,
         **kwargs,
@@ -1942,11 +1962,13 @@ class SellStrategyService:
         - RSI >=70 + 하락 시작: Legacy가 이미 약한 매도 신호를 낼 때만 업그레이드
         - 전체적으로 Legacy의 보수성을 최대한 유지 (적은 거래 선호)
         """
-        legacy_result = self.analyze_sell_signal(symbol, **kwargs)
+        # analyze_sell_signal은 df 파라미터가 없으므로 forward 전에 분리(TypeError 방지)
+        df = kwargs.pop("df", None)
+        legacy_result = await self.analyze_sell_signal(symbol, **kwargs)
         simple = self.compute_simple_sell_signal(
-            df=kwargs.get("df", None) or pd.DataFrame(),
-            rsi=legacy_result.rsi if hasattr(legacy_result, 'rsi') else None,
-            current_price=legacy_result.current_price if hasattr(legacy_result, 'current_price') else 0,
+            df=df if df is not None else pd.DataFrame(),
+            rsi=legacy_result.rsi,
+            current_price=float(legacy_result.current_price),
             entry_price=kwargs.get("entry_price"),
             highest_price=kwargs.get("highest_price"),
         )
@@ -1958,7 +1980,10 @@ class SellStrategyService:
             simple_reasons = simple.get("reasons", [])
 
             # 기계적 보호 규칙 (15% DD, 85% 보호)은 강하게 적용
-            mechanical = any("15% 이탈" in r or "85% 수익 보호" in r for r in simple_reasons)
+            mechanical = any(
+                ("하드 손절" in r) or ("추세 이탈" in r) or ("85% 수익 보호" in r)
+                for r in simple_reasons
+            )
             rsi_decline = any("RSI 과매수 + 하락 시작" in r for r in simple_reasons)
 
             if mechanical:

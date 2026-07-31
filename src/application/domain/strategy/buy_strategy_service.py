@@ -37,7 +37,12 @@ from src.application.domain.strategy.dto import (
     MA5BreakoutScanItemDTO,
     MA5BreakoutScanListDTO,
 )
-from src.application.domain.strategy.ohlcv_data_loader import LoadResult, LoadType, OHLCVDataLoader
+from src.application.domain.strategy.ohlcv_data_loader import (
+    LoadResult,
+    LoadType,
+    OHLCVDataLoader,
+    get_kospi_or_proxy_closes,
+)
 from src.application.domain.strategy.signal_evaluator import (
     GoldenCrossScanContext,
     GoldenCrossSignalEvaluator,
@@ -173,6 +178,25 @@ class BuyStrategyService:
             f"force_refresh={force_refresh})"
         )
 
+        # === 시장 공포 윈도우 (#2/#3): 스캔당 1회 계산, fail-open ===
+        # KOSPI(또는 대형주 프록시) 종가로 시장 레짐을 판정하고, 개별 종목 프록시를 대체한다.
+        market_fear_window_open = False
+        if settings.fear_buy_window_enabled:
+            try:
+                market_closes, _mts, _src = await get_kospi_or_proxy_closes(session, days=400)
+                market_fear_window_open = TechnicalIndicators.is_market_fear_recent(
+                    market_closes, window=settings.fear_buy_window_days
+                )
+                logger.info(
+                    f"[GC Scan] market regime source={_src} closes={len(market_closes)} "
+                    f"fear_window_open={market_fear_window_open}"
+                )
+            except Exception as e:  # noqa: BLE001 - fail-open: 데이터 오류 시 평온 가정
+                logger.warning(
+                    f"[GC Scan] market fear load failed, fail-open (calm assumed): {e}"
+                )
+                market_fear_window_open = False
+
         # 2. 종목별 기술적 지표 계산
 
         # 캐시 통계 추적
@@ -269,24 +293,26 @@ class BuyStrategyService:
 
                         is_gc_active = ma_short > ma_long
 
-                        # New rule: Golden Cross + RSI <= 40 (user specified)
-                        if is_gc_active and (rsi is None or rsi > 40):
-                            # GC active but RSI not sufficiently oversold -> skip for new rule
-                            # (keep for backward if needed, or adjust)
-                            pass  # currently still include GC active; tighten below if wanted
+                        # === 매수 후보 판정 (#A GC+RSI, #2/#3 fear-window) ===
+                        # GC 후보: 골든크로스 활성 + (옵션) RSI 과매도 (사용자 지정 GC+RSI<=40)
+                        gc_pass = is_gc_active
+                        if is_gc_active and settings.gc_require_rsi_oversold:
+                            gc_pass = rsi is not None and rsi <= settings.gc_rsi_threshold
 
-                        # === 시장 공포 필터 (BB 20,2 + expanding bandwidth) ===
-                        # Fear Buy 전략에서 시장이 공포 구간이 아닐 때 매수 차단
-                        if not TechnicalIndicators.is_market_fear_by_bollinger(
-                            # 간단 proxy: 주요 종목 평균 (실제 KOSPI 데이터 로드 후 교체)
-                            # TODO: KOSPI closes 로 교체 (backfill_kospi.py 실행 후)
-                            [float(x) for x in df["close"].tail(30).values]  # proxy using current df
-                        ):
-                            # 시장 공포 아님 -> 이 종목 Fear Buy 스킵
-                            if not is_gc_active:  # GC 모드에서는 통과
-                                continue
+                        # Fear-buy 후보: 시장 공포 윈도우 열림 + 개별 과매도(RSI 임계).
+                        # 위상차 흡수를 위해 '동일봉 AND'가 아니라 최근 N일 윈도우로 판정한다.
+                        fear_pass = (
+                            settings.fear_buy_window_enabled
+                            and market_fear_window_open
+                            and rsi is not None
+                            and rsi <= settings.fear_buy_rsi_threshold
+                        )
 
-                        if gc_only and not is_gc_active:
+                        # fear-buy는 gc_only와 무관하게 통과시킨다(#2/#3: 라이브 알림 경로에서
+                        # 실제로 동작하도록). fear_pass는 fear_buy_window_enabled + 실제 시장 공포
+                        # 윈도우 + 개별 과매도가 모두 성립할 때만 True라 노출량은 제한적이다.
+                        # gc_only=True여도 GC 후보(gc_pass)와 fear-buy 후보(fear_pass)만 통과.
+                        if not (gc_pass or fear_pass):
                             continue
 
                         ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
@@ -300,6 +326,10 @@ class BuyStrategyService:
                             prev_stoch_k=prev_stoch_k,
                             recent_oversold=self._has_recent_oversold(df, stoch_threshold),
                         )
+                        # fear-buy 전용 후보(비-GC)는 FEAR_BUY로 태깅 → 추천/알림에서 선택 가능
+                        # (그렇지 않으면 NOT_GC로 분류되어 OPTIMAL_BUY 필터에서 탈락)
+                        if fear_pass and not gc_pass and not is_gc_active:
+                            gc_state = "FEAR_BUY"
 
                         worker_results.append(
                             (
@@ -548,9 +578,13 @@ class BuyStrategyService:
                 # 골든크로스 상태 판정
                 is_gc_active = ma_short > ma_long
 
-                # New rule (user specified): Golden Cross + RSI <= 40 (일봉 종가)
-                if is_gc_active and (rsi is None or rsi > 40):
-                    continue  # GC 활성 + RSI 40 이하 조건만 추천
+                # [#A] Golden Cross + RSI <= 임계 (config 토글, scan_golden_cross_candidates와 일관)
+                if (
+                    is_gc_active
+                    and settings.gc_require_rsi_oversold
+                    and (rsi is None or rsi > settings.gc_rsi_threshold)
+                ):
+                    continue
 
                 # gc_only 필터
                 if gc_only and not is_gc_active:

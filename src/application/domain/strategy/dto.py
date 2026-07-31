@@ -583,7 +583,7 @@ class GoldenCrossScanItemDTO(BaseDTO):
     # 상태
     is_gc_active: bool = Field(description="골든크로스 활성 여부 (MA55 > MA165)")
     gc_state: str = Field(
-        description="골든크로스 상태 (NOT_GC, GC_ACTIVE, WAITING_FOR_PULLBACK, BUY_INTEREST, READY_TO_BUY, OPTIMAL_BUY)"
+        description="골든크로스 상태 (NOT_GC, GC_ACTIVE, WAITING_FOR_PULLBACK, BUY_INTEREST, READY_TO_BUY, OPTIMAL_BUY, FEAR_BUY)"
     )
 
     # 추가 정보
