@@ -188,7 +188,7 @@ async def ops_summary(
             {
                 "severity": "warning",
                 "title": "Sell notification",
-                "message": "매도 알림 실행 로직이 아직 비활성/미완성 상태입니다.",
+                "message": "매도 정보 Telegram 메시지 스케줄러가 제거되었습니다. (SELL_NOTIFICATION_ENABLED=false)",
             }
         )
     if pending_orders:

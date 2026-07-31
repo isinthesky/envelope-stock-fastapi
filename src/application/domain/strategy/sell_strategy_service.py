@@ -437,6 +437,7 @@ class SellStrategyService:
         merge_strategy: str = "conservative",
         name: str | None = None,
         market: str | None = None,
+        sell_mode: str = "hybrid",  # "legacy", "simple", "hybrid"
     ) -> SellSignalAnalysisDTO:
         """
         매도 시그널 분석
@@ -518,6 +519,15 @@ class SellStrategyService:
         stoch_k = stoch_k_raw if stoch_k_raw is not None else 50
         stoch_d = stoch_d_raw if stoch_d_raw is not None else 50
         rsi = rsi_raw if rsi_raw is not None else 50
+
+        # === New: Compute simple sell for comparison/hybrid ===
+        simple_sell_info = self.compute_simple_sell_signal(
+            df=df,
+            rsi=rsi,
+            current_price=close,
+            entry_price=entry_price,
+            highest_price=highest_price,
+        )
 
         # 3-1. 52주 신고가 체크
         (
@@ -754,6 +764,15 @@ class SellStrategyService:
             f"adx={adx_indicators.get('adx')}, "
             f"volume_spike={volume_indicators.get('is_volume_spike')}"
         )
+
+
+        # Mode support (simple/hybrid) - simple_compute already injected earlier
+        # For full hybrid stage upgrade, use analyze_sell_signal_hybrid or post-process the DTO
+        if sell_mode in ("simple", "hybrid") and "simple_sell_info" in locals():
+            if simple_sell_info.get("should_sell"):
+                # Append to reasons for visibility
+                if "sell_reasons" in locals():
+                    sell_reasons = list(sell_reasons) + ["[MODE:" + sell_mode + "] " + r for r in simple_sell_info.get("reasons", [])]
 
         return SellSignalAnalysisDTO(
             symbol=symbol,
@@ -1850,3 +1869,120 @@ class SellStrategyService:
             return default_stage, reasons
 
         return SellStageEnum.HOLD, reasons
+
+
+
+    def compute_simple_sell_signal(
+        self,
+        df: pd.DataFrame,
+        rsi: float,
+        current_price: float,
+        entry_price: float | None = None,
+        highest_price: float | None = None,
+    ) -> dict:
+        """
+        단순 매도 규칙 (사용자 지정, 수정됨 2026-07-31):
+        - RSI >= 70 **AND** 하락 시작 확인 (RSI만으로는 선제 매도 안 함)
+        - 최근 20일 고점(일봉 종가) 대비 15% 이탈
+        - 85% 수익 지키기 (peak profit의 85% 보호)
+        """
+        reasons = []
+        should_sell = False
+
+        # 1. RSI >=70 + 하락 시작 확인 (사용자 요청 반영)
+        if rsi is not None and rsi >= 70:
+            decline_confirmed = False
+            decline_detail = ""
+
+            if len(df) >= 2 and "close" in df.columns:
+                prev_close = float(df["close"].iloc[-2])
+                if current_price < prev_close:
+                    decline_confirmed = True
+                    decline_detail = f" (전일 종가 {prev_close:.0f} → 현재 하락)"
+
+            if decline_confirmed:
+                should_sell = True
+                reasons.append(f"RSI 과매수 + 하락 시작 (RSI={rsi:.1f}){decline_detail}")
+            else:
+                # RSI 70 넘었지만 하락 미확인 → 매도 사유로 추가하지 않음
+                reasons.append(f"RSI 과매수 상태 (RSI={rsi:.1f}) — 하락 시작 미확인 (매도 보류)")
+        # 참고: RSI < 70이면 이 블록 스킵
+
+        # 2. 20일 고점 대비 15% 이탈 (일봉 종가) — 기계적 손절
+        if len(df) >= 20 and "close" in df.columns:
+            recent_20d_high = float(df["close"].tail(20).max())
+            if current_price < recent_20d_high * 0.85:
+                should_sell = True
+                dd = (recent_20d_high - current_price) / recent_20d_high
+                reasons.append(f"20일 고점 15% 이탈 (고점={recent_20d_high:.0f}, DD={dd:.1%})")
+
+        # 3. 85% 수익 지키기 — 기계적 보호
+        if entry_price and highest_price and highest_price > entry_price and current_price:
+            peak_profit = (highest_price - entry_price) / entry_price
+            curr_profit = (current_price - entry_price) / entry_price
+            if curr_profit < peak_profit * 0.85:
+                should_sell = True
+                reasons.append(f"85% 수익 보호 트리거 (peak={peak_profit:.1%}, 현재={curr_profit:.1%})")
+
+        return {
+            "should_sell": should_sell,
+            "reasons": reasons or ["단순 규칙 미발동"],
+            "recent_20d_high": float(df["close"].tail(20).max()) if len(df) >= 20 and "close" in df.columns else None,
+        }
+
+
+    def analyze_sell_signal_hybrid(
+        self,
+        symbol: str,
+        **kwargs,
+    ) -> dict:
+        """하이브리드: 기존 Legacy Phase + 단순 규칙 (보수적 overlay)
+
+        - 20일 15% 이탈, 85% 수익보호: 기계적 강제 (리스크 관리)
+        - RSI >=70 + 하락 시작: Legacy가 이미 약한 매도 신호를 낼 때만 업그레이드
+        - 전체적으로 Legacy의 보수성을 최대한 유지 (적은 거래 선호)
+        """
+        legacy_result = self.analyze_sell_signal(symbol, **kwargs)
+        simple = self.compute_simple_sell_signal(
+            df=kwargs.get("df", None) or pd.DataFrame(),
+            rsi=legacy_result.rsi if hasattr(legacy_result, 'rsi') else None,
+            current_price=legacy_result.current_price if hasattr(legacy_result, 'current_price') else 0,
+            entry_price=kwargs.get("entry_price"),
+            highest_price=kwargs.get("highest_price"),
+        )
+
+        final_stage = legacy_result.final_stage
+        added_reasons = []
+
+        if simple.get("should_sell"):
+            simple_reasons = simple.get("reasons", [])
+
+            # 기계적 보호 규칙 (15% DD, 85% 보호)은 강하게 적용
+            mechanical = any("15% 이탈" in r or "85% 수익 보호" in r for r in simple_reasons)
+            rsi_decline = any("RSI 과매수 + 하락 시작" in r for r in simple_reasons)
+
+            if mechanical:
+                # 기계적 리스크는 강제 업그레이드
+                if final_stage in (SellStageEnum.HOLD, SellStageEnum.REDUCE_1):
+                    final_stage = SellStageEnum.REDUCE_2
+                added_reasons.append("[HYBRID] 기계적 보호 규칙 트리거")
+
+            if rsi_decline:
+                # RSI + 하락은 Legacy가 이미 매도 기운일 때만 업그레이드
+                if final_stage not in (SellStageEnum.HOLD, SellStageEnum.REDUCE_1):
+                    # 이미 매도 쪽이면 한 단계 더 강하게
+                    if final_stage == SellStageEnum.REDUCE_1:
+                        final_stage = SellStageEnum.REDUCE_2
+                    added_reasons.append("[HYBRID] RSI+하락 확인 → 가속")
+                else:
+                    # Legacy가 HOLD면 그냥 이유만 추가 (강제 업그레이드 안 함)
+                    added_reasons.append("[HYBRID] RSI+하락 감지 (Legacy HOLD 유지)")
+
+            if added_reasons:
+                legacy_result.sell_reasons = list(legacy_result.sell_reasons) + added_reasons + simple_reasons
+
+        return {
+            "legacy": legacy_result,
+            "simple": simple,
+            "hybrid_stage": final_stage,
+        }

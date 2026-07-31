@@ -2,15 +2,14 @@
 """
 Notification Scheduler - 전략 알림 스케줄러
 
-APScheduler 기반 스케줄링:
-- 09:20 (월~금): 09:30 매도 알림용 현재가/분석 데이터 갱신
-- 09:30 (월~금): 매도 권장 종목 Telegram 알림
+APScheduler 기반 스케줄링 (매수만):
 - 11:20 (월~금): 11:30 매수 알림용 현재가/추천 데이터 갱신
 - 11:30 (월~금): 골든크로스 추천 종목 Telegram 알림
-- 12:20 (월~금): 12:30 매도 알림용 현재가/분석 데이터 갱신
-- 12:30 (월~금): 매도 권장 종목 Telegram 알림
 - 14:20 (월~금): 14:30 매수 알림용 현재가/추천 데이터 갱신
 - 14:30 (월~금): 골든크로스 추천 종목 Telegram 알림
+
+매도 정보 Telegram msg 스케줄러는 제거됨.
+SELL_NOTIFICATION_ENABLED=false 로 제어 (기본 비활성).
 """
 
 import asyncio
@@ -54,10 +53,11 @@ class NotificationScheduler:
     """
     전략 알림 스케줄러
 
-    APScheduler 기반으로 매수/매도 알림을 스케줄링합니다.
-    - 09:30 / 12:30: 매도 분석 갱신 후 SELL/STRONG_SELL 종목 알림
-    - 11:30 / 14:30: 골든크로스 추천 종목 알림
-    - 각 알림 10분 전 현재가/추천 계산용 데이터 재갱신
+    APScheduler 기반으로 매수 알림만 스케줄링합니다.
+    - 11:30 / 14:30: 골든크로스 추천 종목 Telegram 알림
+
+    매도 정보 Telegram msg 스케줄러(09:30/12:30)는 제거됨.
+    (sell_notification_enabled=false)
     """
 
     ETF_LEADER_MAP: dict[str, tuple[str, str]] = {
@@ -377,7 +377,8 @@ class NotificationScheduler:
                 key=lambda item: item.get("recorded_at", ""),
                 reverse=True,
             )[:8],
-            "sell_notification_available": True,
+            "sell_notification_enabled": getattr(settings, "sell_notification_enabled", False),
+            "sell_notification_available": getattr(settings, "sell_notification_enabled", False),
         }
 
     async def start(self) -> None:
@@ -436,40 +437,45 @@ class NotificationScheduler:
                     "(BUY_NOTIFICATION_ENABLED=false) - 11:30/14:30 jobs not registered"
                 )
 
-            for update_hour, update_minute, notify_hour, notify_minute, label in self.SELL_SLOTS:
-                self.scheduler.add_job(
-                    self._sell_data_update_job,
-                    CronTrigger(
-                        day_of_week="mon-fri",
-                        hour=update_hour,
-                        minute=update_minute,
-                        timezone=KST,
-                    ),
-                    kwargs={"slot_label": label},
-                    id=f"sell_data_update_{notify_hour:02d}{notify_minute:02d}",
-                    name=f"Sell Data Update ({label} alert prep)",
-                    replace_existing=True,
-                )
-                self.scheduler.add_job(
-                    self._sell_notification_job,
-                    CronTrigger(
-                        day_of_week="mon-fri",
-                        hour=notify_hour,
-                        minute=notify_minute,
-                        timezone=KST,
-                    ),
-                    kwargs={"slot_label": label},
-                    id=f"sell_notification_{notify_hour:02d}{notify_minute:02d}",
-                    name=f"Sell Signal Notification ({label})",
-                    replace_existing=True,
+            if getattr(settings, "sell_notification_enabled", False):
+                for update_hour, update_minute, notify_hour, notify_minute, label in self.SELL_SLOTS:
+                    self.scheduler.add_job(
+                        self._sell_data_update_job,
+                        CronTrigger(
+                            day_of_week="mon-fri",
+                            hour=update_hour,
+                            minute=update_minute,
+                            timezone=KST,
+                        ),
+                        kwargs={"slot_label": label},
+                        id=f"sell_data_update_{notify_hour:02d}{notify_minute:02d}",
+                        name=f"Sell Data Update ({label} alert prep)",
+                        replace_existing=True,
+                    )
+                    self.scheduler.add_job(
+                        self._sell_notification_job,
+                        CronTrigger(
+                            day_of_week="mon-fri",
+                            hour=notify_hour,
+                            minute=notify_minute,
+                            timezone=KST,
+                        ),
+                        kwargs={"slot_label": label},
+                        id=f"sell_notification_{notify_hour:02d}{notify_minute:02d}",
+                        name=f"Sell Signal Notification ({label})",
+                        replace_existing=True,
+                    )
+            else:
+                logger.info(
+                    "[NotificationScheduler] Sell notifications disabled "
+                    "(SELL_NOTIFICATION_ENABLED=false) - 09:30/12:30 jobs not registered"
                 )
 
             self.scheduler.start()
             self.is_running = True
             logger.info(
                 "[NotificationScheduler] Started - "
-                "Data Update: 09:20/11:20/12:20/14:20, "
-                "Notifications: 09:30/11:30/12:30/14:30 (Mon-Fri)"
+                "Buy only (sell scheduler removed): 11:20/11:30, 14:20/14:30 (Mon-Fri)"
             )
 
         except ImportError:

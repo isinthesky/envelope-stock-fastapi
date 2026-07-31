@@ -146,6 +146,27 @@ class TechnicalIndicators:
         return rsi
 
     @classmethod
+    def calculate_rsi_series(cls, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """RSI 시리즈 계산 (DataFrame용, Wilder's 스타일 근사).
+
+        prepare_golden_cross_indicators에서 사용하기 위한 헬퍼.
+        """
+        if len(df) < period + 1 or "close" not in df.columns:
+            return pd.Series([50.0] * len(df), index=df.index)
+
+        delta = df["close"].diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = (-delta.where(delta < 0, 0.0))
+
+        # Wilder's smoothing 근사 (SMA 초기화 후)
+        avg_gain = gain.rolling(window=period).mean()
+        avg_loss = loss.rolling(window=period).mean()
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi.fillna(50.0)
+
+    @classmethod
     def generate_bollinger_signal(
         cls,
         current_price: float,
@@ -510,6 +531,8 @@ class TechnicalIndicators:
         long_ma_period: int = 165,
         stoch_k_period: int = 14,
         stoch_d_period: int = 3,
+        rsi_period: int = 14,
+        include_rsi: bool = False,
     ) -> pd.DataFrame:
         """
         골든크로스 전략에 필요한 모든 지표 계산
@@ -520,16 +543,15 @@ class TechnicalIndicators:
             long_ma_period: 장기 MA 기간 (기본: 165)
             stoch_k_period: Stochastic %K 기간 (기본: 14)
             stoch_d_period: Stochastic %D 기간 (기본: 3)
+            rsi_period: RSI 기간 (기본: 14)
+            include_rsi: True면 RSI 컬럼 추가 (GC + RSI 혼합용)
 
         Returns:
             pd.DataFrame: 지표가 추가된 데이터프레임
-                - ma_short: 단기 이동평균
-                - ma_long: 장기 이동평균
-                - stoch_k: Stochastic %K
-                - stoch_d: Stochastic %D
-                - is_gc_active: 골든크로스 활성 상태
-                - gc_signal: 골든크로스 발생 시그널
-                - dc_signal: 데드크로스 발생 시그널
+                - ma_short, ma_long
+                - stoch_k, stoch_d
+                - is_gc_active, gc_signal, dc_signal
+                - rsi (include_rsi=True 시)
         """
         result_df = df.copy()
 
@@ -552,6 +574,11 @@ class TechnicalIndicators:
         result_df["dc_signal"] = TechnicalIndicators.detect_dead_cross(
             result_df["ma_short"], result_df["ma_long"]
         )
+
+        if include_rsi:
+            result_df["rsi"] = TechnicalIndicators.calculate_rsi_series(
+                result_df, rsi_period
+            )
 
         return result_df
 
@@ -1055,3 +1082,32 @@ class TechnicalIndicators:
         if adx is None or plus_di is None or minus_di is None:
             return False
         return adx > adx_threshold and minus_di > plus_di
+
+
+    @staticmethod
+    def is_market_fear_by_bollinger(closes: list[float], period: int = 20, std_mult: float = 2.0) -> bool:
+        """
+        시장 공포 필터 (BB 20,2 하단 이탈 + 밴드폭 확대)
+        추천 조합: KOSPI (또는 proxy) 가 볼린저 하단을 뚫고 변동성이 확대되는 구간
+        """
+        if len(closes) < 25:
+            return False
+        bb = TechnicalIndicators.calculate_bollinger_bands(closes[-period-1:], period=period, std_multiplier=std_mult)
+        if bb["lower"] is None:
+            return False
+        close = closes[-1]
+        lower = bb["lower"]
+        middle = bb["middle"]
+        upper = bb["upper"]
+        bw = (upper - lower) / middle if middle and middle > 0 else 0
+
+        # 최근 5일 평균 bandwidth
+        prev_bws = []
+        for j in range(-6, -1):
+            w = closes[j - period : j + 1] if j - period >= 0 else []
+            if len(w) >= period:
+                b = TechnicalIndicators.calculate_bollinger_bands(w, period=period, std_multiplier=std_mult)
+                if b["middle"]:
+                    prev_bws.append((b["upper"] - b["lower"]) / b["middle"])
+        avg_prev = sum(prev_bws) / len(prev_bws) if prev_bws else bw
+        return close < lower and bw > avg_prev * 1.10

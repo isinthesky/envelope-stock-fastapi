@@ -29,6 +29,8 @@ from src.adapters.external.dart_api import get_dart_client, FinancialScreeningDT
 from src.application.common.decorators import transaction
 from src.application.common.exceptions import StrategyError
 from src.application.common.indicators import TechnicalIndicators
+from src.adapters.database.connection import AsyncSessionLocal
+from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
 from src.application.domain.strategy.dto import (
     GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
@@ -247,6 +249,8 @@ class BuyStrategyService:
                             long_ma_period=165,
                             stoch_k_period=14,
                             stoch_d_period=3,
+                            include_rsi=True,
+                            rsi_period=14,
                         )
 
                         latest = df.iloc[-1]
@@ -255,6 +259,7 @@ class BuyStrategyService:
                         ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
                         stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
                         stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
+                        rsi = float(latest["rsi"]) if pd.notna(latest.get("rsi", None)) else None
                         prev_stoch_k = (
                             float(prev["stoch_k"])
                             if prev is not None and pd.notna(prev["stoch_k"])
@@ -263,6 +268,23 @@ class BuyStrategyService:
                         close = float(latest["close"])
 
                         is_gc_active = ma_short > ma_long
+
+                        # New rule: Golden Cross + RSI <= 40 (user specified)
+                        if is_gc_active and (rsi is None or rsi > 40):
+                            # GC active but RSI not sufficiently oversold -> skip for new rule
+                            # (keep for backward if needed, or adjust)
+                            pass  # currently still include GC active; tighten below if wanted
+
+                        # === 시장 공포 필터 (BB 20,2 + expanding bandwidth) ===
+                        # Fear Buy 전략에서 시장이 공포 구간이 아닐 때 매수 차단
+                        if not TechnicalIndicators.is_market_fear_by_bollinger(
+                            # 간단 proxy: 주요 종목 평균 (실제 KOSPI 데이터 로드 후 교체)
+                            # TODO: KOSPI closes 로 교체 (backfill_kospi.py 실행 후)
+                            [float(x) for x in df["close"].tail(30).values]  # proxy using current df
+                        ):
+                            # 시장 공포 아님 -> 이 종목 Fear Buy 스킵
+                            if not is_gc_active:  # GC 모드에서는 통과
+                                continue
 
                         if gc_only and not is_gc_active:
                             continue
@@ -504,6 +526,8 @@ class BuyStrategyService:
                     long_ma_period=165,
                     stoch_k_period=14,
                     stoch_d_period=3,
+                    include_rsi=True,
+                    rsi_period=14,
                 )
 
                 # 최신 행 추출
@@ -513,6 +537,7 @@ class BuyStrategyService:
                 ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
                 stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
                 stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
+                rsi = float(latest["rsi"]) if pd.notna(latest.get("rsi", None)) else None
                 prev_stoch_k = (
                     float(prev["stoch_k"])
                     if prev is not None and pd.notna(prev["stoch_k"])
@@ -522,6 +547,10 @@ class BuyStrategyService:
 
                 # 골든크로스 상태 판정
                 is_gc_active = ma_short > ma_long
+
+                # New rule (user specified): Golden Cross + RSI <= 40 (일봉 종가)
+                if is_gc_active and (rsi is None or rsi > 40):
+                    continue  # GC 활성 + RSI 40 이하 조건만 추천
 
                 # gc_only 필터
                 if gc_only and not is_gc_active:

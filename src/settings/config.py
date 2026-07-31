@@ -269,6 +269,9 @@ class Settings(BaseSettings):
     buy_notification_enabled: bool = Field(
         default=True, description="매수 추천 알림(11:30/14:30) 활성화"
     )
+    sell_notification_enabled: bool = Field(
+        default=False, description="매도 신호 알림(09:30/12:30) 활성화"
+    )
 
     # ==================== DART API 설정 ====================
     dart_open_api_key: str = Field(default="", description="DART Open API 키")
