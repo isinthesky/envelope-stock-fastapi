@@ -9,6 +9,11 @@
 {% block content %}
 <h1>매도 전략 분석</h1>
 <p>보유 종목의 기술적 지표를 분석하여 매도 시점을 추천합니다.</p>
+{% if etf_universe_enabled %}
+<p style="font-size:12px; color:#0369a1; background:#e0f2fe; display:inline-block; padding:4px 10px; border-radius:8px; margin:2px 0;">
+  📊 유니버스: <strong>ETF {{ etf_universe_count }}종</strong> · 종목코드는 ETF 기준으로 입력하세요
+</p>
+{% endif %}
 
 <section class="strategy-info">
   <h2>매도 시그널 분석 전략</h2>
@@ -31,7 +36,7 @@
   <h2>종목 분석</h2>
   <div class="row">
     <label>종목코드</label>
-    <input type="text" id="symbol_input" placeholder="예: 005930" style="width: 120px;" />
+    <input type="text" id="symbol_input" placeholder="예: 069500 (KODEX 200)" style="width: 160px;" />
     <button onclick="analyzeSellSignal()">매도 시그널 분석</button>
   </div>
   <div class="row" style="margin-top: 8px;">
@@ -92,6 +97,7 @@
     <label>시장</label>
     <select id="universe_market_filter" style="width: 120px;">
       <option value="">전체</option>
+      <option value="ETF"{% if etf_universe_enabled %} selected{% endif %}>ETF</option>
       <option value="KOSPI">KOSPI</option>
       <option value="KOSDAQ">KOSDAQ</option>
     </select>
@@ -123,7 +129,7 @@
   <p>고정 후보 규칙을 요청 기간의 train/test 창으로 나누어 OOS 성능과 definition_hash를 확인합니다.</p>
   <div class="row">
     <label>종목코드</label>
-    <input id="preregistered_symbols" type="text" placeholder="005930,000660" style="width: 180px;" />
+    <input id="preregistered_symbols" type="text" placeholder="069500,102110" style="width: 180px;" />
     <label style="margin-left: 12px;">시작일</label>
     <input id="preregistered_start_date" type="date" value="2024-01-01" style="width: 150px;" />
     <label style="margin-left: 12px;">종료일</label>

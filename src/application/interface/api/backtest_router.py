@@ -5,7 +5,7 @@ Backtest Router - 백테스팅 API 엔드포인트
 
 from datetime import date, datetime, time
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.application.common.dependencies import (
     AdminAccessDep,
@@ -27,6 +27,7 @@ from src.application.domain.backtest.service import BacktestService
 from src.application.domain.market_data.service import MarketDataService
 from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
 from src.application.domain.strategy.dto import StrategyConfigDTO
+from src.settings.config import settings
 
 router = APIRouter(prefix="/api/v1/backtest", tags=["Backtest"])
 
@@ -66,8 +67,10 @@ async def run_universe_golden_cross_backtest(
     admin_access: AdminAccessDep = None,
 ):
     base_strategy_params = {
-        "short_period": 55,
-        "long_period": 165,
+        # 후보 스캔(scan_golden_cross_candidates)과 동일한 config MA를 기본값으로 사용
+        # (요청자가 strategy_params로 override 가능) — 후보/백테스트 MA 불일치 방지
+        "short_period": settings.gc_short_ma_period,
+        "long_period": settings.gc_long_ma_period,
         "stoch_k_period": 14,
         "stoch_d_period": 3,
         "stoch_oversold": 30.0,
@@ -86,13 +89,45 @@ async def run_universe_golden_cross_backtest(
     if request.strategy_params:
         base_strategy_params.update(request.strategy_params)
 
+    # strategy_params override MA 검증(자유 dict라 settings 불변식을 우회 → 여기서 방어).
+    # 잘못된 값이 후보 스캔/지표 계산으로 흘러들어 후보 왜곡·0건을 유발하지 않게 한다.
+    try:
+        _short_ma = int(base_strategy_params["short_period"])
+        _long_ma = int(base_strategy_params["long_period"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=422,
+            detail="strategy_params.short_period/long_period는 정수여야 합니다.",
+        )
+    if _short_ma <= 0 or _long_ma <= 0 or _short_ma >= _long_ma:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "MA 기간이 유효하지 않습니다: 0 < short_period < long_period 이어야 합니다 "
+                f"(short={_short_ma}, long={_long_ma})."
+            ),
+        )
+    # 정규화한 정수를 dict에 되써서 후보 스캔과 백테스트 엔진이 동일한 정수 MA를 쓰게 함
+    # ("20"/20.9 같은 값이 스캔은 int, 엔진은 원본으로 흘러 불일치/타입오류가 나지 않도록)
+    base_strategy_params["short_period"] = _short_ma
+    base_strategy_params["long_period"] = _long_ma
+
+    # include_etf: 명시값 우선, 미지정(None)이면 운영 유니버스 모드를 기본 적용
+    include_etf = (
+        request.include_etf
+        if request.include_etf is not None
+        else settings.etf_universe_enabled
+    )
     buy_service = BuyStrategyService(session=session)
     scan = await buy_service.scan_golden_cross_candidates(
         market=request.market,
         stoch_threshold=float(base_strategy_params.get("stoch_oversold", 30.0)),
         gc_only=False,
-        include_etf=False,
+        include_etf=include_etf,
         limit=max(request.limit * 5, request.limit),
+        # 후보 선정 MA를 백테스트 MA와 일치시킴(검증된 override 값 반영)
+        short_ma_period=_short_ma,
+        long_ma_period=_long_ma,
     )
 
     preferred_states = ["OPTIMAL_BUY", "READY_TO_BUY", "BUY_INTEREST", "WAITING_FOR_PULLBACK"]

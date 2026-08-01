@@ -696,7 +696,111 @@ class StrategyService:
         )
         universe_size_before = int(count_res.scalar() or 0)
 
-        if universe_size_before < target_universe_size:
+        if settings.etf_universe_enabled:
+            # ETF 유니버스 모드: 개별주 전량 비활성화 후 지정 ETF만 시드(market=ETF)
+            # 이후 get_active_stocks/스캔 경로가 ETF-only를 반환 → 개별주 매수 알림 자동 소멸
+            import logging as _logging
+
+            _etf_logger = _logging.getLogger(__name__)
+            etf_symbols = [
+                s.strip() for s in settings.etf_universe_symbols if s and s.strip()
+            ]
+            # ETF 실제명(예: "KODEX 200")은 네이버 통합 API의 stockName에서만 얻는다.
+            # (KIS 현재가는 ETF에 일반명 "ETF(실물복제/수익증권)"만 반환)
+            naver_client_seed = get_naver_stock_client()
+            name_timeout = 8.0
+            name_phase_timeout = 150.0
+            name_concurrency = 8
+
+            if not etf_symbols:
+                # ETF 모드인데 심볼 목록이 비어 있으면 설정 오류. 그래도 개별주는 반드시
+                # 비활성화(개별주 알림 방지). 결과는 빈 유니버스(알림 없음) = fail-safe.
+                _etf_logger.error(
+                    "[universe.refresh] ETF_UNIVERSE_ENABLED이지만 etf_universe_symbols가 "
+                    "비어 있음 → 개별주 전량 비활성화(빈 ETF 유니버스). 설정을 확인하세요."
+                )
+
+            # 기존 행의 이름/제외/거래가능 상태를 보존한다
+            # (이름: 코드로 덮어쓰기 방지 / 제외·거래가능: 운영자 수동 제외 유지)
+            existing_rows_res = await session.execute(
+                select(
+                    StockUniverseModel.symbol,
+                    StockUniverseModel.name,
+                    StockUniverseModel.is_excluded,
+                    StockUniverseModel.is_tradable,
+                ).where(StockUniverseModel.symbol.in_(etf_symbols))
+            )
+            existing_meta = {
+                row[0]: {"name": row[1], "is_excluded": row[2], "is_tradable": row[3]}
+                for row in existing_rows_res.all()
+            }
+            existing_names = {s: m["name"] for s, m in existing_meta.items()}
+
+            name_sem = asyncio.Semaphore(name_concurrency)
+
+            async def _resolve_etf_name(sym: str) -> tuple[str, bool]:
+                """(name, fetched_ok). 실패 시 기존명 유지, 없으면 심볼."""
+                async with name_sem:
+                    try:
+                        stock_name = await asyncio.wait_for(
+                            naver_client_seed.get_stock_name(sym), timeout=name_timeout
+                        )
+                        if stock_name:
+                            return stock_name, True
+                    except asyncio.CancelledError:
+                        raise  # 외부 취소는 전파(중단 시 이후 DB 변경 방지)
+                    except Exception:
+                        pass
+                return (existing_names.get(sym) or sym), False
+
+            # bounded 동시성 + 단계 전체 timeout(전체 refresh timeout 밖 장기 지연 방지).
+            # CancelledError(외부 취소/셧다운)는 삼키지 않고 전파한다. timeout만 폴백.
+            try:
+                resolved = await asyncio.wait_for(
+                    asyncio.gather(*[_resolve_etf_name(s) for s in etf_symbols]),
+                    timeout=name_phase_timeout,
+                )
+            except asyncio.TimeoutError:
+                resolved = [
+                    ((existing_names.get(s) or s), False) for s in etf_symbols
+                ]
+                _etf_logger.warning(
+                    "[universe.refresh] ETF name-fetch phase timed out "
+                    f"(>{name_phase_timeout}s); fell back to existing/symbol names"
+                )
+
+            name_fetch_failures = sum(1 for _n, ok in resolved if not ok)
+            if name_fetch_failures:
+                _etf_logger.warning(
+                    f"[universe.refresh] ETF name fetch: {name_fetch_failures}/"
+                    f"{len(etf_symbols)} kept existing/symbol name (naver miss)"
+                )
+
+            etf_rows = [
+                {
+                    "symbol": sym,
+                    "name": name,
+                    "market": MarketType.ETF.value,
+                    "is_active": True,
+                    # 기존 행의 제외/거래가능 상태 보존(운영자 수동 제외가 매 refresh마다 부활하지 않게).
+                    # 신규 행만 기본값(미제외/거래가능).
+                    "is_excluded": existing_meta.get(sym, {}).get("is_excluded", False),
+                    "is_tradable": existing_meta.get(sym, {}).get("is_tradable", True),
+                }
+                for sym, (name, _ok) in zip(etf_symbols, resolved)
+            ]
+
+            # ETF 모드는 항상 개별주를 비활성화한다(etf_rows가 비어도 fail-safe).
+            # seed는 별도 세션에서 커밋해 worker/현재 세션에서도 즉시 보이게 함.
+            async with AsyncSessionLocal() as seed_session:
+                seed_repo = StockUniverseRepository(seed_session)
+                await seed_repo.deactivate_all(session=seed_session)
+                if etf_rows:
+                    await seed_repo.bulk_upsert(etf_rows, session=seed_session)
+                await seed_session.commit()
+            seeded = len(etf_rows)
+            await session.rollback()
+        elif universe_size_before < target_universe_size:
             import re
 
             import httpx
@@ -984,6 +1088,20 @@ class StrategyService:
             f"[universe.refresh] done: target={len(target_stocks)} updated={total_updated} screened={total_screened} errors={total_error_count} warnings={warning_counts} timed_out={timed_out} elapsed={elapsed:.1f}s"
         )
 
+        # 실제 활성 유니버스 크기를 재집계(ETF 모드는 deactivate_all 후 ETF만 활성화하므로
+        # before+seeded 산식이 부정확 → 커밋된 활성 행을 직접 count)
+        if session.in_transaction():
+            await session.rollback()
+        after_count_res = await session.execute(
+            select(func.count())
+            .select_from(StockUniverseModel)
+            .where(
+                StockUniverseModel.is_active == True,
+                StockUniverseModel.is_excluded == False,
+            )
+        )
+        universe_size_after = int(after_count_res.scalar() or 0)
+
         return {
             "success": (not timed_out),
             "message": message,
@@ -993,7 +1111,7 @@ class StrategyService:
             "screened": total_screened,
             "seeded": seeded,
             "universe_size_before": universe_size_before,
-            "universe_size_after": universe_size_before + seeded,
+            "universe_size_after": universe_size_after,
             "concurrency": concurrency,
             "error_count": total_error_count,
             "errors_truncated": total_error_count > len(errors),

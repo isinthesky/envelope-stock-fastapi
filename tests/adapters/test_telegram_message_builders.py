@@ -10,6 +10,7 @@ from src.adapters.external.telegram.notifier import (
     build_no_sell_signals_message,
     build_sell_signals_summary_message,
 )
+from src.settings.config import settings
 
 
 class TestBuildSellSignalsSummaryMessage:
@@ -151,7 +152,8 @@ class TestBuildGoldenCrossRecommendationsMessage:
         assert "2. <b>한화오션</b> (042660)" in message
         assert "점수: 82.5" in message
         assert "Stoch K 22.1" in message
-        assert "MA55/165갭 +3.2%" in message
+        ma_label = f"MA{settings.gc_short_ma_period}/{settings.gc_long_ma_period}"
+        assert f"{ma_label}갭 +3.2%" in message
         assert "근거: 골든크로스 유지, 눌림목 도달" in message
         assert "👉 신규 매수 검토" in message
         assert "👉 매수 준비 — 눌림목 진입 대기" in message

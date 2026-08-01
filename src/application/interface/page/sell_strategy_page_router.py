@@ -23,5 +23,10 @@ async def sell_strategy_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "page/sell_strategy.html",
-        {"active_page": "sell_strategy", "static_version": settings.app_version},
+        {
+            "active_page": "sell_strategy",
+            "static_version": settings.app_version,
+            "etf_universe_enabled": settings.etf_universe_enabled,
+            "etf_universe_count": len(settings.etf_universe_symbols),
+        },
     )

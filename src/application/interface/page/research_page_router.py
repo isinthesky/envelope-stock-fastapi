@@ -31,6 +31,10 @@ async def research_page(request: Request) -> HTMLResponse:
             "static_version": settings.app_version,
             # 운영 반영된 전략 플래그 현재값(활성화 여부 표시)
             "flags": {
+                "etf_universe_enabled": settings.etf_universe_enabled,
+                "etf_universe_count": len(settings.etf_universe_symbols),
+                "gc_short_ma_period": settings.gc_short_ma_period,
+                "gc_long_ma_period": settings.gc_long_ma_period,
                 "gc_regime_filter_enabled": settings.gc_regime_filter_enabled,
                 "gc_regime_ma": settings.gc_regime_ma,
                 "gc_require_rsi_oversold": settings.gc_require_rsi_oversold,

@@ -355,7 +355,11 @@ class UniverseBacktestRequestDTO(BaseDTO):
 
     start_date: datetime = Field(description="시작일")
     end_date: datetime = Field(description="종료일")
-    market: str | None = Field(default=None, description="시장 필터 (KOSPI/KOSDAQ)")
+    market: str | None = Field(default=None, description="시장 필터 (KOSPI/KOSDAQ/ETF)")
+    include_etf: bool | None = Field(
+        default=None,
+        description="ETF 포함 여부(market 미지정 시). None이면 운영 etf_universe_enabled 값을 기본 적용",
+    )
     eligible_only: bool = Field(default=True, description="유니버스 적격 종목만 대상")
     limit: int = Field(default=20, description="백테스트 대상 최대 종목 수", ge=1, le=100)
     portfolio: bool = Field(default=False, description="공유 자본 포트폴리오 시뮬레이션 사용 여부")

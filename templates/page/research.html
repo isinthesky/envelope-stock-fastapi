@@ -132,6 +132,10 @@
   <h2>운영 전략 플래그 (현재값)</h2>
   <p class="sub">검증 결과를 코드로 반영. 라이브 영향 있는 항목은 opt-in(기본 OFF).</p>
   <div class="flag-grid">
+    <div class="flag-row"><span><code>ETF_UNIVERSE_ENABLED</code><br><small>개별종목 중단 → 장수 ETF {{ flags.etf_universe_count }}종 유니버스</small></span>
+      <span class="badge {{ 'on' if flags.etf_universe_enabled else 'off' }}">{{ 'ON' if flags.etf_universe_enabled else 'OFF' }}</span></div>
+    <div class="flag-row"><span><code>GC_SHORT/LONG_MA_PERIOD</code><br><small>골든크로스 MA(추세추종 검증 최적)</small></span>
+      <span class="mono">MA{{ flags.gc_short_ma_period }}/{{ flags.gc_long_ma_period }}</span></div>
     <div class="flag-row"><span><code>GC_REGIME_FILTER_ENABLED</code><br><small>골든크로스 레짐 게이트</small></span>
       <span class="badge {{ 'on' if flags.gc_regime_filter_enabled else 'off' }}">{{ 'ON' if flags.gc_regime_filter_enabled else 'OFF' }}</span></div>
     <div class="flag-row"><span><code>GC_REGIME_MA</code><br><small>레짐 판정 KOSPI MA</small></span>

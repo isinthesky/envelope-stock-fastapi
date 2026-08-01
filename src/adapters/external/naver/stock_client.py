@@ -114,6 +114,16 @@ class NaverStockClient:
         url = f"{self.BASE_URL}/{symbol}/integration"
         return await self._get(url)
 
+    async def get_stock_name(self, symbol: str) -> str | None:
+        """종목명 조회 (ETF 포함). 실패 시 None.
+
+        네이버 통합 응답의 stockName 필드를 반환한다(예: "KODEX 200").
+        응답 스키마 해석을 어댑터 내부로 캡슐화해 도메인이 raw 키에 의존하지 않게 한다.
+        """
+        data = await self.get_integration(symbol)
+        name = (data or {}).get("stockName")
+        return name or None
+
     async def get_finance_annual(self, symbol: str) -> dict[str, Any]:
         """
         종목 연간 재무 정보 조회

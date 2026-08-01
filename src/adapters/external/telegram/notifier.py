@@ -102,10 +102,11 @@ def build_golden_cross_recommendations_message(
     slot_part = f" ({slot_label})" if slot_label else ""
     header_emoji = "🟢" if top_stocks else "⚪"
 
+    ma_label = f"MA{settings.gc_short_ma_period}/{settings.gc_long_ma_period}"
     lines: list[str] = [
         f"{header_emoji} <b>매수 신호 알림{slot_part}</b>",
         f"📅 {now} KST",
-        "전략: MA55/165 골든크로스 + Stochastic 눌림목",
+        f"전략: {ma_label} 골든크로스 + Stochastic 눌림목",
     ]
     # fear-buy 후보가 섞여 있으면 별도 전략 라벨을 추가(골든크로스로 오라벨 방지)
     if any(str(s.get("gc_state") or "") == "FEAR_BUY" for s in top_stocks):
@@ -152,7 +153,7 @@ def build_golden_cross_recommendations_message(
                 indicator_bits.append(f"Stoch K {stoch_k:.1f}")
             ma_gap = _to_float(s.get("ma_gap_ratio"))
             if ma_gap is not None:
-                indicator_bits.append(f"MA55/165갭 {ma_gap:+.1f}%")
+                indicator_bits.append(f"{ma_label}갭 {ma_gap:+.1f}%")
             industry_name = s.get("industry_name")
             if industry_name:
                 indicator_bits.append(html_mod.escape(str(industry_name)))

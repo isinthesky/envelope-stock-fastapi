@@ -26,5 +26,9 @@ async def strategy_page(request: Request) -> HTMLResponse:
         {
             "active_page": "strategy",
             "static_version": settings.app_version,
+            "gc_short_ma": settings.gc_short_ma_period,
+            "gc_long_ma": settings.gc_long_ma_period,
+            "etf_universe_enabled": settings.etf_universe_enabled,
+            "etf_universe_count": len(settings.etf_universe_symbols),
         },
     )

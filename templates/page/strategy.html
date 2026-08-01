@@ -9,6 +9,11 @@
 {% block content %}
 <h1>매수 전략</h1>
 <p>골든크로스 / MA5 돌파 전략</p>
+{% if etf_universe_enabled %}
+<p style="font-size:12px; color:#0369a1; background:#e0f2fe; display:inline-block; padding:4px 10px; border-radius:8px; margin:2px 0;">
+  📊 유니버스: <strong>ETF {{ etf_universe_count }}종</strong> (개별종목 중단 · 장수 ETF 추세추종)
+</p>
+{% endif %}
 
 <div class="row embed-hide" style="margin: 12px 0; flex-wrap: wrap;">
   <button class="secondary" onclick="location.href='/mypage/strategy/dashboard'">My Strategies</button>
@@ -16,7 +21,7 @@
 
 <!-- 전략 선택 탭 -->
 <div class="strategy-tabs">
-  <button class="strategy-tab active" onclick="showStrategy('golden_cross')">골든크로스 (MA55/165)</button>
+  <button class="strategy-tab active" onclick="showStrategy('golden_cross')">골든크로스 (MA{{ gc_short_ma }}/{{ gc_long_ma }})</button>
   <button class="strategy-tab ma5" onclick="showStrategy('ma5_breakout')">MA5 돌파 (MA5/300)</button>
 </div>
 
@@ -24,10 +29,10 @@
 <div id="strategy_golden_cross" class="strategy-content active">
 <section class="strategy-info">
   <h2>전략 개요</h2>
-  <p><strong>MA55/MA165 골든크로스</strong> 발생 후 Stochastic 과매도 구간에서 매수하는 중기 추세추종 전략</p>
+  <p><strong>MA{{ gc_short_ma }}/MA{{ gc_long_ma }} 골든크로스</strong> 발생 후 Stochastic 과매도 구간에서 매수하는 중기 추세추종 전략</p>
 
   <div class="strategy-flow">
-    <span class="step">MA55 > MA165<br><small>골든크로스</small></span>
+    <span class="step">MA{{ gc_short_ma }} > MA{{ gc_long_ma }}<br><small>골든크로스</small></span>
     <span class="arrow">→</span>
     <span class="step">K ≥ 50<br><small>GC 활성</small></span>
     <span class="arrow">→</span>
@@ -50,7 +55,7 @@
   <div class="config-grid">
     <div class="config-item">
       <div class="label">이평선</div>
-      <div class="value">MA55 / MA165</div>
+      <div class="value">MA{{ gc_short_ma }} / MA{{ gc_long_ma }}</div>
     </div>
     <div class="config-item">
       <div class="label">Stochastic</div>
@@ -79,7 +84,9 @@
   <h2>종목 스크리닝</h2>
   <div class="row">
     <button onclick="scanGoldenCross()">골든크로스 스캔</button>
+    {% if not etf_universe_enabled %}
     <button onclick="applyFinancialFilter()" style="background: #7c3aed; color: white;">재무 필터 (2차)</button>
+    {% endif %}
     <button onclick="scanStocks()" class="secondary">전체 종목 스캔</button>
     <button onclick="refreshUniverse()" class="secondary">유니버스 갱신</button>
   </div>
@@ -119,6 +126,7 @@
     </div>
   </div>
 
+  {% if not etf_universe_enabled %}
   <div class="stats-row" id="fin_stats_row" style="display:none; margin-top: 8px;">
     <div class="stat-card" style="border: 1px solid #10b981;">
       <div class="number" id="stat_fin_pass" style="color: #065f46;">-</div>
@@ -137,14 +145,17 @@
       <div class="label">미조회</div>
     </div>
   </div>
+  {% endif %}
 
   <div id="gc_scan_container" style="margin-top: 16px;">
     <div class="tabs">
       <button class="tab active" onclick="showGcTab('BUY_TARGETS')" style="background: #bbf7d0; color: #166534;">매수 대상</button>
       <button class="tab" onclick="showGcTab('OPTIMAL_BUY')" style="background: #fef08a; color: #854d0e;">매수 적기</button>
       <button class="tab" onclick="showGcTab('READY_TO_BUY')">매수 관심</button>
+      {% if not etf_universe_enabled %}
       <button class="tab" onclick="showGcTab('FIN_PASS')" style="background: #d1fae5; color: #065f46;">재무 통과</button>
       <button class="tab" onclick="showGcTab('FIN_TURNAROUND')" style="background: #fef3c7; color: #92400e;">턴어라운드</button>
+      {% endif %}
       <button class="tab" onclick="showGcTab('all')">전체</button>
     </div>
 
@@ -155,17 +166,17 @@
           <th>종목코드</th>
           <th>종목명</th>
           <th>기술</th>
-          <th>재무</th>
+          {% if not etf_universe_enabled %}<th>재무</th>{% endif %}
           <th>섹터</th>
           <th>현재가</th>
           <th>MA Gap</th>
           <th>Stoch K/D</th>
-          <th>매출YoY</th>
-          <th>영업이익률</th>
+          {% if not etf_universe_enabled %}<th>매출YoY</th>
+          <th>영업이익률</th>{% endif %}
         </tr>
       </thead>
       <tbody id="gc_scan_table_body">
-        <tr><td colspan="11" class="placeholder-message" style="border: none;">
+        <tr><td colspan="{{ 8 if etf_universe_enabled else 11 }}" class="placeholder-message" style="border: none;">
           결과를 불러오는 중...
         </td></tr>
       </tbody>
@@ -302,7 +313,7 @@
   <div style="margin-top: 16px; padding: 16px; background: #fdf2f8; border: 1px solid #fbcfe8; border-radius: 8px;">
     <h4 style="margin: 0 0 8px 0; color: #9d174d;">종목 직접 입력</h4>
     <p style="font-size: 12px; color: #64748b; margin-bottom: 8px;">한 줄에 하나의 종목코드를 입력하세요.</p>
-    <textarea id="ma5_symbols" rows="3" placeholder="005930&#10;000660&#10;035720" style="width: 100%; margin-bottom: 8px; font-family: monospace;"></textarea>
+    <textarea id="ma5_symbols" rows="3" placeholder="069500&#10;102110&#10;229200" style="width: 100%; margin-bottom: 8px; font-family: monospace;"></textarea>
   </div>
 
   <div class="stats-row" id="ma5_stats_row" style="display:none; margin-top: 16px;">
@@ -360,5 +371,6 @@
 {% endblock %}
 
 {% block extra_script_tags %}
+<script>window.ETF_MODE = {{ 'true' if etf_universe_enabled else 'false' }};</script>
 <script src="/static/js/pages/strategy.js?v={{ static_version }}"></script>
 {% endblock %}

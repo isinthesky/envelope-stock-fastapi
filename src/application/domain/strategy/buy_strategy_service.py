@@ -11,6 +11,7 @@ Buy Strategy Service - 매수 전략 서비스
 
 import asyncio
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -137,6 +138,8 @@ class BuyStrategyService:
         cache_freshness_days: int = 1,
         force_refresh: bool = False,
         max_concurrent: int | None = None,
+        short_ma_period: int | None = None,
+        long_ma_period: int | None = None,
     ) -> GoldenCrossScanListDTO:
         """
         골든크로스 종목 스캔
@@ -247,6 +250,17 @@ class BuyStrategyService:
             target["total_api_calls"] += load_result.api_calls
             target["new_candles"] += load_result.new_candles
 
+        # MA 기간: 명시 override 우선, 없으면 운영 config (live 경로는 항상 config)
+        resolved_short_ma = (
+            short_ma_period if short_ma_period is not None else settings.gc_short_ma_period
+        )
+        resolved_long_ma = (
+            long_ma_period if long_ma_period is not None else settings.gc_long_ma_period
+        )
+        # 조회 창을 장기 MA에서 파생(고정 400일이면 큰 long MA에서 캔들 부족 → 스캔 전멸 방지).
+        # 거래일↔캘린더일 환산(거래일≈캘린더×0.69) 여유 계수 1.6, 최소 400일.
+        scan_lookback_days = max(400, int((resolved_long_ma + 20) * 1.6))
+
         async def worker() -> (
             tuple[list[tuple[int, GoldenCrossScanItemDTO]], list[tuple[int, str]], dict[str, int]]
         ):
@@ -275,9 +289,9 @@ class BuyStrategyService:
                     try:
                         load_result = await worker_loader.load_ohlcv_with_stats(
                             symbol=stock.symbol,
-                            days=400,
+                            days=scan_lookback_days,
                             interval="1d",
-                            min_candles=160,
+                            min_candles=resolved_long_ma + 20,
                             cache_freshness_days=cache_freshness_days,
                             force_refresh=force_refresh,
                             include_today_candle=True,
@@ -294,8 +308,8 @@ class BuyStrategyService:
 
                         df = TechnicalIndicators.prepare_golden_cross_indicators(
                             df,
-                            short_ma_period=55,
-                            long_ma_period=165,
+                            short_ma_period=resolved_short_ma,
+                            long_ma_period=resolved_long_ma,
                             stoch_k_period=14,
                             stoch_d_period=3,
                             include_rsi=True,
@@ -315,6 +329,16 @@ class BuyStrategyService:
                             else None
                         )
                         close = float(latest["close"])
+
+                        # 장·단기 MA가 유한 양수가 아니면(캔들 부족 NaN→0, 비정상 inf 등)
+                        # 골든크로스 오판 방지: 스킵. finally의 task_done은 그대로 실행됨.
+                        if not (
+                            ma_short > 0
+                            and ma_long > 0
+                            and math.isfinite(ma_short)
+                            and math.isfinite(ma_long)
+                        ):
+                            continue
 
                         is_gc_active = ma_short > ma_long
 
@@ -583,20 +607,24 @@ class BuyStrategyService:
             name = name or symbol
 
             try:
-                # OHLCV 데이터 로딩 (MA165 계산을 위해 300일 조회, 약 200 거래일)
+                # OHLCV 데이터 로딩 (장기 MA 계산에 충분한 캔들 확보: long_ma + 20).
+                # 조회 창도 long MA에서 파생(큰 long MA에서 고정 400일이면 캔들 부족 방지).
+                sym_lookback_days = max(
+                    400, int((settings.gc_long_ma_period + 20) * 1.6)
+                )
                 df = await data_loader.load_ohlcv_dataframe(
                     symbol=symbol,
-                    days=400,
+                    days=sym_lookback_days,
                     interval="1d",
-                    min_candles=160,
+                    min_candles=settings.gc_long_ma_period + 20,
                     force_refresh=force_refresh,
                 )
 
-                # 지표 계산 (MA55/MA165)
+                # 지표 계산 (MA는 gc_short/long_ma_period config)
                 df = TechnicalIndicators.prepare_golden_cross_indicators(
                     df,
-                    short_ma_period=55,
-                    long_ma_period=165,
+                    short_ma_period=settings.gc_short_ma_period,
+                    long_ma_period=settings.gc_long_ma_period,
                     stoch_k_period=14,
                     stoch_d_period=3,
                     include_rsi=True,
@@ -617,6 +645,15 @@ class BuyStrategyService:
                     else None
                 )
                 close = float(latest["close"])
+
+                # 장·단기 MA가 유한 양수가 아니면(캔들 부족 NaN→0, 비정상 inf 등) 골든크로스 오판 방지: 스킵
+                if not (
+                    ma_short > 0
+                    and ma_long > 0
+                    and math.isfinite(ma_short)
+                    and math.isfinite(ma_long)
+                ):
+                    continue
 
                 # 골든크로스 상태 판정
                 is_gc_active = ma_short > ma_long

@@ -821,17 +821,21 @@ const displayGcScanResults = (data, options = { persist: true }) => {
   document.getElementById("stat_position").textContent = '-';
 
   // 재무 필터 통계 업데이트 (ERROR 통계 포함)
-  const hasFinancialData = data.financial_pass_count != null || data.financial_pending_count != null;
-  if (hasFinancialData) {
-    document.getElementById("fin_stats_row").style.display = "flex";
-    document.getElementById("stat_fin_pass").textContent = data.financial_pass_count || 0;
-    document.getElementById("stat_fin_turnaround").textContent = data.turnaround_count || 0;
-    // FAIL과 ERROR를 합산하여 표시 (UI에 ERROR 카드가 없으므로)
-    const failCount = (data.financial_fail_count || 0) + (data.financial_error_count || 0);
-    document.getElementById("stat_fin_fail").textContent = failCount;
-    document.getElementById("stat_fin_pending").textContent = data.financial_pending_count || 0;
-  } else {
-    document.getElementById("fin_stats_row").style.display = "none";
+  // ETF 유니버스에서는 재무 통계 카드(fin_stats_row) 자체가 렌더되지 않으므로 null-safe 처리
+  const finStatsRow = document.getElementById("fin_stats_row");
+  if (finStatsRow) {
+    const hasFinancialData = data.financial_pass_count != null || data.financial_pending_count != null;
+    if (hasFinancialData) {
+      finStatsRow.style.display = "flex";
+      document.getElementById("stat_fin_pass").textContent = data.financial_pass_count || 0;
+      document.getElementById("stat_fin_turnaround").textContent = data.turnaround_count || 0;
+      // FAIL과 ERROR를 합산하여 표시 (UI에 ERROR 카드가 없으므로)
+      const failCount = (data.financial_fail_count || 0) + (data.financial_error_count || 0);
+      document.getElementById("stat_fin_fail").textContent = failCount;
+      document.getElementById("stat_fin_pending").textContent = data.financial_pending_count || 0;
+    } else {
+      finStatsRow.style.display = "none";
+    }
   }
 
   // 기본값: 매수 대상 종목만 표시
@@ -866,7 +870,7 @@ const renderGcScanTable = (stocks) => {
 
   // 필터 결과가 없으면 안내 메시지 표시
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="11" class="placeholder-message" style="border: none;">
+    tbody.innerHTML = `<tr><td colspan="${window.ETF_MODE ? 8 : 11}" class="placeholder-message" style="border: none;">
       해당 조건에 맞는 종목이 없습니다.
     </td></tr>`;
     return;
@@ -889,11 +893,16 @@ const renderGcScanTable = (stocks) => {
       stock.industry_name || stock.sector_name || stock.sector || stock.industry_code || '-'
     );
 
-    // 재무 데이터 포맷
+    // 재무 데이터 포맷 (ETF 유니버스에서는 재무 컬럼 자체를 표시하지 않음)
     const revenueYoy = stock.revenue_yoy != null ? `${stock.revenue_yoy >= 0 ? '+' : ''}${Number(stock.revenue_yoy).toFixed(1)}%` : '-';
     const revenueYoyClass = stock.revenue_yoy != null ? (stock.revenue_yoy >= 0 ? 'bullish' : 'bearish') : '';
     const opMargin = stock.operating_margin != null ? `${Number(stock.operating_margin).toFixed(1)}%` : '-';
     const opMarginClass = stock.operating_margin != null ? (stock.operating_margin > 0 ? 'bullish' : 'bearish') : '';
+
+    // ETF 모드: 재무 관련 컬럼(재무/매출YoY/영업이익률) 제거 — 헤더(strategy.html)와 열 수 정합
+    const finTechCol = window.ETF_MODE ? '' : `<td><span class="state-badge ${finClass}">${finLabel}</span></td>`;
+    const finDataCols = window.ETF_MODE ? '' : `<td class="indicator ${revenueYoyClass}">${revenueYoy}</td>
+      <td class="indicator ${opMarginClass}">${opMargin}</td>`;
 
     return `<tr>
       <td>
@@ -902,13 +911,12 @@ const renderGcScanTable = (stocks) => {
       <td><strong>${symbolText}</strong></td>
       <td>${nameText}</td>
       <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
-      <td><span class="state-badge ${finClass}">${finLabel}</span></td>
+      ${finTechCol}
       <td style="font-size:12px; color:#94a3b8;">${sectorText}</td>
       <td class="indicator">${formatNumber(stock.current_price)}</td>
       <td class="indicator ${maGapClass}">${stock.ma_gap_ratio.toFixed(2)}%</td>
       <td class="indicator ${stochClass}">${stock.stoch_k.toFixed(1)} / ${stock.stoch_d.toFixed(1)}</td>
-      <td class="indicator ${revenueYoyClass}">${revenueYoy}</td>
-      <td class="indicator ${opMarginClass}">${opMargin}</td>
+      ${finDataCols}
     </tr>`;
   }).join('');
 };
@@ -1144,7 +1152,7 @@ const loadSavedScans = () => {
     // 저장된 결과 없음 - 안내 메시지 표시
     document.getElementById("gc_scan_container").style.display = "block";
     document.getElementById("gc_scan_table_body").innerHTML = `
-      <tr><td colspan="11" class="placeholder-message" style="border: none;">
+      <tr><td colspan="${window.ETF_MODE ? 8 : 11}" class="placeholder-message" style="border: none;">
         저장된 스캔 결과가 없습니다.<br>
         <small style="color: #94a3b8;">골든크로스 스캔 버튼을 클릭하세요.</small>
       </td></tr>
@@ -1475,7 +1483,7 @@ async function createStrategy() {
     return;
   }
   if (!symbols.length) {
-    alert('심볼을 1개 이상 입력해줘 (예: 005930,000660)');
+    alert('심볼을 1개 이상 입력해줘 (예: 069500,102110)');
     return;
   }
 
