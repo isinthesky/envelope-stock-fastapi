@@ -8,8 +8,6 @@ Position Manager - 포지션 관리자
 from datetime import datetime
 from decimal import Decimal
 
-from src.application.domain.backtest.dto import PositionDTO, TradeDTO
-
 
 class Position:
     """개별 lot 포지션 정보"""
@@ -115,26 +113,6 @@ class PositionManager:
         if not lots:
             return None
         return min(p.entry_date for p in lots)
-
-    def to_dto(self, symbol: str, current_price: Decimal) -> PositionDTO | None:
-        if not self.has_position(symbol):
-            return None
-        quantity = self.get_total_quantity(symbol)
-        avg_entry = self.get_average_entry_price(symbol)
-        entry_date = self.get_latest_entry_date(symbol)
-        if avg_entry is None or entry_date is None:
-            return None
-        unrealized_profit = (current_price - avg_entry) * quantity
-        profit_rate = float((current_price - avg_entry) / avg_entry * 100) if avg_entry else 0.0
-        return PositionDTO(
-            symbol=symbol,
-            quantity=quantity,
-            entry_price=avg_entry,
-            entry_date=entry_date,
-            current_price=current_price,
-            unrealized_profit=unrealized_profit,
-            unrealized_profit_rate=profit_rate,
-        )
 
     def update_positions(self, current_prices: dict[str, Decimal]) -> Decimal:
         total_value = Decimal('0')

@@ -6,7 +6,6 @@ WebSocket Manager - WebSocket 연결 및 구독자 관리
 """
 
 import asyncio
-from collections.abc import Callable
 from typing import Any
 
 from fastapi import WebSocket

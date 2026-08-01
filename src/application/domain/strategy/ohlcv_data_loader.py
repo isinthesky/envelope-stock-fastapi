@@ -9,7 +9,7 @@ DB 캐시 우선 조회 + 증분 업데이트 전략:
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 from zoneinfo import ZoneInfo

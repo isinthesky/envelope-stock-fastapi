@@ -31,7 +31,6 @@ from src.adapters.database.repositories.strategy_signal_repository import (
 from src.adapters.database.repositories.strategy_symbol_state_repository import (
     StrategySymbolStateRepository,
 )
-from src.adapters.external.kis_api.client import get_kis_client
 from src.application.common.decorators import transaction
 from src.application.common.exceptions import NotFoundError, StrategyError
 from src.application.domain.strategy.dto import (

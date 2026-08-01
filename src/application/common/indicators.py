@@ -5,7 +5,6 @@ Technical Indicators - 기술적 지표 계산 모듈
 Bollinger Band, Envelope, 이동평균 등 기술적 지표 계산
 """
 
-from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -171,36 +170,6 @@ class TechnicalIndicators:
         return pd.Series(rsi, index=df.index).fillna(50.0)
 
     @classmethod
-    def generate_bollinger_signal(
-        cls,
-        current_price: float,
-        bb_upper: float,
-        bb_lower: float,
-        threshold: float = 0.001,
-    ) -> str:
-        """
-        볼린저 밴드 기반 매매 시그널 생성
-
-        Args:
-            current_price: 현재가
-            bb_upper: 볼린저 밴드 상단
-            bb_lower: 볼린저 밴드 하단
-            threshold: 돌파 판정 임계값 (기본: 0.1%)
-
-        Returns:
-            str: "buy" (매수), "sell" (매도), "hold" (보유)
-        """
-        # 하단 돌파 (과매도) -> 매수 시그널
-        if current_price < bb_lower * (1 - threshold):
-            return "buy"
-
-        # 상단 돌파 (과매수) -> 매도 시그널
-        if current_price > bb_upper * (1 + threshold):
-            return "sell"
-
-        return "hold"
-
-    @classmethod
     def calculate_position_size(
         cls, account_balance: float, allocation_ratio: float, current_price: float
     ) -> int:
@@ -222,41 +191,6 @@ class TechnicalIndicators:
         quantity = int(target_amount / current_price)
 
         return quantity
-
-    @classmethod
-    def calculate_bollinger_bandwidth(
-        cls, bb_upper: float, bb_lower: float, bb_middle: float
-    ) -> float:
-        """
-        볼린저 밴드 폭 계산 (Bandwidth)
-
-        Args:
-            bb_upper: 볼린저 밴드 상단
-            bb_lower: 볼린저 밴드 하단
-            bb_middle: 볼린저 밴드 중간 (이동평균)
-
-        Returns:
-            float: 밴드 폭 비율
-        """
-        if bb_middle == 0:
-            return 0.0
-
-        bandwidth = (bb_upper - bb_lower) / bb_middle
-        return bandwidth
-
-    @classmethod
-    def is_bollinger_squeeze(cls, bandwidth: float, threshold: float = 0.1) -> bool:
-        """
-        볼린저 스퀴즈 판정 (밴드 폭이 좁아짐)
-
-        Args:
-            bandwidth: 볼린저 밴드 폭
-            threshold: 스퀴즈 판정 임계값
-
-        Returns:
-            bool: 스퀴즈 여부
-        """
-        return bandwidth < threshold
 
     @classmethod
     def generate_combined_signal(
@@ -493,42 +427,6 @@ class TechnicalIndicators:
         return dead_cross
 
     @staticmethod
-    def is_golden_cross_active(short_ma: float, long_ma: float) -> bool:
-        """
-        현재 골든크로스 상태 확인 (단기 MA > 장기 MA)
-
-        Args:
-            short_ma: 단기 이동평균 값
-            long_ma: 장기 이동평균 값
-
-        Returns:
-            bool: 골든크로스 활성 상태
-        """
-        return short_ma > long_ma
-
-    @staticmethod
-    def calculate_ma_series(
-        df: pd.DataFrame,
-        short_period: int = 55,
-        long_period: int = 165,
-    ) -> tuple[pd.Series, pd.Series]:
-        """
-        이동평균 시리즈 계산
-
-        Args:
-            df: OHLCV 데이터프레임 (close 컬럼 필요)
-            short_period: 단기 MA 기간 (기본: 55)
-            long_period: 장기 MA 기간 (기본: 165)
-
-        Returns:
-            tuple[pd.Series, pd.Series]: (short_ma, long_ma)
-        """
-        short_ma = df["close"].rolling(window=short_period).mean()
-        long_ma = df["close"].rolling(window=long_period).mean()
-
-        return short_ma, long_ma
-
-    @staticmethod
     def prepare_golden_cross_indicators(
         df: pd.DataFrame,
         short_ma_period: int = 55,
@@ -629,68 +527,6 @@ class TechnicalIndicators:
 
         # ATR = TR의 이동평균
         return sum(true_ranges[-period:]) / period
-
-    @staticmethod
-    def calculate_atr_from_ohlcv(
-        ohlcv_data: list[dict],
-        period: int = 14,
-    ) -> float | None:
-        """
-        OHLCV 데이터에서 ATR 계산
-
-        Args:
-            ohlcv_data: OHLCV 딕셔너리 리스트 [{"high": ..., "low": ..., "close": ...}, ...]
-            period: ATR 기간 (기본: 14)
-
-        Returns:
-            float | None: ATR 값
-        """
-        if len(ohlcv_data) < period + 1:
-            return None
-
-        high_prices = [d.get("high", d.get("high_price", 0)) for d in ohlcv_data]
-        low_prices = [d.get("low", d.get("low_price", 0)) for d in ohlcv_data]
-        close_prices = [d.get("close", d.get("close_price", 0)) for d in ohlcv_data]
-
-        return TechnicalIndicators.calculate_atr(high_prices, low_prices, close_prices, period)
-
-    @staticmethod
-    def calculate_atr_stop_loss_price(
-        entry_price: float,
-        atr: float,
-        multiplier: float = 2.0,
-    ) -> float:
-        """
-        ATR 기반 손절가 계산
-
-        Args:
-            entry_price: 진입가
-            atr: ATR 값
-            multiplier: ATR 배수 (기본: 2.0)
-
-        Returns:
-            float: 손절가
-        """
-        return entry_price - (atr * multiplier)
-
-    @staticmethod
-    def calculate_atr_trailing_stop_price(
-        highest_price: float,
-        atr: float,
-        multiplier: float = 2.0,
-    ) -> float:
-        """
-        ATR 기반 트레일링 스톱가 계산
-
-        Args:
-            highest_price: 최고가
-            atr: ATR 값
-            multiplier: ATR 배수 (기본: 2.0)
-
-        Returns:
-            float: 트레일링 스톱가
-        """
-        return highest_price - (atr * multiplier)
 
     # ==================== Volume Indicators ====================
 
@@ -1011,31 +847,6 @@ class TechnicalIndicators:
             "plus_di": round(plus_di_list[last_idx], 2),
             "minus_di": round(minus_di_list[last_idx], 2),
         }
-
-    @classmethod
-    def calculate_adx_from_ohlcv(
-        cls,
-        ohlcv_data: list[dict],
-        period: int = 14,
-    ) -> dict[str, float] | None:
-        """
-        OHLCV 데이터에서 ADX 계산
-
-        Args:
-            ohlcv_data: OHLCV 딕셔너리 리스트
-            period: ADX 기간 (기본: 14)
-
-        Returns:
-            dict[str, float] | None: {"adx": ADX, "plus_di": +DI, "minus_di": -DI}
-        """
-        if len(ohlcv_data) < 2 * period + 1:
-            return None
-
-        high_prices = [d.get("high", d.get("high_price", 0)) for d in ohlcv_data]
-        low_prices = [d.get("low", d.get("low_price", 0)) for d in ohlcv_data]
-        close_prices = [d.get("close", d.get("close_price", 0)) for d in ohlcv_data]
-
-        return cls.calculate_adx(high_prices, low_prices, close_prices, period)
 
     @staticmethod
     def is_strong_uptrend(

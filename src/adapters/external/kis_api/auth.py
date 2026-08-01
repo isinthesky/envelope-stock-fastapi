@@ -6,7 +6,6 @@ KIS API Auth Module - 인증 및 토큰 관리
 """
 
 import asyncio
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path

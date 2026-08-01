@@ -305,9 +305,6 @@ class MA5BreakoutSignalGenerator(BaseSignalGenerator):
         current_volume = self._volume_history[-1] if self._volume_history else 0
         return current_volume >= avg_volume * self.volume_ratio_threshold
 
-    def update_volume(self, volume: float) -> None:
-        self._volume_history.append(volume)
-
     def reset(self) -> None:
         self._prev_ma5_above_upper = False
         self._entry_triggered = False

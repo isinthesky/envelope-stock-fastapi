@@ -333,35 +333,6 @@ class BacktestResultDTO(BaseDTO):
     daily_stats: list[DailyStatsDTO] = Field(default_factory=list, description="일별 통계 리스트")
 
 
-class BacktestSummaryDTO(BaseDTO):
-    """
-    백테스팅 요약 DTO (리스트 조회용)
-
-    Attributes:
-        id: 백테스팅 ID
-        symbol: 종목코드
-        start_date: 시작일
-        end_date: 종료일
-        total_return: 총 수익률 (%)
-        mdd: 최대 낙폭 (%)
-        sharpe_ratio: Sharpe Ratio
-        total_trades: 총 거래 횟수
-        win_rate: 승률 (%)
-        created_at: 생성 시각
-    """
-
-    id: int = Field(description="백테스팅 ID")
-    symbol: str = Field(description="종목코드")
-    start_date: datetime = Field(description="시작일")
-    end_date: datetime = Field(description="종료일")
-    total_return: float = Field(description="총 수익률 (%)")
-    mdd: float = Field(description="최대 낙폭 (%)")
-    sharpe_ratio: float = Field(description="Sharpe Ratio")
-    total_trades: int = Field(description="총 거래 횟수")
-    win_rate: float = Field(description="승률 (%)")
-    created_at: datetime = Field(description="생성 시각")
-
-
 class MultiSymbolBacktestResultDTO(BaseDTO):
     """
     다중 종목 백테스팅 결과 DTO

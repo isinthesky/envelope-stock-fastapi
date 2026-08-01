@@ -25,8 +25,6 @@ from typing import NamedTuple
 from src.adapters.database.models.strategy_symbol_state import SymbolState
 from src.application.domain.strategy.dto import (
     GoldenCrossConfigDTO,
-    GoldenCrossRiskConfig,
-    StochasticConfig,
 )
 from src.application.domain.strategy.strategy_contract import (
     GoldenCrossScanContext,
@@ -367,29 +365,3 @@ class GoldenCrossStateMachine:
         return SymbolState.WAITING_FOR_GC
 
 
-# 싱글톤 인스턴스
-_state_machine_cache: dict[int, GoldenCrossStateMachine] = {}
-
-
-def get_state_machine(
-    strategy_id: int, config: GoldenCrossConfigDTO | None = None
-) -> GoldenCrossStateMachine:
-    """
-    전략별 상태 머신 인스턴스 반환
-
-    Args:
-        strategy_id: 전략 ID
-        config: 전략 설정 (None이면 기본값)
-
-    Returns:
-        GoldenCrossStateMachine: 상태 머신 인스턴스
-    """
-    if strategy_id not in _state_machine_cache:
-        _state_machine_cache[strategy_id] = GoldenCrossStateMachine(config)
-    return _state_machine_cache[strategy_id]
-
-
-def reset_state_machine(strategy_id: int) -> None:
-    """전략 상태 머신 캐시 초기화"""
-    if strategy_id in _state_machine_cache:
-        del _state_machine_cache[strategy_id]

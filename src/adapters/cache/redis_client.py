@@ -220,27 +220,6 @@ class RedisClient:
         except Exception:
             return []
 
-    async def delete_pattern(self, pattern: str) -> int:
-        """
-        패턴으로 키 일괄 삭제
-
-        Args:
-            pattern: 삭제 패턴
-
-        Returns:
-            int: 삭제된 키 수
-        """
-        if not self.redis:
-            return 0
-
-        try:
-            keys = await self.keys(pattern)
-            if keys:
-                return await self.redis.delete(*keys)
-            return 0
-        except Exception:
-            return 0
-
     # ==================== Hash 연산 ====================
 
     async def hset(self, name: str, key: str, value: Any, serialize: bool = True) -> bool:

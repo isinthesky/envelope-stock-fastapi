@@ -10,12 +10,10 @@ APScheduler 기반 스케줄링:
 import asyncio
 import logging
 from datetime import datetime
-from typing import Callable
 from zoneinfo import ZoneInfo
 
 from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.connection import get_async_session
-from src.adapters.database.models.strategy import StrategyStatus
 from src.adapters.database.repositories.strategy_repository import StrategyRepository
 from src.adapters.external.kis_api.client import get_kis_client
 from src.application.domain.market_data.service import MarketDataService

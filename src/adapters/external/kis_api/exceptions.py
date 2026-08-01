@@ -26,28 +26,23 @@ class KISAPIError(Exception):
 class KISAuthError(KISAPIError):
     """인증 실패 예외"""
 
-    pass
 
 
 class KISRateLimitError(KISAPIError):
     """Rate Limit 초과 예외"""
 
-    pass
 
 
 class KISOrderError(KISAPIError):
     """주문 실패 예외"""
 
-    pass
 
 
 class KISMarketDataError(KISAPIError):
     """시세 조회 실패 예외"""
 
-    pass
 
 
 class KISWebSocketError(Exception):
     """WebSocket 관련 예외"""
 
-    pass

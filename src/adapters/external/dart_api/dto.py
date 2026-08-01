@@ -6,7 +6,6 @@ DART API DTO 모듈
 """
 
 from dataclasses import dataclass
-from datetime import date
 from decimal import Decimal
 
 
@@ -74,13 +73,6 @@ class CompanyInfoDTO:
             est_dt=data.get("est_dt", ""),
             acc_mt=data.get("acc_mt", ""),
         )
-
-    @property
-    def market_type(self) -> str:
-        """시장 구분"""
-        market_map = {"Y": "KOSPI", "K": "KOSDAQ", "N": "KONEX", "E": "기타"}
-        return market_map.get(self.corp_cls, "알수없음")
-
 
 @dataclass
 class FinancialStatementDTO:

@@ -3,7 +3,7 @@
 Screener Router - 종목 스크리닝 API 엔드포인트
 """
 
-from fastapi import APIRouter, Body, Query, status
+from fastapi import APIRouter, Body, status
 
 from src.adapters.external.naver import get_naver_stock_client
 from src.application.common.dependencies import AdminAccessDep, DatabaseSession

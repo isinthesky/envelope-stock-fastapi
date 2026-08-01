@@ -49,11 +49,6 @@ class TradingDayStats:
     def total_pnl(self) -> Decimal:
         return self.realized_pnl + self.unrealized_pnl
 
-    @property
-    def is_loss_day(self) -> bool:
-        return self.total_pnl < 0
-
-
 @dataclass
 class AccountState:
     """계좌 상태"""

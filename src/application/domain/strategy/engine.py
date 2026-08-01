@@ -12,7 +12,6 @@ from decimal import Decimal
 
 from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.connection import get_async_session
-from src.adapters.database.models.strategy import StrategyStatus
 from src.adapters.database.repositories.strategy_repository import StrategyRepository
 from src.adapters.external.kis_api.client import get_kis_client
 from src.application.common.indicators import TechnicalIndicators
@@ -21,7 +20,6 @@ from src.application.domain.market_data.service import MarketDataService
 from src.application.domain.order.dto import OrderCreateRequestDTO
 from src.application.domain.order.service import OrderService
 from src.application.domain.strategy.dto import StrategyConfigDTO
-from src.settings.config import settings
 
 
 class StrategyEngine:

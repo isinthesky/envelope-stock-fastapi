@@ -137,9 +137,5 @@ class GoldenCrossStrategyContract:
         return GoldenCrossScanState.WAITING_FOR_PULLBACK
 
     @staticmethod
-    def scan_state_order() -> dict[str, int]:
-        return {state.value: index for index, state in enumerate(GOLDEN_CROSS_SCAN_STATE_ORDER)}
-
-    @staticmethod
     def buy_candidate_state_values() -> list[str]:
         return [state.value for state in GOLDEN_CROSS_BUY_CANDIDATE_STATES]

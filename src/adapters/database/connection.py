@@ -23,7 +23,6 @@ from src.settings.config import settings
 class Base(DeclarativeBase):
     """SQLAlchemy Base Model"""
 
-    pass
 
 
 # ==================== Engine 및 SessionMaker ====================

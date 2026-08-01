@@ -9,7 +9,6 @@ Sell Strategy Service - 매도 전략 서비스
 
 import logging
 import math
-from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal
 
@@ -1185,18 +1184,6 @@ class SellStrategyService:
             )
 
         return 0.0, None
-
-    def _upgrade_stage_for_personal_overheat(
-        self,
-        stage: SellStageEnum,
-        is_personal_buying_overheated: bool,
-    ) -> tuple[SellStageEnum, list[str]]:
-        """개인 수급 과열이면 Stage를 한 단계 강화"""
-        return self._upgrade_stage_for_overlay(
-            stage,
-            is_personal_buying_overheated,
-            "개인 수급 과열",
-        )
 
     def _apply_overlay_stage_upgrade(
         self,

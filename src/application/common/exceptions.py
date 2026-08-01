@@ -34,16 +34,6 @@ class ApplicationError(Exception):
     def __str__(self) -> str:
         return f"[{self.code}] {self.message}"
 
-    def to_dict(self) -> dict[str, Any]:
-        """예외를 딕셔너리로 변환"""
-        return {
-            "code": self.code,
-            "message": self.message,
-            "status_code": self.status_code,
-            "details": self.details,
-        }
-
-
 # ==================== Validation Exceptions ====================
 
 
@@ -321,8 +311,3 @@ class BacktestDataError(BacktestError):
         super().__init__(message=f"Data error: {message}")
 
 
-class BacktestConfigError(BacktestError):
-    """백테스팅 설정 오류 예외"""
-
-    def __init__(self, message: str):
-        super().__init__(message=f"Configuration error: {message}")

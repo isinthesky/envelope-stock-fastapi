@@ -6,10 +6,8 @@ Background Tasks - 백그라운드 작업 관리
 """
 
 import asyncio
-from datetime import datetime
 
 from src.adapters.external.kis_api.auth import format_token_expires_in, get_kis_auth
-from src.settings.config import settings
 
 
 class TokenRefreshTask:

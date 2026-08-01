@@ -16,7 +16,6 @@ import logging
 from types import SimpleNamespace
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Sequence
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -12,7 +12,6 @@ DART Open API를 통한 기업정보, 재무제표, 지분현황 조회
 
 import asyncio
 import io
-import json
 import logging
 import zipfile
 from collections.abc import Sequence
@@ -28,9 +27,7 @@ from src.adapters.external.dart_api.dto import (
     CorpCodeDTO,
     FinancialScreeningDTO,
     FinancialStatementDTO,
-    FinancialSummaryDTO,
     MajorShareholderDTO,
-    OwnershipSummaryDTO,
     PeriodFinancialDTO,
 )
 from src.adapters.external.dart_api.exceptions import (
@@ -240,11 +237,6 @@ class DARTAPIClient:
 
         return CompanyInfoDTO.from_api_response(data)
 
-    async def get_company_info_by_symbol(self, stock_code: str) -> CompanyInfoDTO:
-        """종목코드로 기업개황 조회"""
-        corp_code = await self.get_corp_code(stock_code)
-        return await self.get_company_info(corp_code)
-
     # ==================== 재무제표 조회 ====================
 
     @retry(
@@ -300,94 +292,6 @@ class DARTAPIClient:
 
         return [FinancialStatementDTO.from_api_response(item) for item in items]
 
-    async def get_financial_summary(
-        self,
-        stock_code: str,
-        years: int = 2,
-    ) -> FinancialSummaryDTO | None:
-        """
-        재무 요약 정보 조회 (2차 필터링용)
-
-        최근 N년간 매출액, 영업이익, 당기순이익 추이 분석
-
-        Args:
-            stock_code: 종목코드
-            years: 조회 연도 수
-
-        Returns:
-            FinancialSummaryDTO 또는 None (데이터 없을 경우)
-        """
-        try:
-            corp_code = await self.get_corp_code(stock_code)
-        except DARTCorpNotFoundError:
-            logger.warning(f"[DART] {stock_code}: 고유번호 없음")
-            return None
-
-        current_year = datetime.now().year
-        results = []
-
-        for year_offset in range(years):
-            bsns_year = str(current_year - year_offset - 1)  # 전년도부터
-            try:
-                statements = await self.get_financial_statements(
-                    corp_code=corp_code,
-                    bsns_year=bsns_year,
-                    reprt_code="11011",  # 사업보고서
-                )
-
-                if not statements:
-                    continue
-
-                # 매출액, 영업이익, 당기순이익 추출
-                revenue = Decimal("0")
-                operating_profit = Decimal("0")
-                net_income = Decimal("0")
-
-                for stmt in statements:
-                    account_nm = stmt.account_nm
-                    if "매출액" in account_nm or "수익(매출액)" in account_nm:
-                        revenue = stmt.thstrm_amount
-                    elif "영업이익" in account_nm:
-                        operating_profit = stmt.thstrm_amount
-                    elif "당기순이익" in account_nm or "당기순이익(손실)" in account_nm:
-                        net_income = stmt.thstrm_amount
-
-                results.append({
-                    "year": bsns_year,
-                    "revenue": revenue,
-                    "operating_profit": operating_profit,
-                    "net_income": net_income,
-                })
-            except DARTNoDataError:
-                logger.debug(f"[DART] {stock_code} {bsns_year}: 재무제표 없음")
-                continue
-            except DARTAPIError as e:
-                logger.warning(f"[DART] {stock_code} {bsns_year}: {e.message}")
-                continue
-
-        if len(results) < 2:
-            return None
-
-        # 최신 연도와 전년도 비교
-        latest = results[0]
-        previous = results[1]
-
-        # 매출 YoY 계산
-        if previous["revenue"] > 0:
-            revenue_yoy = ((latest["revenue"] - previous["revenue"]) / previous["revenue"]) * 100
-        else:
-            revenue_yoy = Decimal("0")
-
-        return FinancialSummaryDTO(
-            corp_code=corp_code,
-            bsns_year=latest["year"],
-            revenue=latest["revenue"],
-            revenue_yoy=revenue_yoy,
-            operating_profit=latest["operating_profit"],
-            net_income=latest["net_income"],
-            is_profitable=latest["net_income"] > 0 and previous["net_income"] > 0,
-        )
-
     # ==================== 지분현황 조회 ====================
 
     @retry(
@@ -433,60 +337,6 @@ class DARTAPIClient:
             return []
 
         return [MajorShareholderDTO.from_api_response(item) for item in items]
-
-    async def get_ownership_summary(
-        self,
-        stock_code: str,
-    ) -> OwnershipSummaryDTO | None:
-        """
-        지분 요약 정보 조회 (3차 필터링용)
-
-        Args:
-            stock_code: 종목코드
-
-        Returns:
-            OwnershipSummaryDTO 또는 None
-        """
-        try:
-            corp_code = await self.get_corp_code(stock_code)
-        except DARTCorpNotFoundError:
-            return None
-
-        current_year = datetime.now().year
-        bsns_year = str(current_year - 1)  # 전년도 보고서
-
-        try:
-            shareholders = await self.get_major_shareholders(
-                corp_code=corp_code,
-                bsns_year=bsns_year,
-                reprt_code="11011",
-            )
-
-            if not shareholders:
-                return None
-
-            # 본인(최대주주) 찾기
-            major = None
-            for sh in shareholders:
-                if sh.relate == "본인":
-                    major = sh
-                    break
-
-            if not major:
-                # 본인이 없으면 첫 번째 항목 사용
-                major = shareholders[0]
-
-            return OwnershipSummaryDTO(
-                corp_code=corp_code,
-                major_shareholder_name=major.nm,
-                major_shareholder_rate=major.trmend_posesn_stock_qota_rt,
-            )
-
-        except DARTNoDataError:
-            return None
-        except DARTAPIError as e:
-            logger.warning(f"[DART] {stock_code} 지분현황 조회 실패: {e.message}")
-            return None
 
     # ==================== 재무 스크리닝 (2차 필터) ====================
 
@@ -777,42 +627,6 @@ class DARTAPIClient:
             passes_revenue_filter=data["passes_revenue_filter"],
             passes_profit_filter=data["passes_profit_filter"],
         )
-
-    async def screen_stocks_financial(
-        self,
-        stock_codes: list[str],
-        max_concurrent: int = 5,
-    ) -> dict[str, FinancialScreeningDTO]:
-        """
-        여러 종목의 재무 스크리닝 일괄 수행
-
-        Args:
-            stock_codes: 종목코드 리스트
-            max_concurrent: 동시 요청 수 제한
-
-        Returns:
-            종목코드 -> FinancialScreeningDTO 매핑
-        """
-        results: dict[str, FinancialScreeningDTO] = {}
-        semaphore = asyncio.Semaphore(max_concurrent)
-
-        async def screen_one(code: str) -> tuple[str, FinancialScreeningDTO | None]:
-            async with semaphore:
-                result = await self.get_financial_screening(code)
-                return code, result
-
-        tasks = [screen_one(code) for code in stock_codes]
-        completed = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for item in completed:
-            if isinstance(item, Exception):
-                continue
-            code, result = item
-            if result:
-                results[code] = result
-
-        return results
-
 
 # 싱글톤 인스턴스
 _dart_client: DARTAPIClient | None = None

@@ -5,7 +5,6 @@
 Pydantic Settings를 사용한 타입 안전 환경 변수 관리
 """
 
-import warnings
 from functools import lru_cache
 from typing import Literal
 

@@ -8,10 +8,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.adapters.database.models.order import OrderModel, OrderStatus, OrderType, PriceType
+from src.adapters.database.models.order import OrderStatus, PriceType
 from src.adapters.database.repositories.order_repository import OrderRepository
 from src.adapters.external.kis_api.client import KISAPIClient
 from src.adapters.external.kis_api.exceptions import KISAPIError, KISRateLimitError

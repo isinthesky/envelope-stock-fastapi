@@ -16,17 +16,6 @@ from src.application.common.dto import BaseDTO
 # ==================== Strategy Type Enum ====================
 
 
-class StrategyTypeEnum(str, Enum):
-    """전략 유형"""
-
-    MOMENTUM = "momentum"
-    MEAN_REVERSION = "mean_reversion"
-    BREAKOUT = "breakout"
-    GRID = "grid"
-    GOLDEN_CROSS = "golden_cross"  # 골든크로스 전략
-    CUSTOM = "custom"
-
-
 # ==================== Request DTOs ====================
 
 
@@ -89,7 +78,6 @@ class RiskManagementConfig(BaseDTO):
 class BaseStrategyConfig(BaseDTO):
     """기본 전략 설정"""
 
-    pass
 
 
 class BollingerStrategyConfigDTO(BaseStrategyConfig):

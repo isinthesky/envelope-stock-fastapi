@@ -27,7 +27,6 @@ from src.adapters.database.repositories.stock_universe_repository import (
 )
 from src.adapters.external.dart_api import get_dart_client, FinancialScreeningDTO
 from src.application.common.decorators import transaction
-from src.application.common.exceptions import StrategyError
 from src.application.common.indicators import TechnicalIndicators
 from src.adapters.database.connection import AsyncSessionLocal
 from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader

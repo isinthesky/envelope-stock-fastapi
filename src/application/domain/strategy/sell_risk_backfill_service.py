@@ -8,7 +8,7 @@ Sell risk data backfill service
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 from sqlalchemy import select
@@ -138,9 +138,3 @@ class SellRiskBackfillService:
             ),
         }
 
-    @staticmethod
-    def default_start_date(years: int, end_date: str | None = None) -> str:
-        resolved_end = date.today() if end_date is None else date.fromisoformat(
-            f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
-        )
-        return (resolved_end - timedelta(days=365 * years)).strftime("%Y%m%d")

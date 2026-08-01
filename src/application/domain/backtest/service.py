@@ -635,3 +635,4 @@ class BacktestService:
             return "C"
         else:
             return "D"
+

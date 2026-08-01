@@ -509,24 +509,6 @@ class KISAPIClient:
 
     # ==================== Hash Key 발급 (주문용) ====================
 
-    async def get_hashkey(self, json_data: dict[str, Any]) -> str:
-        """
-        주문 API용 Hash Key 발급
-
-        Args:
-            json_data: 주문 데이터
-
-        Returns:
-            str: Hash Key
-
-        Raises:
-            KISAPIError: Hash Key 발급 실패
-        """
-        path = "/uapi/hashkey"
-        response = await self.post(path, json=json_data)
-        return response.get("HASH", "")
-
-
 # ==================== 싱글톤 인스턴스 ====================
 
 _kis_client_instance: KISAPIClient | None = None

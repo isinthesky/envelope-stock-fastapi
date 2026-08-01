@@ -11,7 +11,6 @@ from decimal import Decimal
 from src.adapters.cache.redis_client import RedisClient
 from src.adapters.external.kis_api.client import KISAPIClient
 
-from src.application.common.decorators import cache
 from src.application.common.exceptions import KISAPIServiceError
 from src.application.domain.market_data.dto import (
     CandleDTO,
