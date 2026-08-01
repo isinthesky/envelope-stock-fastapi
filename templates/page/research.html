@@ -1,0 +1,188 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}전략 연구 & 백테스트 - Stock API Admin{% endblock %}
+
+{% block extra_styles %}
+.rs-hero { margin-bottom: 8px; }
+.rs-hero p { color:#64748b; margin:4px 0 0; }
+.rs-section { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:18px 20px; margin-top:16px; }
+.rs-section > h2 { margin:0 0 4px; font-size:17px; color:#1e293b; }
+.rs-section > .sub { color:#94a3b8; font-size:12px; margin:0 0 12px; }
+.rs-evo { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px,1fr)); gap:12px; }
+.rs-step { border:1px solid #e2e8f0; border-radius:10px; padding:14px; background:#f8fafc; position:relative; }
+.rs-step .idx { position:absolute; top:10px; right:12px; font-size:11px; color:#cbd5e1; font-weight:700; }
+.rs-step .name { font-size:13px; font-weight:700; color:#334155; margin-bottom:8px; }
+.rs-step .stat { display:flex; justify-content:space-between; font-size:12px; padding:2px 0; }
+.rs-step .stat b { color:#0f172a; }
+.rs-step.best { border-color:#16a34a; background:#f0fdf4; box-shadow:0 0 0 1px #16a34a inset; }
+.pos { color:#16a34a; font-weight:700; }
+.neg { color:#dc2626; font-weight:700; }
+.rs-table { width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }
+.rs-table th { background:#f1f5f9; padding:7px 9px; text-align:right; font-weight:600; border-bottom:2px solid #e2e8f0; }
+.rs-table th:first-child, .rs-table td:first-child { text-align:left; }
+.rs-table td { padding:7px 9px; border-bottom:1px solid #f1f5f9; text-align:right; }
+.rs-table tr.hl { background:#f0fdf4; }
+.rs-table tr.hl td { font-weight:700; }
+.badge { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; }
+.badge.on { background:#dcfce7; color:#166534; }
+.badge.off { background:#f1f5f9; color:#64748b; }
+.badge.tag { background:#e0f2fe; color:#075985; margin-left:6px; }
+.rs-fixes { list-style:none; padding:0; margin:0; display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:8px; }
+.rs-fixes li { font-size:12.5px; padding:8px 10px; background:#f8fafc; border:1px solid #eef2f7; border-radius:8px; line-height:1.45; }
+.rs-fixes li b { color:#0f172a; }
+.flag-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; }
+.flag-row { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; }
+.flag-row code { color:#475569; font-size:12px; }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.callout { background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:10px 12px; font-size:12.5px; color:#92400e; margin-top:10px; }
+.script-list { columns:2; font-size:12.5px; color:#475569; }
+.script-list li { margin-bottom:3px; }
+@media (max-width:640px){ .script-list{columns:1;} }
+{% endblock %}
+
+{% block content %}
+<div class="rs-hero">
+  <h1>전략 연구 &amp; 백테스트</h1>
+  <p>매수/매도 계산식 개선 → ETF 전환 → 추세추종 → 시장 레짐 필터까지의 검증 이력과 결과.</p>
+</div>
+
+<!-- 1. 전략 진화 -->
+<section class="rs-section">
+  <h2>전략 진화</h2>
+  <p class="sub">단계별 백테스트 성과 (승률 / 평균수익 / 평균손실). 개별주 노이즈 회피 → ETF → 추세추종 → 레짐필터로 단계마다 개선.</p>
+  <div class="rs-evo">
+    <div class="rs-step">
+      <span class="idx">01</span><div class="name">개별주 · Fear-Buy</div>
+      <div class="stat"><span>승률</span><b>43%</b></div>
+      <div class="stat"><span>평균수익</span><b class="pos">+22%</b></div>
+      <div class="stat"><span>평균손실</span><b class="neg">−16%</b></div>
+    </div>
+    <div class="rs-step">
+      <span class="idx">02</span><div class="name">ETF · Fear-Buy</div>
+      <div class="stat"><span>승률</span><b>52%</b></div>
+      <div class="stat"><span>평균수익</span><b class="pos">+25%</b></div>
+      <div class="stat"><span>평균손실</span><b class="neg">−16%</b></div>
+    </div>
+    <div class="rs-step">
+      <span class="idx">03</span><div class="name">ETF · 추세추종</div>
+      <div class="stat"><span>승률</span><b>57%</b></div>
+      <div class="stat"><span>평균수익</span><b class="pos">+30%</b></div>
+      <div class="stat"><span>평균손실</span><b class="neg">−8%</b></div>
+    </div>
+    <div class="rs-step best">
+      <span class="idx">04</span><div class="name">ETF · 추세 + 레짐필터 <span class="badge tag">최종</span></div>
+      <div class="stat"><span>승률</span><b>65%</b></div>
+      <div class="stat"><span>평균수익</span><b class="pos">+37.6%</b></div>
+      <div class="stat"><span>평균손실</span><b class="neg">−7%</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- 2. 추세추종 9-type -->
+<section class="rs-section">
+  <h2>ETF 추세추종 9-Type (듀얼 MA 골든/데드크로스, 48종목·~7년)</h2>
+  <p class="sub">short(10/20/50) × long(60/120/200). 느린 MA(50/120·50/200)가 승률·수익·손실 모두 우월.</p>
+  <table class="rs-table">
+    <thead><tr><th>Type</th><th>MA단/장</th><th>거래</th><th>승률</th><th>평균수익</th><th>평균손실</th><th>보유일</th></tr></thead>
+    <tbody>
+      <tr><td>T1</td><td>10/60</td><td>868</td><td>38.1%</td><td class="pos">+7.0%</td><td class="neg">−4.7%</td><td>51</td></tr>
+      <tr><td>T5</td><td>20/120</td><td>383</td><td>46.7%</td><td class="pos">+18.8%</td><td class="neg">−6.3%</td><td>117</td></tr>
+      <tr><td>T6</td><td>20/200</td><td>233</td><td>45.1%</td><td class="pos">+22.5%</td><td class="neg">−6.6%</td><td>155</td></tr>
+      <tr><td>T8</td><td>50/120</td><td>273</td><td>56.8%</td><td class="pos">+25.4%</td><td class="neg">−7.4%</td><td>163</td></tr>
+      <tr class="hl"><td>T9 ★◆</td><td>50/200</td><td>172</td><td>57.0%</td><td class="pos">+29.7%</td><td class="neg">−7.6%</td><td>210</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">★ 최고 승률 · ◆ 최고 수익 = <b>T9 (MA50/200)</b>. MA50/120은 운영 골든크로스(MA55/165)와 근접.</div>
+</section>
+
+<!-- 3. Fear-Buy vs 추세추종 -->
+<section class="rs-section">
+  <h2>Fear-Buy vs 추세추종 (동일 48 ETF)</h2>
+  <p class="sub">결정적 차이는 손실 크기 — 추세추종은 데드크로스가 추세적응형 손절 역할.</p>
+  <table class="rs-table">
+    <thead><tr><th>전략</th><th>최적 설정</th><th>승률</th><th>평균수익</th><th>평균손실</th><th>거래</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td>추세추종</td><td>MA50/200</td><td>57.0%</td><td class="pos">+29.7%</td><td class="neg">−7.6%</td><td>172</td></tr>
+      <tr><td>Fear-Buy</td><td>RSI≤30 / −20%</td><td>52.1%</td><td class="pos">+25.5%</td><td class="neg">−16.4%</td><td>119</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 4. 레짐필터 -->
+<section class="rs-section">
+  <h2>시장 레짐 필터 (KOSPI &gt; MA200 상승레짐일 때만 진입)</h2>
+  <p class="sub">추세추종의 약점(약세·횡보장 whipsaw)을 진입게이트로 완화. 레짐청산(강제청산)은 승자 조기청산으로 역효과.</p>
+  <table class="rs-table">
+    <thead><tr><th>MA50/200 변형</th><th>거래</th><th>승률</th><th>평균수익</th><th>평균손실</th><th>약세장 21-22</th></tr></thead>
+    <tbody>
+      <tr><td>무필터</td><td>172</td><td>57.0%</td><td class="pos">+29.7%</td><td class="neg">−7.7%</td><td class="neg">−6.7% (23건)</td></tr>
+      <tr class="hl"><td>진입게이트 ★◆</td><td>126</td><td>65.1%</td><td class="pos">+37.6%</td><td class="neg">−6.7%</td><td>거래 0 (자동 회피)</td></tr>
+      <tr><td>게이트+레짐청산</td><td>126</td><td>54.8%</td><td class="pos">+26.4%</td><td class="neg">−5.1%</td><td>−3.2% (2건)</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">Walk-forward OOS 검증: <b>52.4% / +28.2% (168거래)</b>. 2022 약세장을 레짐게이트가 <b>거래 0건</b>으로 회피(인과적·재현). codex 리뷰 <b>활성화 GO</b>.</div>
+</section>
+
+<!-- 5. 운영 전략 플래그 -->
+<section class="rs-section">
+  <h2>운영 전략 플래그 (현재값)</h2>
+  <p class="sub">검증 결과를 코드로 반영. 라이브 영향 있는 항목은 opt-in(기본 OFF).</p>
+  <div class="flag-grid">
+    <div class="flag-row"><span><code>GC_REGIME_FILTER_ENABLED</code><br><small>골든크로스 레짐 게이트</small></span>
+      <span class="badge {{ 'on' if flags.gc_regime_filter_enabled else 'off' }}">{{ 'ON' if flags.gc_regime_filter_enabled else 'OFF' }}</span></div>
+    <div class="flag-row"><span><code>GC_REGIME_MA</code><br><small>레짐 판정 KOSPI MA</small></span>
+      <span class="mono">{{ flags.gc_regime_ma }}</span></div>
+    <div class="flag-row"><span><code>GC_REQUIRE_RSI_OVERSOLD</code><br><small>GC + RSI≤임계</small></span>
+      <span class="badge {{ 'on' if flags.gc_require_rsi_oversold else 'off' }}">{{ 'ON' if flags.gc_require_rsi_oversold else 'OFF' }}</span></div>
+    <div class="flag-row"><span><code>FEAR_BUY_WINDOW_ENABLED</code><br><small>공포 윈도우 매수</small></span>
+      <span class="badge {{ 'on' if flags.fear_buy_window_enabled else 'off' }}">{{ 'ON' if flags.fear_buy_window_enabled else 'OFF' }}</span></div>
+    <div class="flag-row"><span><code>FEAR_BUY_NOTIFY_ENABLED</code><br><small>fear-buy 알림 노출</small></span>
+      <span class="badge {{ 'on' if flags.fear_buy_notify_enabled else 'off' }}">{{ 'ON' if flags.fear_buy_notify_enabled else 'OFF' }}</span></div>
+    <div class="flag-row"><span><code>OHLCV_RETENTION_DAYS</code><br><small>일봉 보존(3년+버퍼)</small></span>
+      <span class="mono">{{ flags.ohlcv_retention_days }}</span></div>
+  </div>
+</section>
+
+<!-- 6. 계산식 blind-spot 수정 -->
+<section class="rs-section">
+  <h2>매수/매도 계산식 blind-spot 수정</h2>
+  <p class="sub">"조합 0건" 리포트 조사에서 발견. 9개 subagent 검토 + codex 교차검증 → Critical/High/Medium=0.</p>
+  <ul class="rs-fixes">
+    <li><b>공포 필터</b> — <code>is_market_fear_by_bollinger</code>가 항상 False 반환하던 버그 수정(밴드폭 윈도우 슬라이스).</li>
+    <li><b>RSI 표준화</b> — SMA→Wilder 통일, 운영·백테스트 RSI 일치.</li>
+    <li><b>시장 프록시</b> — 개별종목 대신 KOSPI/대형주로 시장 공포 판정.</li>
+    <li><b>Fear-Window</b> — 동일봉 AND → 공포 후 N일 윈도우로 위상차 흡수.</li>
+    <li><b>매도 손절</b> — 20일 고점 고아규칙 제거 → 하드손절 + MA165 추세손절.</li>
+    <li><b>hybrid 매도</b> — async/await·df·Decimal 크래시 수정.</li>
+    <li><b>실측 검증</b> — acceptance 백테스트로 "조합 0→18" 재현(버그 확정).</li>
+  </ul>
+</section>
+
+<!-- 7. OHLCV 저장 & dead code -->
+<section class="rs-section">
+  <h2>OHLCV 저장 수정 &amp; 코드 정리</h2>
+  <p class="sub">2~3년 백테스트 데이터 확보 과정에서 발견한 저장 버그 + dead code 정리.</p>
+  <ul class="rs-fixes">
+    <li><b>보존정책</b> — 365일 하드코딩 제거, 3년+버퍼(1400일) 보존.</li>
+    <li><b>이력 페치</b> — date→datetime 크래시, 청크 중복, 부분실패 갭 캐싱 수정.</li>
+    <li><b>KOSPI 지수</b> — 잘못된 API 계약 수정 → 실 KOSPI 지수 적재.</li>
+    <li><b>팬텀 행</b> — timestamp 정규화 버그(15:00 UTC 밀림) 수정 + 정리.</li>
+    <li><b>Dead code</b> — vulture+pyflakes+6 subagent 교차검증 → 약 −932줄 제거(오제거 codex 적발·복원).</li>
+  </ul>
+  <p class="sub" style="margin-top:12px;">재현 스크립트 (<span class="mono">scripts/</span>)</p>
+  <ul class="script-list">
+    <li>fear_buy_acceptance.py</li>
+    <li>fear_buy_grid.py</li>
+    <li>etf_trend_grid.py</li>
+    <li>etf_trend_walkforward.py</li>
+    <li>etf_trend_hybrid.py</li>
+    <li>etf_trend_regime.py</li>
+    <li>etf_trend_regime_walkforward.py</li>
+    <li>backfill_2y.py / backfill_kospi.py</li>
+  </ul>
+</section>
+
+<p style="color:#94a3b8; font-size:11px; margin-top:16px;">
+  ⚠️ 모든 수치는 인샘플/단일 기간 최적화 포함 — out-of-sample·slippage·분배금 미반영. 실전 적용 전 추가 검증 필요.
+</p>
+{% endblock %}
