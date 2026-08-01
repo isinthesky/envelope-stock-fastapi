@@ -9,6 +9,7 @@ Sell Strategy Service - 매도 전략 서비스
 
 import logging
 import math
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
@@ -32,6 +33,21 @@ from src.application.domain.strategy.dto import (
 )
 from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
 from src.application.domain.strategy.sell_rule_research_service import SellPeakRuleResearchService
+from src.application.domain.strategy.sell_score_rules import (
+    ScoreRule,
+    adx_penalty_rule,
+    adx_rule,
+    cross_rule,
+    high_52week_rule,
+    ma_rule,
+    market_credit_rule,
+    overbought_bonus_rule,
+    personal_flow_rule,
+    risk_combo_rule,
+    rsi_rule,
+    stoch_rule,
+    volume_rule,
+)
 from src.application.domain.strategy.strategy_contract import (
     SELL_STAGE_ORDER,
     market_credit_label,
@@ -40,6 +56,79 @@ from src.settings.config import settings
 from src.settings.sell_score_settings import DEFAULT_PEAK_RULE_THRESHOLDS, SellScoreSettings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _SellAnalysisContext:
+    """``analyze_sell_signal`` 단계 간에 전달되는 가변 작업 컨텍스트.
+
+    로딩(_load_analysis_context) → overlay(_build_overlays) →
+    점수/Stage(_score_and_stage) → DTO(_to_sell_dto) 순으로 각 헬퍼가
+    필드를 채워 넣는다. 기존 단일 메서드의 지역 변수를 그대로 옮긴 것이며
+    계산/순서는 동일하다(동작 보존).
+    """
+
+    df: pd.DataFrame
+    candle_count: int = 0
+
+    # --- 로딩/지표 ---
+    close: float = 0.0
+    ma_short: float = 0.0
+    ma_long: float = 0.0
+    rsi_raw: float | None = None
+    stoch_k_raw: float | None = None
+    stoch_d_raw: float | None = None
+    prev_stoch_k: float | None = None
+    prev_stoch_d: float | None = None
+    is_stoch_dead_cross: bool = False
+    stoch_cross_type: str | None = None
+    stoch_k: float = 50.0
+    stoch_d: float = 50.0
+    rsi: float = 50.0
+    volume_indicators: dict = field(default_factory=dict)
+    adx_indicators: dict = field(default_factory=dict)
+    simple_sell_info: dict = field(default_factory=dict)
+    is_52week_high: bool = False
+    high_52week_score: float = 0.0
+    high_52week_reason: str = ""
+    high_52week_note: str = ""
+    high_52week_value: float | None = None
+    high_52week_ratio: float | None = None
+
+    # --- overlay ---
+    personal_flow_data: StockPersonalFlowData | None = None
+    is_personal_buying_overheated: bool = False
+    personal_flow_reasons: list[str] = field(default_factory=list)
+    market_credit_data: MarketCreditTrendData | None = None
+    is_market_credit_overheated: bool = False
+    market_credit_reasons: list[str] = field(default_factory=list)
+    overlay_signals: dict = field(default_factory=dict)
+
+    # --- 점수/Stage ---
+    is_gc_active: bool = False
+    is_death_cross: bool = False
+    ma_gap_ratio: float = 0.0
+    profit_ratio: float | None = None
+    dynamic_stoch: float = 0.0
+    dynamic_rsi: float = 0.0
+    is_stop_loss_triggered: bool = False
+    is_take_profit_triggered: bool = False
+    is_stoch_overbought: bool = False
+    is_rsi_overbought: bool = False
+    sell_phase: SellPhaseEnum = SellPhaseEnum.NONE
+    sell_stage: SellStageEnum = SellStageEnum.HOLD
+    stage_reasons: list[str] = field(default_factory=list)
+    sell_score_result: SellScoreResultDTO | None = None
+    drawdown_from_high: float | None = None
+    final_stage: SellStageEnum = SellStageEnum.HOLD
+    final_ratio_min: float = 0.0
+    final_ratio_max: float = 0.0
+    sell_ratio_min: float = 0.0
+    sell_ratio_max: float = 0.0
+    stage_info: dict = field(default_factory=dict)
+    overbought_sell_blocked: bool = False
+    sell_reasons: list[str] = field(default_factory=list)
+    phase_info: dict = field(default_factory=dict)
 
 
 class SellStrategyService:
@@ -457,6 +546,54 @@ class SellStrategyService:
         analyzed_at = datetime.now()
         name, market = await self._get_symbol_hints(symbol=symbol, name=name, market=market)
 
+        # 1~3. OHLCV 로딩 + 기술적 지표/보조 컨텍스트
+        ctx = await self._load_analysis_context(
+            symbol=symbol,
+            entry_price=entry_price,
+            highest_price=highest_price,
+            force_refresh=force_refresh,
+        )
+
+        # 3-2~3-3. 개인 수급 / 시장 신용 overlay
+        await self._build_overlays(ctx, symbol=symbol, market=market)
+
+        # 4~8. 수익률/Phase/Stage/점수/근거 종합
+        self._score_and_stage(
+            ctx,
+            symbol=symbol,
+            stoch_overbought=stoch_overbought,
+            rsi_overbought=rsi_overbought,
+            entry_price=entry_price,
+            highest_price=highest_price,
+            trailing_stop_activated=trailing_stop_activated,
+            use_scoring=use_scoring,
+            merge_strategy=merge_strategy,
+            name=name,
+            market=market,
+            sell_mode=sell_mode,
+        )
+
+        # 9. DTO 조립
+        return self._to_sell_dto(
+            ctx,
+            symbol=symbol,
+            name=name,
+            analyzed_at=analyzed_at,
+            entry_price=entry_price,
+            highest_price=highest_price,
+            trailing_stop_activated=trailing_stop_activated,
+            merge_strategy=merge_strategy,
+        )
+
+    async def _load_analysis_context(
+        self,
+        *,
+        symbol: str,
+        entry_price: float | None,
+        highest_price: float | None,
+        force_refresh: bool,
+    ) -> _SellAnalysisContext:
+        """OHLCV 로딩 + 기술적 지표/스토캐스틱/거래량/ADX/52주 신고가 계산."""
         # 1. OHLCV 데이터 로딩
         data_loader = self._get_data_loader()
 
@@ -471,7 +608,8 @@ class SellStrategyService:
         except ValueError as e:
             raise StrategyError(str(e))
 
-        candle_count = len(df)
+        ctx = _SellAnalysisContext(df=df)
+        ctx.candle_count = len(df)
 
         # 2. 기술적 지표 계산 (MA55/MA165 + Stochastic)
         df = TechnicalIndicators.prepare_golden_cross_indicators(
@@ -489,348 +627,416 @@ class SellStrategyService:
 
         # 2-1. 거래량 지표 계산 (ATR 포함)
         atr_value = self._calculate_atr(df, period=14)
-        volume_indicators = self._calculate_volume_indicators(df, atr=atr_value)
+        ctx.volume_indicators = self._calculate_volume_indicators(df, atr=atr_value)
 
         # 2-2. ADX 지표 계산
-        adx_indicators = self._calculate_adx_indicators(df, period=14)
+        ctx.adx_indicators = self._calculate_adx_indicators(df, period=14)
 
         # 3. 최신 값 추출
         latest = df.iloc[-1]
-        close = float(latest["close"])
-        ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
-        ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
-        rsi_raw = float(latest["rsi"]) if pd.notna(latest["rsi"]) else None
+        ctx.close = float(latest["close"])
+        ctx.ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
+        ctx.ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
+        ctx.rsi_raw = float(latest["rsi"]) if pd.notna(latest["rsi"]) else None
 
         stoch_data = self._calculate_stochastic_indicators(df)
-        stoch_k_raw = stoch_data.get("stoch_k")
-        stoch_d_raw = stoch_data.get("stoch_d")
-        prev_stoch_k = stoch_data.get("prev_stoch_k")
-        prev_stoch_d = stoch_data.get("prev_stoch_d")
-        is_stoch_dead_cross = bool(stoch_data.get("is_stoch_dead_cross", False))
-        stoch_cross_type = stoch_data.get("stoch_cross_type")
+        ctx.stoch_k_raw = stoch_data.get("stoch_k")
+        ctx.stoch_d_raw = stoch_data.get("stoch_d")
+        ctx.prev_stoch_k = stoch_data.get("prev_stoch_k")
+        ctx.prev_stoch_d = stoch_data.get("prev_stoch_d")
+        ctx.is_stoch_dead_cross = bool(stoch_data.get("is_stoch_dead_cross", False))
+        ctx.stoch_cross_type = stoch_data.get("stoch_cross_type")
 
-        stoch_k = stoch_k_raw if stoch_k_raw is not None else 50
-        stoch_d = stoch_d_raw if stoch_d_raw is not None else 50
-        rsi = rsi_raw if rsi_raw is not None else 50
+        ctx.stoch_k = ctx.stoch_k_raw if ctx.stoch_k_raw is not None else 50
+        ctx.stoch_d = ctx.stoch_d_raw if ctx.stoch_d_raw is not None else 50
+        ctx.rsi = ctx.rsi_raw if ctx.rsi_raw is not None else 50
 
         # === New: Compute simple sell for comparison/hybrid ===
-        simple_sell_info = self.compute_simple_sell_signal(
+        ctx.simple_sell_info = self.compute_simple_sell_signal(
             df=df,
-            rsi=rsi,
-            current_price=close,
+            rsi=ctx.rsi,
+            current_price=ctx.close,
             entry_price=entry_price,
             highest_price=highest_price,
         )
 
         # 3-1. 52주 신고가 체크
         (
-            is_52week_high,
-            high_52week_score,
-            high_52week_reason,
-            high_52week_note,
+            ctx.is_52week_high,
+            ctx.high_52week_score,
+            ctx.high_52week_reason,
+            ctx.high_52week_note,
         ) = self._check_52week_high(
             symbol=symbol,
-            current_price=close,
+            current_price=ctx.close,
             df=df,
         )
-        high_52week_value: float | None = None
-        high_52week_ratio: float | None = None
-        if high_52week_note == "raw" and "high" in df.columns and len(df) > 0:
+        if ctx.high_52week_note == "raw" and "high" in df.columns and len(df) > 0:
             lookback = min(252, len(df))
             high_52week_raw = df["high"].tail(lookback).max()
             if high_52week_raw is not None and pd.notna(high_52week_raw):
-                high_52week_value = float(high_52week_raw)
-                if high_52week_value > 0:
-                    high_52week_ratio = close / high_52week_value
+                ctx.high_52week_value = float(high_52week_raw)
+                if ctx.high_52week_value > 0:
+                    ctx.high_52week_ratio = ctx.close / ctx.high_52week_value
 
+        ctx.df = df
+        return ctx
+
+    async def _build_overlays(
+        self,
+        ctx: _SellAnalysisContext,
+        *,
+        symbol: str,
+        market: str | None,
+    ) -> None:
+        """개인 수급 / 시장 신용 등 외부 overlay 신호 수집."""
         # 3-2. 개인 수급 과열 체크 (정확한 신용잔고 API 확보 전 보조지표)
-        personal_flow_data = await self._get_personal_flow_data(symbol)
-        is_personal_buying_overheated, personal_flow_reasons = self._is_personal_buying_overheated(
-            personal_flow_data
-        )
+        ctx.personal_flow_data = await self._get_personal_flow_data(symbol)
+        (
+            ctx.is_personal_buying_overheated,
+            ctx.personal_flow_reasons,
+        ) = self._is_personal_buying_overheated(ctx.personal_flow_data)
 
         # 3-3. 시장 신용 과열 체크 (KOFIA)
-        market_credit_data = await self._get_market_credit_trend(market)
-        is_market_credit_overheated = bool(market_credit_data and market_credit_data.is_overheated)
-        market_credit_reasons = market_credit_data.reasons if market_credit_data else []
-        overlay_signals = SellPeakRuleResearchService.evaluate_peak_rule_inputs(
+        ctx.market_credit_data = await self._get_market_credit_trend(market)
+        ctx.is_market_credit_overheated = bool(
+            ctx.market_credit_data and ctx.market_credit_data.is_overheated
+        )
+        ctx.market_credit_reasons = (
+            ctx.market_credit_data.reasons if ctx.market_credit_data else []
+        )
+        ctx.overlay_signals = SellPeakRuleResearchService.evaluate_peak_rule_inputs(
             personal_buy_days_5d=(
-                personal_flow_data.days_positive_count if personal_flow_data else None
+                ctx.personal_flow_data.days_positive_count if ctx.personal_flow_data else None
             ),
             personal_buy_ratio_5d_to_volume=(
-                personal_flow_data.recent_5d_buy_ratio_to_volume if personal_flow_data else None
+                ctx.personal_flow_data.recent_5d_buy_ratio_to_volume
+                if ctx.personal_flow_data
+                else None
             ),
             market_credit_change_ratio=(
-                market_credit_data.balance_change_ratio if market_credit_data else None
+                ctx.market_credit_data.balance_change_ratio if ctx.market_credit_data else None
             ),
             market_credit_recent_high_ratio=(
-                market_credit_data.recent_5d_high_ratio if market_credit_data else None
+                ctx.market_credit_data.recent_5d_high_ratio if ctx.market_credit_data else None
             ),
-            stoch_k=stoch_k,
-            is_52week_high=is_52week_high,
-            high_52week_ratio=high_52week_ratio,
+            stoch_k=ctx.stoch_k,
+            is_52week_high=ctx.is_52week_high,
+            high_52week_ratio=ctx.high_52week_ratio,
         )
 
+    def _score_and_stage(
+        self,
+        ctx: _SellAnalysisContext,
+        *,
+        symbol: str,
+        stoch_overbought: float,
+        rsi_overbought: float,
+        entry_price: float | None,
+        highest_price: float | None,
+        trailing_stop_activated: bool,
+        use_scoring: bool,
+        merge_strategy: str,
+        name: str | None,
+        market: str | None,
+        sell_mode: str,
+    ) -> None:
+        """수익률/Phase/Stage/점수/근거를 종합해 최종 Stage와 근거를 확정."""
+        volume_indicators = ctx.volume_indicators
+        adx_indicators = ctx.adx_indicators
+
         # 4. 기본 지표 계산
-        is_gc_active = ma_short > ma_long
-        is_death_cross = ma_short < ma_long
-        ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
+        ctx.is_gc_active = ctx.ma_short > ctx.ma_long
+        ctx.is_death_cross = ctx.ma_short < ctx.ma_long
+        ctx.ma_gap_ratio = (
+            ((ctx.ma_short - ctx.ma_long) / ctx.ma_long * 100) if ctx.ma_long > 0 else 0
+        )
 
         # 5. 수익률 계산 및 동적 임계값 적용
-        profit_ratio: float | None = None
-        dynamic_stoch = stoch_overbought
-        dynamic_rsi = rsi_overbought
-        is_stop_loss_triggered = False
-        is_take_profit_triggered = False
+        ctx.profit_ratio = None
+        ctx.dynamic_stoch = stoch_overbought
+        ctx.dynamic_rsi = rsi_overbought
+        ctx.is_stop_loss_triggered = False
+        ctx.is_take_profit_triggered = False
 
         if entry_price is not None and entry_price > 0:
-            profit_ratio = (close - entry_price) / entry_price
+            ctx.profit_ratio = (ctx.close - entry_price) / entry_price
 
             # 긴급 손절 체크
-            if profit_ratio <= self.dynamic_config.emergency_stop_ratio:
-                is_stop_loss_triggered = True
+            if ctx.profit_ratio <= self.dynamic_config.emergency_stop_ratio:
+                ctx.is_stop_loss_triggered = True
 
             # 익절 목표 체크
-            if profit_ratio >= self.dynamic_config.high_profit_threshold:
-                is_take_profit_triggered = True
+            if ctx.profit_ratio >= self.dynamic_config.high_profit_threshold:
+                ctx.is_take_profit_triggered = True
 
             # 동적 임계값 조정
-            dynamic_stoch, dynamic_rsi = self._get_dynamic_thresholds(profit_ratio)
+            ctx.dynamic_stoch, ctx.dynamic_rsi = self._get_dynamic_thresholds(ctx.profit_ratio)
 
         # 6. 적용된 임계값으로 과매수 판정
-        is_stoch_overbought = stoch_k > dynamic_stoch
-        is_rsi_overbought = rsi > dynamic_rsi
+        ctx.is_stoch_overbought = ctx.stoch_k > ctx.dynamic_stoch
+        ctx.is_rsi_overbought = ctx.rsi > ctx.dynamic_rsi
 
         # 7. Phase 분석 (선제적 매도 시그널)
-        sell_phase, phase_reasons = self._analyze_sell_phase(
-            is_gc_active=is_gc_active,
-            is_death_cross=is_death_cross,
-            ma_gap_ratio=ma_gap_ratio,
-            stoch_k=stoch_k,
-            rsi=rsi,
+        ctx.sell_phase, phase_reasons = self._analyze_sell_phase(
+            is_gc_active=ctx.is_gc_active,
+            is_death_cross=ctx.is_death_cross,
+            ma_gap_ratio=ctx.ma_gap_ratio,
+            stoch_k=ctx.stoch_k,
+            rsi=ctx.rsi,
         )
 
         # 7-1. 비중축소 Stage 결정
-        sell_stage, stage_reasons = self._determine_sell_stage(
-            sell_phase=sell_phase,
-            is_death_cross=is_death_cross,
-            is_gc_active=is_gc_active,
-            stoch_k=stoch_k,
-            rsi=rsi,
-            ma_gap_ratio=ma_gap_ratio,
+        ctx.sell_stage, stage_reasons = self._determine_sell_stage(
+            sell_phase=ctx.sell_phase,
+            is_death_cross=ctx.is_death_cross,
+            is_gc_active=ctx.is_gc_active,
+            stoch_k=ctx.stoch_k,
+            rsi=ctx.rsi,
+            ma_gap_ratio=ctx.ma_gap_ratio,
             adx=adx_indicators.get("adx"),
             plus_di=adx_indicators.get("plus_di"),
             minus_di=adx_indicators.get("minus_di"),
             is_volume_sell_signal=volume_indicators.get("is_volume_sell_signal", False),
-            profit_ratio=profit_ratio,
+            profit_ratio=ctx.profit_ratio,
             is_volume_spike=volume_indicators.get("is_volume_spike", False),
             is_volume_peak=volume_indicators.get("is_volume_peak", False),
-            is_stoch_dead_cross=is_stoch_dead_cross,
-            is_52week_high=is_52week_high,
-            high_52week_ratio=high_52week_ratio,
-            dynamic_stoch_threshold=dynamic_stoch,
-            dynamic_rsi_threshold=dynamic_rsi,
+            is_stoch_dead_cross=ctx.is_stoch_dead_cross,
+            is_52week_high=ctx.is_52week_high,
+            high_52week_ratio=ctx.high_52week_ratio,
+            dynamic_stoch_threshold=ctx.dynamic_stoch,
+            dynamic_rsi_threshold=ctx.dynamic_rsi,
             name=name,
             market=market,
         )
-        sell_stage, overlay_stage_reasons = self._apply_overlay_stage_upgrade(
-            sell_stage,
-            is_personal_buying_overheated=is_personal_buying_overheated,
-            overlay_signals=overlay_signals,
+        ctx.sell_stage, overlay_stage_reasons = self._apply_overlay_stage_upgrade(
+            ctx.sell_stage,
+            is_personal_buying_overheated=ctx.is_personal_buying_overheated,
+            overlay_signals=ctx.overlay_signals,
         )
         stage_reasons.extend(overlay_stage_reasons)
 
-        sell_score_result = self.calculate_sell_score(
-            stoch_k=stoch_k_raw,
-            stoch_d=stoch_d_raw,
-            prev_stoch_k=prev_stoch_k,
-            prev_stoch_d=prev_stoch_d,
-            rsi=rsi_raw,
+        ctx.sell_score_result = self.calculate_sell_score(
+            stoch_k=ctx.stoch_k_raw,
+            stoch_d=ctx.stoch_d_raw,
+            prev_stoch_k=ctx.prev_stoch_k,
+            prev_stoch_d=ctx.prev_stoch_d,
+            rsi=ctx.rsi_raw,
             volume_ratio=volume_indicators.get("volume_ratio"),
             volume_peak_score=volume_indicators.get("volume_peak_score"),
             adx=adx_indicators.get("adx"),
             plus_di=adx_indicators.get("plus_di"),
             minus_di=adx_indicators.get("minus_di"),
-            is_death_cross=is_death_cross,
-            current_price=close,
-            ma_short=ma_short,
-            ma_long=ma_long,
-            ma_gap_ratio=ma_gap_ratio,
+            is_death_cross=ctx.is_death_cross,
+            current_price=ctx.close,
+            ma_short=ctx.ma_short,
+            ma_long=ctx.ma_long,
+            ma_gap_ratio=ctx.ma_gap_ratio,
             is_volume_peak=volume_indicators.get("is_volume_peak", False),
             is_volume_sell_signal=volume_indicators.get("is_volume_sell_signal", False),
-            is_52week_high=is_52week_high,
-            high_52week_score=high_52week_score if high_52week_value is not None else None,
-            high_52week_reason=high_52week_reason if high_52week_value is not None else None,
+            is_52week_high=ctx.is_52week_high,
+            high_52week_score=ctx.high_52week_score if ctx.high_52week_value is not None else None,
+            high_52week_reason=(
+                ctx.high_52week_reason if ctx.high_52week_value is not None else None
+            ),
             personal_buy_days_5d=(
-                personal_flow_data.days_positive_count if personal_flow_data else None
+                ctx.personal_flow_data.days_positive_count if ctx.personal_flow_data else None
             ),
             personal_buy_ratio_5d_to_volume=(
-                personal_flow_data.recent_5d_buy_ratio_to_volume if personal_flow_data else None
+                ctx.personal_flow_data.recent_5d_buy_ratio_to_volume
+                if ctx.personal_flow_data
+                else None
             ),
             recent_5d_personal_net_buy=(
-                personal_flow_data.recent_5d_net_buy if personal_flow_data else None
+                ctx.personal_flow_data.recent_5d_net_buy if ctx.personal_flow_data else None
             ),
             market_credit_change_ratio=(
-                market_credit_data.balance_change_ratio if market_credit_data else None
+                ctx.market_credit_data.balance_change_ratio if ctx.market_credit_data else None
             ),
             market_credit_recent_high_ratio=(
-                market_credit_data.recent_5d_high_ratio if market_credit_data else None
+                ctx.market_credit_data.recent_5d_high_ratio if ctx.market_credit_data else None
             ),
-            risk_combo_peak=bool(overlay_signals["risk_combo_peak"]),
-            risk_combo_extreme=bool(overlay_signals["risk_combo_extreme"]),
+            risk_combo_peak=bool(ctx.overlay_signals["risk_combo_peak"]),
+            risk_combo_extreme=bool(ctx.overlay_signals["risk_combo_extreme"]),
         )
 
-        drawdown_from_high: float | None = None
+        ctx.drawdown_from_high = None
         if highest_price is not None and highest_price > 0:
-            drawdown_from_high = (highest_price - close) / highest_price
+            ctx.drawdown_from_high = (highest_price - ctx.close) / highest_price
 
         final_stage = self.determine_final_stage(
-            rule_stage=sell_stage,
-            score_stage=sell_score_result.recommended_stage,
+            rule_stage=ctx.sell_stage,
+            score_stage=ctx.sell_score_result.recommended_stage,
             use_scoring=use_scoring,
             merge_strategy=merge_strategy,
         )
         final_stage, position_stage_reasons = self._apply_position_risk_stage(
             final_stage,
-            is_take_profit_triggered=is_take_profit_triggered,
+            is_take_profit_triggered=ctx.is_take_profit_triggered,
             trailing_stop_activated=trailing_stop_activated,
-            drawdown_from_high=drawdown_from_high,
+            drawdown_from_high=ctx.drawdown_from_high,
         )
         stage_reasons.extend(position_stage_reasons)
 
         final_stage, final_overlay_stage_reasons = self._apply_overlay_stage_upgrade(
             final_stage,
-            is_personal_buying_overheated=is_personal_buying_overheated,
-            overlay_signals=overlay_signals,
+            is_personal_buying_overheated=ctx.is_personal_buying_overheated,
+            overlay_signals=ctx.overlay_signals,
         )
         stage_reasons.extend(final_overlay_stage_reasons)
+        ctx.final_stage = final_stage
 
-        final_ratio_min, final_ratio_max = SELL_STAGE_RATIOS.get(final_stage, (0.0, 0.0))
+        ctx.final_ratio_min, ctx.final_ratio_max = SELL_STAGE_RATIOS.get(final_stage, (0.0, 0.0))
 
         # Stage 기반 매도 비율 계산
-        sell_ratios = SELL_STAGE_RATIOS.get(sell_stage, (0.0, 0.0))
-        sell_ratio_min, sell_ratio_max = sell_ratios
+        sell_ratios = SELL_STAGE_RATIOS.get(ctx.sell_stage, (0.0, 0.0))
+        ctx.sell_ratio_min, ctx.sell_ratio_max = sell_ratios
 
         # Stage 정보
-        stage_info = SELL_STAGE_INFO.get(sell_stage.value, SELL_STAGE_INFO["HOLD"])
+        ctx.stage_info = SELL_STAGE_INFO.get(ctx.sell_stage.value, SELL_STAGE_INFO["HOLD"])
 
         # 과매수 매도 차단 여부 (ADX 강한 상승 추세)
-        overbought_sell_blocked = (
+        ctx.overbought_sell_blocked = (
             adx_indicators.get("is_strong_uptrend", False)
-            and not is_death_cross
+            and not ctx.is_death_cross
             and not volume_indicators.get("is_volume_sell_signal", False)
-            and sell_stage == SellStageEnum.HOLD
+            and ctx.sell_stage == SellStageEnum.HOLD
         )
 
         # 8. 매도 근거 수집
         sell_reasons = self._collect_sell_reasons(
-            is_death_cross=is_death_cross,
-            is_stoch_overbought=is_stoch_overbought,
-            is_rsi_overbought=is_rsi_overbought,
-            ma_short=ma_short,
-            ma_long=ma_long,
-            stoch_k=stoch_k,
-            stoch_overbought=dynamic_stoch,
-            rsi=rsi,
-            rsi_overbought=dynamic_rsi,
-            ma_gap_ratio=ma_gap_ratio,
-            profit_ratio=profit_ratio,
-            is_stop_loss_triggered=is_stop_loss_triggered,
-            is_take_profit_triggered=is_take_profit_triggered,
+            is_death_cross=ctx.is_death_cross,
+            is_stoch_overbought=ctx.is_stoch_overbought,
+            is_rsi_overbought=ctx.is_rsi_overbought,
+            ma_short=ctx.ma_short,
+            ma_long=ctx.ma_long,
+            stoch_k=ctx.stoch_k,
+            stoch_overbought=ctx.dynamic_stoch,
+            rsi=ctx.rsi,
+            rsi_overbought=ctx.dynamic_rsi,
+            ma_gap_ratio=ctx.ma_gap_ratio,
+            profit_ratio=ctx.profit_ratio,
+            is_stop_loss_triggered=ctx.is_stop_loss_triggered,
+            is_take_profit_triggered=ctx.is_take_profit_triggered,
         )
 
         # Phase 근거 추가
         sell_reasons.extend(phase_reasons)
-        sell_reasons.extend(personal_flow_reasons)
-        sell_reasons.extend(market_credit_reasons)
-        sell_reasons.extend(overlay_signals["combo_reasons"])
+        sell_reasons.extend(ctx.personal_flow_reasons)
+        sell_reasons.extend(ctx.market_credit_reasons)
+        sell_reasons.extend(ctx.overlay_signals["combo_reasons"])
 
         if not sell_reasons:
             sell_reasons.append("현재 매도 시그널 없음 - 보유 유지")
 
         # Phase 정보
-        phase_info = SELL_PHASE_INFO.get(sell_phase.value, SELL_PHASE_INFO["NONE"])
+        ctx.phase_info = SELL_PHASE_INFO.get(ctx.sell_phase.value, SELL_PHASE_INFO["NONE"])
 
         logger.info(
-            f"[Sell Signal] {symbol}: phase={sell_phase.value}, stage={sell_stage.value}, "
-            f"phase_name={phase_info['name']}, profit_ratio={profit_ratio}, "
+            f"[Sell Signal] {symbol}: phase={ctx.sell_phase.value}, "
+            f"stage={ctx.sell_stage.value}, "
+            f"phase_name={ctx.phase_info['name']}, profit_ratio={ctx.profit_ratio}, "
             f"adx={adx_indicators.get('adx')}, "
             f"volume_spike={volume_indicators.get('is_volume_spike')}"
         )
 
         # Mode support (simple/hybrid) - simple_compute already injected earlier
         # For full hybrid stage upgrade, use analyze_sell_signal_hybrid or post-process the DTO
-        if sell_mode in ("simple", "hybrid") and "simple_sell_info" in locals():
+        simple_sell_info = ctx.simple_sell_info
+        if sell_mode in ("simple", "hybrid") and simple_sell_info is not None:
             if simple_sell_info.get("should_sell"):
                 # Append to reasons for visibility
-                if "sell_reasons" in locals():
-                    sell_reasons = list(sell_reasons) + [
-                        "[MODE:" + sell_mode + "] " + r for r in simple_sell_info.get("reasons", [])
-                    ]
+                sell_reasons = list(sell_reasons) + [
+                    "[MODE:" + sell_mode + "] " + r for r in simple_sell_info.get("reasons", [])
+                ]
+
+        ctx.stage_reasons = stage_reasons
+        ctx.sell_reasons = sell_reasons
+
+    def _to_sell_dto(
+        self,
+        ctx: _SellAnalysisContext,
+        *,
+        symbol: str,
+        name: str | None,
+        analyzed_at: datetime,
+        entry_price: float | None,
+        highest_price: float | None,
+        trailing_stop_activated: bool,
+        merge_strategy: str,
+    ) -> SellSignalAnalysisDTO:
+        """확정된 컨텍스트를 매도 시그널 DTO로 직렬화."""
+        volume_indicators = ctx.volume_indicators
+        adx_indicators = ctx.adx_indicators
+        personal_flow_data = ctx.personal_flow_data
+        market_credit_data = ctx.market_credit_data
+        sell_score_result = ctx.sell_score_result
 
         return SellSignalAnalysisDTO(
             symbol=symbol,
             name=name,
-            current_price=Decimal(str(close)),
+            current_price=Decimal(str(ctx.close)),
             analyzed_at=analyzed_at,
-            ma_short=Decimal(str(round(ma_short, 2))),
-            ma_long=Decimal(str(round(ma_long, 2))),
-            ma_gap_ratio=round(ma_gap_ratio, 2),
-            is_death_cross=is_death_cross,
-            is_gc_active=is_gc_active,
-            stoch_k=round(stoch_k, 2),
-            stoch_d=round(stoch_d, 2),
-            is_stoch_overbought=is_stoch_overbought,
-            is_stoch_dead_cross=is_stoch_dead_cross,
-            stoch_cross_type=stoch_cross_type,
-            prev_stoch_k=round(prev_stoch_k, 2) if prev_stoch_k is not None else None,
-            prev_stoch_d=round(prev_stoch_d, 2) if prev_stoch_d is not None else None,
-            rsi=round(rsi, 2),
-            is_rsi_overbought=is_rsi_overbought,
+            ma_short=Decimal(str(round(ctx.ma_short, 2))),
+            ma_long=Decimal(str(round(ctx.ma_long, 2))),
+            ma_gap_ratio=round(ctx.ma_gap_ratio, 2),
+            is_death_cross=ctx.is_death_cross,
+            is_gc_active=ctx.is_gc_active,
+            stoch_k=round(ctx.stoch_k, 2),
+            stoch_d=round(ctx.stoch_d, 2),
+            is_stoch_overbought=ctx.is_stoch_overbought,
+            is_stoch_dead_cross=ctx.is_stoch_dead_cross,
+            stoch_cross_type=ctx.stoch_cross_type,
+            prev_stoch_k=round(ctx.prev_stoch_k, 2) if ctx.prev_stoch_k is not None else None,
+            prev_stoch_d=round(ctx.prev_stoch_d, 2) if ctx.prev_stoch_d is not None else None,
+            rsi=round(ctx.rsi, 2),
+            is_rsi_overbought=ctx.is_rsi_overbought,
             # 52주 신고가 관련
-            is_52week_high=is_52week_high,
-            high_52week=Decimal(str(high_52week_value)) if high_52week_value is not None else None,
-            high_52week_ratio=(
-                round(high_52week_ratio, 4) if high_52week_ratio is not None else None
+            is_52week_high=ctx.is_52week_high,
+            high_52week=(
+                Decimal(str(ctx.high_52week_value)) if ctx.high_52week_value is not None else None
             ),
-            high_52week_data_note=high_52week_note,
+            high_52week_ratio=(
+                round(ctx.high_52week_ratio, 4) if ctx.high_52week_ratio is not None else None
+            ),
+            high_52week_data_note=ctx.high_52week_note,
             # Phase 기반 매도 시그널
-            sell_phase=sell_phase.value,
-            sell_phase_name=phase_info["name"],
-            sell_phase_action=phase_info["action"],
-            sell_reasons=sell_reasons,
+            sell_phase=ctx.sell_phase.value,
+            sell_phase_name=ctx.phase_info["name"],
+            sell_phase_action=ctx.phase_info["action"],
+            sell_reasons=ctx.sell_reasons,
             # 수익률 관련
             entry_price=Decimal(str(entry_price)) if entry_price else None,
-            profit_ratio=round(profit_ratio, 4) if profit_ratio is not None else None,
-            dynamic_stoch_threshold=round(dynamic_stoch, 1),
-            dynamic_rsi_threshold=round(dynamic_rsi, 1),
+            profit_ratio=round(ctx.profit_ratio, 4) if ctx.profit_ratio is not None else None,
+            dynamic_stoch_threshold=round(ctx.dynamic_stoch, 1),
+            dynamic_rsi_threshold=round(ctx.dynamic_rsi, 1),
             # 손절/익절 상태
-            is_stop_loss_triggered=is_stop_loss_triggered,
-            is_take_profit_triggered=is_take_profit_triggered,
+            is_stop_loss_triggered=ctx.is_stop_loss_triggered,
+            is_take_profit_triggered=ctx.is_take_profit_triggered,
             # 트레일링 스탑 관련
             highest_price=Decimal(str(highest_price)) if highest_price else None,
             drawdown_from_high=(
-                round(drawdown_from_high, 4) if drawdown_from_high is not None else None
+                round(ctx.drawdown_from_high, 4) if ctx.drawdown_from_high is not None else None
             ),
             trailing_stop_activated=trailing_stop_activated,
             # === 비중축소 관련 신규 필드 ===
-            sell_stage=sell_stage.value,
-            sell_stage_name=stage_info["name"],
-            sell_ratio_min=sell_ratio_min,
-            sell_ratio_max=sell_ratio_max,
+            sell_stage=ctx.sell_stage.value,
+            sell_stage_name=ctx.stage_info["name"],
+            sell_ratio_min=ctx.sell_ratio_min,
+            sell_ratio_max=ctx.sell_ratio_max,
             sell_quantity_suggested=None,  # 보유 수량 정보가 있을 때 별도 계산
             holding_quantity=None,  # 보유 수량은 외부에서 제공
             sold_ratio=0.0,
-            sell_stage_reasons=stage_reasons,
+            sell_stage_reasons=ctx.stage_reasons,
             sell_score_result=sell_score_result,
             score_based_stage=(
                 sell_score_result.recommended_stage.value
                 if hasattr(sell_score_result.recommended_stage, "value")
                 else str(sell_score_result.recommended_stage)
             ),
-            final_stage=final_stage,
-            final_ratio_min=final_ratio_min,
-            final_ratio_max=final_ratio_max,
+            final_stage=ctx.final_stage,
+            final_ratio_min=ctx.final_ratio_min,
+            final_ratio_max=ctx.final_ratio_max,
             merge_strategy=merge_strategy,
             # === 거래량 관련 신규 필드 ===
             current_volume=volume_indicators.get("current_volume"),
@@ -850,7 +1056,7 @@ class SellStrategyService:
             minus_di=adx_indicators.get("minus_di"),
             is_strong_uptrend=adx_indicators.get("is_strong_uptrend", False),
             is_strong_downtrend=adx_indicators.get("is_strong_downtrend", False),
-            overbought_sell_blocked=overbought_sell_blocked,
+            overbought_sell_blocked=ctx.overbought_sell_blocked,
             personal_net_buy_latest=(
                 personal_flow_data.latest_individual_net_buy if personal_flow_data else None
             ),
@@ -869,7 +1075,7 @@ class SellStrategyService:
                 and personal_flow_data.recent_5d_buy_ratio_to_volume is not None
                 else None
             ),
-            is_personal_buying_overheated=is_personal_buying_overheated,
+            is_personal_buying_overheated=ctx.is_personal_buying_overheated,
             market_credit_label=(market_credit_data.market_label if market_credit_data else None),
             market_credit_balance_million=(
                 market_credit_data.latest_balance_million if market_credit_data else None
@@ -884,8 +1090,8 @@ class SellStrategyService:
                 if market_credit_data and market_credit_data.recent_5d_high_ratio is not None
                 else None
             ),
-            is_market_credit_overheated=is_market_credit_overheated,
-            candle_count=candle_count,
+            is_market_credit_overheated=ctx.is_market_credit_overheated,
+            candle_count=ctx.candle_count,
         )
 
     def calculate_sell_score(
@@ -934,195 +1140,71 @@ class SellStrategyService:
         minus_di = None if self._is_nan(minus_di) else minus_di
         high_52week_score = None if self._is_nan(high_52week_score) else high_52week_score
 
-        total_score = 0.0
-
-        # Stoch 점수
-        stoch_score = 0.0
-        if stoch_k is not None:
-            if stoch_k > 95:
-                stoch_score = config.stoch_weight
-                score_reasons.append(f"Stoch 매우 과열 (K={stoch_k:.1f} > 95)")
-            elif stoch_k > 85:
-                stoch_score = config.stoch_weight * (20.0 / 30.0)
-                score_reasons.append(f"Stoch 과열 (K={stoch_k:.1f} > 85)")
-            elif stoch_k > 70:
-                stoch_score = config.stoch_weight * (10.0 / 30.0)
-                score_reasons.append(f"Stoch 과열 초기 (K={stoch_k:.1f} > 70)")
-        total_score += stoch_score
-
-        # RSI 점수
-        rsi_score = 0.0
-        if rsi is not None:
-            if rsi > 80:
-                rsi_score = config.rsi_weight
-                score_reasons.append(f"RSI 매우 과열 (RSI={rsi:.1f} > 80)")
-            elif rsi > 70:
-                rsi_score = config.rsi_weight * (15.0 / 25.0)
-                score_reasons.append(f"RSI 과열 (RSI={rsi:.1f} > 70)")
-            elif rsi > 65:
-                rsi_score = config.rsi_weight * (5.0 / 25.0)
-                score_reasons.append(f"RSI 과열 초기 (RSI={rsi:.1f} > 65)")
-        total_score += rsi_score
-
-        # 거래량 점수
-        volume_score = 0.0
-        if volume_ratio is not None:
-            if volume_ratio >= config.volume_ratio_high:
-                volume_score = config.volume_weight
-                score_reasons.append(f"거래량 폭증 ({volume_ratio:.2f}x)")
-            elif volume_ratio >= config.volume_ratio_mid:
-                volume_score = config.volume_weight * (15.0 / 20.0)
-                score_reasons.append(f"거래량 급증 ({volume_ratio:.2f}x)")
-            elif volume_ratio >= config.volume_ratio_low:
-                volume_score = config.volume_weight * (10.0 / 20.0)
-                score_reasons.append(f"거래량 증가 ({volume_ratio:.2f}x)")
-
-        peak_score_raw = volume_peak_score if volume_peak_score is not None else 0.0
-        peak_score = peak_score_raw if is_volume_peak else 0.0
-        if is_volume_peak:
-            if is_volume_sell_signal and volume_score > 0 and peak_score > 0:
-                volume_score = max(volume_score, peak_score)
-                score_reasons.append("거래량 매도/피크 중복 → 높은 점수 적용")
-            elif peak_score > 0:
-                volume_score = max(volume_score, peak_score)
-                score_reasons.append("거래량 피크 점수 반영")
-
-            volume_score += 5.0
-            score_reasons.append("거래량 피크 보너스 (+5)")
-
-        total_score += volume_score
-
-        # 52주 신고가 점수
-        high_score = 0.0
-        if high_52week_score is not None and high_52week_score > 0:
-            high_score = high_52week_score
-            if high_52week_reason:
-                score_reasons.append(high_52week_reason)
-        total_score += high_score
-
-        # 개인 수급 과열 점수
-        personal_flow_score = 0.0
-        if (
-            recent_5d_personal_net_buy is not None
-            and recent_5d_personal_net_buy > 0
-            and personal_buy_days_5d is not None
-        ):
-            if (
-                personal_buy_ratio_5d_to_volume is not None
-                and personal_buy_days_5d >= config.personal_buy_days_threshold
-                and personal_buy_ratio_5d_to_volume >= config.personal_buy_ratio_high
-            ):
-                personal_flow_score = config.personal_flow_weight
-                score_reasons.append("개인 수급 과열 강함 (연속 순매수 + 거래량 대비 비중 높음)")
-            elif (
-                personal_buy_ratio_5d_to_volume is not None
-                and personal_buy_days_5d >= config.personal_buy_days_threshold
-                and personal_buy_ratio_5d_to_volume >= config.personal_buy_ratio_mid
-            ):
-                personal_flow_score = config.personal_flow_weight * 0.7
-                score_reasons.append("개인 수급 과열 경고 (최근 5일 순매수 집중)")
-            elif personal_buy_days_5d >= config.personal_buy_days_threshold:
-                personal_flow_score = config.personal_flow_weight * 0.4
-                score_reasons.append("개인 수급 쏠림 경고 (최근 5일 순매수 우세)")
-        total_score += personal_flow_score
-
-        market_credit_score = 0.0
-        peak = DEFAULT_PEAK_RULE_THRESHOLDS
-        if market_credit_change_ratio is not None and market_credit_recent_high_ratio is not None:
-            if (
-                market_credit_change_ratio >= peak.credit_extreme_change
-                and market_credit_recent_high_ratio >= peak.credit_extreme_recent_high
-            ):
-                market_credit_score = config.market_credit_weight
-                score_reasons.append("시장 신용 과열 강함 (일간 증가율 + 고점권)")
-            elif (
-                market_credit_change_ratio >= peak.credit_hot_change
-                and market_credit_recent_high_ratio >= peak.credit_hot_recent_high
-            ):
-                market_credit_score = config.market_credit_weight * 0.625
-                score_reasons.append("시장 신용 과열 경고 (증가율/고점권)")
-        total_score += market_credit_score
-
-        # ADX 약화 점수
-        adx_score = 0.0
-        if adx is not None:
-            adx_score, adx_label = TechnicalIndicators.calculate_adx_weakness_score(adx)
-            if adx_score > 0:
-                score_reasons.append(f"ADX {adx_label} (ADX={adx:.1f})")
-        total_score += adx_score
-
-        # MA 상태 점수
+        # MA 상태 점수 (service 헬퍼로 산출 후 규칙으로 래핑)
         ma_score, ma_reasons = self._calculate_ma_position_score(
             current_price=current_price,
             ma_short=ma_short,
             ma_long=ma_long,
             ma_gap_ratio=ma_gap_ratio,
         )
-        if ma_reasons:
-            score_reasons.extend(ma_reasons)
-        total_score += ma_score
 
-        # Stoch 데드크로스 보너스
-        cross_score = 0.0
+        # Stoch 데드크로스 감지 (stoch_k/stoch_d 모두 존재할 때만)
+        cross_detection: tuple[bool, float, str] | None = None
         if stoch_k is not None and stoch_d is not None:
-            is_dead_cross, raw_cross_score, cross_reason = self._check_stoch_dead_cross(
+            cross_detection = self._check_stoch_dead_cross(
                 stoch_k, stoch_d, prev_stoch_k, prev_stoch_d
             )
-            if is_dead_cross and raw_cross_score > 0:
-                cross_score = raw_cross_score * (config.cross_bonus / 10.0)
-                if cross_reason:
-                    score_reasons.append(cross_reason)
-        total_score += cross_score
 
-        # 52주 신고가 + 과매수 보너스
-        overbought_bonus = 0.0
-        if is_52week_high and stoch_k is not None and stoch_k > 85:
-            overbought_bonus = 5.0
-            total_score += overbought_bonus
-            score_reasons.append("신고가 + 과매수 조합 (+5)")
-
-        risk_combo_bonus = 0.0
-        if risk_combo_extreme:
-            risk_combo_bonus = config.risk_combo_weight
-            score_reasons.append("개인 수급+시장 신용+고점권 피크 보너스")
-        elif risk_combo_peak:
-            risk_combo_bonus = config.risk_combo_weight * 0.5
-            score_reasons.append("개인 수급+시장 신용 동시 과열 보너스")
-        total_score += risk_combo_bonus
-
-        # ADX 강세 감점
+        # ADX 강세 감점 (service 헬퍼로 산출 후 규칙으로 래핑)
         adx_penalty, adx_penalty_reason = self._calculate_adx_penalty(
             adx, plus_di, minus_di, config
         )
-        if adx_penalty != 0.0:
-            total_score += adx_penalty
-            if adx_penalty_reason:
-                score_reasons.append(adx_penalty_reason)
 
+        # 각 규칙이 점수(points)와 가용 최대치(max_points)를 한 곳에서 함께 산출한다.
+        # 총점/가용 최대치를 동일한 규칙 리스트에서 합산하여 기존 available_max 미러를 제거.
+        # 리스트 순서 = 기존 total_score 누적 순서(부동소수 결과 보존).
+        rules: list[ScoreRule] = [
+            stoch_rule(stoch_k, config),
+            rsi_rule(rsi, config),
+            volume_rule(
+                volume_ratio,
+                volume_peak_score,
+                is_volume_peak,
+                is_volume_sell_signal,
+                config,
+            ),
+            high_52week_rule(high_52week_score, high_52week_reason),
+            personal_flow_rule(
+                recent_5d_personal_net_buy,
+                personal_buy_days_5d,
+                personal_buy_ratio_5d_to_volume,
+                config,
+            ),
+            market_credit_rule(
+                market_credit_change_ratio,
+                market_credit_recent_high_ratio,
+                config,
+            ),
+            adx_rule(adx, config),
+            ma_rule(ma_score, ma_reasons, config),
+            cross_rule(stoch_k, stoch_d, cross_detection, config),
+            overbought_bonus_rule(is_52week_high, stoch_k),
+            risk_combo_rule(risk_combo_peak, risk_combo_extreme, config),
+            adx_penalty_rule(adx_penalty, adx_penalty_reason),
+        ]
+
+        total_score = 0.0
+        for rule in rules:
+            total_score += rule.points
         available_max = 0.0
-        if stoch_k is not None:
-            available_max += config.stoch_weight
-        if rsi is not None:
-            available_max += config.rsi_weight
-        if volume_ratio is not None:
-            available_max += config.volume_weight
-        if is_volume_peak:
-            available_max += 5.0
-        if high_52week_score is not None:
-            available_max += 10.0
-        if recent_5d_personal_net_buy is not None and recent_5d_personal_net_buy > 0:
-            available_max += config.personal_flow_weight
-        if market_credit_change_ratio is not None and market_credit_recent_high_ratio is not None:
-            available_max += config.market_credit_weight
-        if adx is not None:
-            available_max += config.adx_weight
-        available_max += config.ma_weight + 3.0
-        if stoch_d is not None:
-            available_max += config.cross_bonus
-        if overbought_bonus > 0:
-            available_max += overbought_bonus
-        if risk_combo_peak or risk_combo_extreme:
-            available_max += config.risk_combo_weight
+        for rule in rules:
+            available_max += rule.max_points
+        for rule in rules:
+            score_reasons.extend(rule.reasons)
+
+        merged_breakdown: dict[str, float] = {}
+        for rule in rules:
+            merged_breakdown.update(rule.breakdown)
 
         normalized_score = (total_score / available_max) * 100 if available_max > 0 else 0.0
 
@@ -1135,20 +1217,21 @@ class SellStrategyService:
         else:
             recommended_stage = SellStageEnum.HOLD
 
+        # 기존 키 순서를 그대로 유지 (dict 동등성 및 출력 안정성 보존)
         score_breakdown = {
-            "stoch_score": round(stoch_score, 2),
-            "rsi_score": round(rsi_score, 2),
-            "volume_score": round(volume_score, 2),
-            "volume_peak_score": round(peak_score_raw, 2),
-            "high_52week_score": round(high_score, 2),
-            "high_52week_bonus": round(overbought_bonus, 2),
-            "personal_flow_score": round(personal_flow_score, 2),
-            "market_credit_score": round(market_credit_score, 2),
-            "risk_combo_bonus": round(risk_combo_bonus, 2),
-            "adx_score": round(adx_score, 2),
-            "ma_score": round(ma_score, 2),
-            "cross_score": round(cross_score, 2),
-            "adx_penalty": round(adx_penalty, 2),
+            "stoch_score": merged_breakdown["stoch_score"],
+            "rsi_score": merged_breakdown["rsi_score"],
+            "volume_score": merged_breakdown["volume_score"],
+            "volume_peak_score": merged_breakdown["volume_peak_score"],
+            "high_52week_score": merged_breakdown["high_52week_score"],
+            "high_52week_bonus": merged_breakdown["high_52week_bonus"],
+            "personal_flow_score": merged_breakdown["personal_flow_score"],
+            "market_credit_score": merged_breakdown["market_credit_score"],
+            "risk_combo_bonus": merged_breakdown["risk_combo_bonus"],
+            "adx_score": merged_breakdown["adx_score"],
+            "ma_score": merged_breakdown["ma_score"],
+            "cross_score": merged_breakdown["cross_score"],
+            "adx_penalty": merged_breakdown["adx_penalty"],
             "raw_score": round(total_score, 2),
         }
 

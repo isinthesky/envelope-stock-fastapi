@@ -109,6 +109,54 @@ class OHLCVWarmupService:
             self._market_data_service = MarketDataService(kis_client, redis_client)
         return self._market_data_service
 
+    async def _fetch_unique_candles(
+        self,
+        market_data_service: MarketDataService,
+        symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+        interval: str,
+        use_cache: bool = True,
+    ) -> tuple[list, int]:
+        """chunk→fetch→dedupe 공통 primitive (이 서비스 내부 3개 로딩 경로가 공유).
+
+        iter_date_chunks(MAX_API_DAYS_PER_CALL)로 기간을 분할 호출한 뒤, timestamp
+        기준으로 중복 제거한 캔들 리스트와 API 호출 수를 반환한다.
+
+        DB 저장/commit/에러 로깅은 호출측 책임으로 남긴다: 메서드마다 트랜잭션 경계와
+        로그 문구("API call failed" vs "Incremental update failed" vs 무로그)가 달라
+        primitive에 포함하면 로깅 시맨틱이 바뀌기 때문이다.
+
+        Returns:
+            tuple[list, int]: (unique_candles, api_calls)
+        """
+        all_candles = []
+        api_calls = 0
+
+        for chunk_start, chunk_end in iter_date_chunks(
+            start_date,
+            end_date,
+            MAX_API_DAYS_PER_CALL,
+        ):
+            chart_data = await market_data_service.get_chart_data(
+                symbol=symbol,
+                interval=interval,
+                start_date=chunk_start,
+                end_date=chunk_end,
+                use_cache=use_cache,
+            )
+            api_calls += 1
+
+            if chart_data.candles:
+                all_candles.extend(chart_data.candles)
+
+        if not all_candles:
+            return [], api_calls
+
+        # 중복 제거 (청크 경계 오버랩/API 중복 대비, timestamp keep-last)
+        candles_by_ts = {c.timestamp: c for c in all_candles}
+        return list(candles_by_ts.values()), api_calls
+
     # ==================== 배치 워밍업 ====================
 
     async def warmup_symbols(
@@ -246,38 +294,23 @@ class OHLCVWarmupService:
                 logger.debug(f"[WarmupService] {symbol}: Already cached, skipping")
                 return 0, 0
 
-        # API 호출로 데이터 수집
+        # API 호출로 데이터 수집 (chunk→fetch→dedupe 공통 primitive)
         market_data_service = await self._get_market_data_service()
-        all_candles = []
-        api_calls = 0
 
         try:
-            for chunk_start, chunk_end in iter_date_chunks(
-                start_date,
-                end_date,
-                MAX_API_DAYS_PER_CALL,
-            ):
-                chart_data = await market_data_service.get_chart_data(
-                    symbol=symbol,
-                    interval=interval,
-                    start_date=chunk_start,
-                    end_date=chunk_end,
-                )
-                api_calls += 1
-
-                if chart_data.candles:
-                    all_candles.extend(chart_data.candles)
-
+            unique_candles, api_calls = await self._fetch_unique_candles(
+                market_data_service,
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                interval=interval,
+            )
         except Exception as e:
             logger.warning(f"[WarmupService] API call failed for {symbol}: {e}")
             raise
 
-        if not all_candles:
+        if not unique_candles:
             return 0, api_calls
-
-        # 중복 제거
-        candles_by_date = {c.timestamp: c for c in all_candles}
-        unique_candles = list(candles_by_date.values())
 
         # DB 저장
         saved_count = await self.ohlcv_repo.save_candles_bulk(
@@ -428,31 +461,16 @@ class OHLCVWarmupService:
         market_data_service = await self._get_market_data_service()
 
         try:
-            all_candles = []
-            api_calls = 0
+            unique_candles, api_calls = await self._fetch_unique_candles(
+                market_data_service,
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                interval=interval,
+            )
 
-            for chunk_start, chunk_end in iter_date_chunks(
-                start_date,
-                end_date,
-                MAX_API_DAYS_PER_CALL,
-            ):
-                chart_data = await market_data_service.get_chart_data(
-                    symbol=symbol,
-                    interval=interval,
-                    start_date=chunk_start,
-                    end_date=chunk_end,
-                )
-                api_calls += 1
-
-                if chart_data.candles:
-                    all_candles.extend(chart_data.candles)
-
-            if not all_candles:
+            if not unique_candles:
                 return 0, api_calls
-
-            # 중복 제거
-            candles_by_date = {c.timestamp: c for c in all_candles}
-            unique_candles = list(candles_by_date.values())
 
             # DB 저장
             saved_count = await self.ohlcv_repo.save_candles_bulk(
@@ -506,33 +524,18 @@ class OHLCVWarmupService:
 
         market_data_service = await self._get_market_data_service()
 
-        all_candles = []
-        api_calls = 0
+        # 워밍업(전략 스캔 전 프리페치)은 항상 최신 원본이 필요하므로 use_cache=False
+        unique_candles, api_calls = await self._fetch_unique_candles(
+            market_data_service,
+            symbol=symbol,
+            start_date=start_dt,
+            end_date=end_dt,
+            interval=interval,
+            use_cache=False,
+        )
 
-        fetch_start = start_dt
-        for chunk_start, chunk_end in iter_date_chunks(
-            fetch_start,
-            end_dt,
-            MAX_API_DAYS_PER_CALL,
-        ):
-            chart = await market_data_service.get_chart_data(
-                symbol=symbol,
-                interval=interval,
-                start_date=chunk_start,
-                end_date=chunk_end,
-                use_cache=False,
-            )
-            api_calls += 1
-
-            if chart.candles:
-                all_candles.extend(chart.candles)
-
-        if not all_candles:
+        if not unique_candles:
             return 0, api_calls
-
-        # 중복 제거
-        candles_by_ts = {c.timestamp: c for c in all_candles}
-        unique_candles = list(candles_by_ts.values())
 
         saved_count = await self.ohlcv_repo.save_candles_bulk(
             symbol=symbol,

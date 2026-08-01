@@ -13,8 +13,6 @@ SELL_NOTIFICATION_ENABLED=false 로 제어 (기본 비활성).
 """
 
 import asyncio
-import hashlib
-import json
 import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -33,6 +31,8 @@ from src.adapters.external.kofia_client import get_kofia_client
 from src.adapters.external.naver.stock_client import get_naver_stock_client
 from src.adapters.external.telegram import get_telegram_notifier
 from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
+from src.application.domain.strategy import alert_builders
+from src.application.domain.strategy.notification_dedupe import NotificationDedupe
 from src.application.domain.strategy.scheduler import (
     create_async_scheduler,
     register_cron_job,
@@ -48,8 +48,6 @@ logger = logging.getLogger(__name__)
 
 # 한국 시간대
 KST = ZoneInfo("Asia/Seoul")
-NOTIFICATION_UPDATE_MAX_AGE = timedelta(minutes=20)
-NOTIFICATION_DEDUPE_TTL = timedelta(hours=6)
 
 
 class NotificationScheduler:
@@ -71,75 +69,21 @@ class NotificationScheduler:
         self.is_running = False
         self.scheduler = None
         self._execution_lock = asyncio.Lock()
-        self._last_job_results: dict[str, dict] = {}
-        self._notification_delivery_cache: dict[str, datetime] = {}
+        # 신선도/서명/중복 억제 캐시는 NotificationDedupe로 위임한다.
+        self._dedupe = NotificationDedupe()
 
+    # ETF 대장주 판정/알림 조립은 alert_builders 모듈로 위임(테스트 표면 유지용 얇은 래퍼).
     @classmethod
     def _build_etf_leader_summary(
         cls, symbol: str, analyzed_results: dict[str, dict]
     ) -> str | None:
         """ETF 본체 알림에 붙일 대장주 보조 판정 요약 생성"""
-        leader_symbols = settings.etf_leader_map.get((symbol or "").strip())
-        if not leader_symbols:
-            return None
-
-        analyzed_leaders = [analyzed_results.get(leader_symbol) for leader_symbol in leader_symbols]
-        analyzed_leaders = [item for item in analyzed_leaders if item]
-        if not analyzed_leaders:
-            return None
-
-        weak_count = 0
-        strong_sell_count = 0
-        parts: list[str] = []
-        for item in analyzed_leaders:
-            final_stage = str(item.get("final_stage") or "")
-            name = item.get("name") or item.get("symbol") or "-"
-            parts.append(f"{name}:{final_stage or '-'}")
-            if final_stage in {"REDUCE_1", "REDUCE_2", "EXIT_ALL"}:
-                weak_count += 1
-            if final_stage in {"REDUCE_2", "EXIT_ALL"}:
-                strong_sell_count += 1
-
-        return (
-            f"대장주 확인: {weak_count}/{len(analyzed_leaders)} 약세"
-            f" (강매도 {strong_sell_count}) | " + ", ".join(parts)
-        )
+        return alert_builders.build_etf_leader_summary(symbol, analyzed_results)
 
     @classmethod
     def _filter_duplicate_leader_alerts(cls, pending_sell_alerts: list[dict]) -> list[dict]:
         """ETF 본체가 알림 대상이면 해당 대장주 개별 알림은 숨긴다."""
-        etf_alert_symbols = {
-            (item.get("symbol") or "").strip()
-            for item in pending_sell_alerts
-            if (item.get("symbol") or "").strip() in settings.etf_leader_map
-        }
-        hidden_leader_symbols = {
-            leader_symbol
-            for etf_symbol in etf_alert_symbols
-            for leader_symbol in settings.etf_leader_map.get(etf_symbol, ())
-        }
-
-        return [
-            item
-            for item in pending_sell_alerts
-            if (item.get("symbol") or "").strip() not in hidden_leader_symbols
-        ]
-
-    @staticmethod
-    def _sanitize_result(value):
-        if isinstance(value, dict):
-            return {k: NotificationScheduler._sanitize_result(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [NotificationScheduler._sanitize_result(v) for v in value[:10]]
-        if isinstance(value, tuple):
-            return [NotificationScheduler._sanitize_result(v) for v in value[:10]]
-        if isinstance(value, datetime):
-            return value.isoformat()
-        if hasattr(value, "value"):
-            return value.value
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            return value
-        return str(value)
+        return alert_builders.filter_duplicate_leader_alerts(pending_sell_alerts)
 
     @staticmethod
     def _slot_definitions(
@@ -155,6 +99,8 @@ class NotificationScheduler:
             for update_hour, update_minute, notify_hour, notify_minute, label in slots
         ]
 
+    # 신선도/서명/중복 억제는 NotificationDedupe로 위임한다.
+    # (_record_job_result / _build_notification_signature는 테스트가 직접 호출하므로 얇은 래퍼 유지)
     def _record_job_result(
         self,
         job_type: str,
@@ -162,172 +108,10 @@ class NotificationScheduler:
         result: dict | None = None,
         error: str | None = None,
     ) -> None:
-        key = f"{job_type}:{slot_label}"
-        payload = {
-            "job_type": job_type,
-            "slot_label": slot_label,
-            "recorded_at": datetime.now(KST).isoformat(),
-            "success": bool(result and result.get("success", True)) if error is None else False,
-        }
-        if result:
-            payload["result"] = self._sanitize_result(result)
-        if error:
-            payload["error"] = error
-        self._last_job_results[key] = payload
-
-    def _get_notification_freshness(
-        self,
-        notification_type: str,
-        slot_label: str,
-        now: datetime | None = None,
-    ) -> dict[str, object]:
-        """예약 알림이 직전 데이터 업데이트 결과를 사용할 수 있는지 확인한다."""
-        if slot_label in {"manual", "-"}:
-            return {
-                "fresh": True,
-                "required": False,
-                "status": "manual",
-                "message": "manual execution does not require a scheduled update result",
-            }
-
-        now = now or datetime.now(KST)
-        key = f"{notification_type}_data_update:{slot_label}"
-        update_result = self._last_job_results.get(key)
-        if not update_result:
-            return {
-                "fresh": False,
-                "required": True,
-                "status": "missing",
-                "message": f"No {notification_type} data update result for {slot_label}",
-            }
-
-        if not update_result.get("success", False):
-            return {
-                "fresh": False,
-                "required": True,
-                "status": "failed",
-                "message": update_result.get("error") or "Previous data update failed",
-            }
-
-        recorded_at_raw = update_result.get("recorded_at")
-        try:
-            recorded_at = datetime.fromisoformat(str(recorded_at_raw))
-        except ValueError:
-            return {
-                "fresh": False,
-                "required": True,
-                "status": "invalid_timestamp",
-                "message": f"Invalid data update timestamp: {recorded_at_raw}",
-            }
-
-        if recorded_at.tzinfo is None:
-            recorded_at = recorded_at.replace(tzinfo=KST)
-        age_seconds = max((now - recorded_at).total_seconds(), 0.0)
-        if age_seconds > NOTIFICATION_UPDATE_MAX_AGE.total_seconds():
-            return {
-                "fresh": False,
-                "required": True,
-                "status": "stale",
-                "age_seconds": round(age_seconds, 1),
-                "message": (
-                    f"Data update for {slot_label} is stale " f"({int(age_seconds // 60)}m old)"
-                ),
-            }
-
-        return {
-            "fresh": True,
-            "required": True,
-            "status": "fresh",
-            "age_seconds": round(age_seconds, 1),
-            "message": "data update is fresh",
-        }
+        self._dedupe.record_job_result(job_type, slot_label, result=result, error=error)
 
     def _build_notification_signature(self, payload: object) -> str:
-        normalized = self._normalize_signature_payload(payload)
-        encoded = json.dumps(normalized, sort_keys=True, ensure_ascii=False, default=str)
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
-
-    @staticmethod
-    def _normalize_signature_payload(value: object):
-        if isinstance(value, dict):
-            return {
-                str(k): NotificationScheduler._normalize_signature_payload(v)
-                for k, v in value.items()
-            }
-        if isinstance(value, list):
-            return [NotificationScheduler._normalize_signature_payload(v) for v in value]
-        if isinstance(value, tuple):
-            return [NotificationScheduler._normalize_signature_payload(v) for v in value]
-        if isinstance(value, datetime):
-            return value.isoformat()
-        if hasattr(value, "value"):
-            return value.value
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            return value
-        return str(value)
-
-    def _is_duplicate_notification(
-        self,
-        notification_type: str,
-        slot_label: str,
-        signature: str,
-        now: datetime | None = None,
-    ) -> bool:
-        if slot_label in {"manual", "-"}:
-            return False
-        now = now or datetime.now(KST)
-        self._prune_notification_delivery_cache(now)
-        key = self._notification_cache_key(notification_type, slot_label, signature, now)
-        return key in self._notification_delivery_cache
-
-    def _mark_notification_sent(
-        self,
-        notification_type: str,
-        slot_label: str,
-        signature: str,
-        now: datetime | None = None,
-    ) -> None:
-        if slot_label in {"manual", "-"}:
-            return
-        now = now or datetime.now(KST)
-        self._prune_notification_delivery_cache(now)
-        key = self._notification_cache_key(notification_type, slot_label, signature, now)
-        self._notification_delivery_cache[key] = now
-
-    @staticmethod
-    def _notification_cache_key(
-        notification_type: str,
-        slot_label: str,
-        signature: str,
-        now: datetime,
-    ) -> str:
-        return f"{notification_type}:{slot_label}:{now.date().isoformat()}:{signature}"
-
-    def _prune_notification_delivery_cache(self, now: datetime) -> None:
-        expired_keys = [
-            key
-            for key, sent_at in self._notification_delivery_cache.items()
-            if now - sent_at > NOTIFICATION_DEDUPE_TTL
-        ]
-        for key in expired_keys:
-            self._notification_delivery_cache.pop(key, None)
-
-    def _build_skipped_notification_result(
-        self,
-        notification_type: str,
-        slot_label: str,
-        freshness: dict[str, object],
-    ) -> dict[str, object]:
-        return {
-            "success": False,
-            "executed": False,
-            "notification_type": notification_type,
-            "slot": slot_label,
-            "sent": False,
-            "skipped": True,
-            "skip_reason": freshness.get("message"),
-            "freshness": freshness,
-        }
+        return self._dedupe.build_notification_signature(payload)
 
     @staticmethod
     def _warmup_success(result: object) -> bool:
@@ -363,7 +147,7 @@ class NotificationScheduler:
             "sell_slots": self._slot_definitions(settings.sell_notification_slots, "sell"),
             "jobs": jobs,
             "last_job_results": sorted(
-                self._last_job_results.values(),
+                self._dedupe.job_results.values(),
                 key=lambda item: item.get("recorded_at", ""),
                 reverse=True,
             )[:8],
@@ -757,9 +541,11 @@ class NotificationScheduler:
             logger.info(f"[NotificationScheduler] Running buy notification job for {slot_label}...")
 
             try:
-                freshness = self._get_notification_freshness("buy", slot_label)
+                freshness = self._dedupe.get_notification_freshness("buy", slot_label)
                 if not freshness["fresh"]:
-                    result = self._build_skipped_notification_result("buy", slot_label, freshness)
+                    result = self._dedupe.build_skipped_notification_result(
+                        "buy", slot_label, freshness
+                    )
                     self._record_job_result(
                         "buy_notification",
                         slot_label,
@@ -782,15 +568,10 @@ class NotificationScheduler:
                 )
 
                 notification_payload = recommendations.model_dump(mode="json")
-                signature = self._build_notification_signature(
-                    {
-                        "top_stocks": notification_payload.get("top_stocks", []),
-                        "top_industries": notification_payload.get("top_industries", []),
-                        "buy_candidate_count": notification_payload.get("buy_candidate_count"),
-                        "errors": notification_payload.get("errors", []),
-                    }
+                signature = self._dedupe.build_notification_signature(
+                    alert_builders.build_buy_signature_payload(notification_payload)
                 )
-                if self._is_duplicate_notification("buy", slot_label, signature):
+                if self._dedupe.is_duplicate_notification("buy", slot_label, signature):
                     result = {
                         "success": True,
                         "executed": True,
@@ -814,7 +595,7 @@ class NotificationScheduler:
                     slot_label=slot_label,
                 )
                 if sent:
-                    self._mark_notification_sent("buy", slot_label, signature)
+                    self._dedupe.mark_notification_sent("buy", slot_label, signature)
 
                 auto_excluded_symbols = await self._auto_exclude_symbols_with_missing_candles(
                     recommendations.errors
@@ -886,9 +667,11 @@ class NotificationScheduler:
             )
 
             try:
-                freshness = self._get_notification_freshness("sell", slot_label)
+                freshness = self._dedupe.get_notification_freshness("sell", slot_label)
                 if not freshness["fresh"]:
-                    result = self._build_skipped_notification_result("sell", slot_label, freshness)
+                    result = self._dedupe.build_skipped_notification_result(
+                        "sell", slot_label, freshness
+                    )
                     self._record_job_result(
                         "sell_notification",
                         slot_label,
@@ -911,13 +694,13 @@ class NotificationScheduler:
                 notifier = get_telegram_notifier()
                 if not tracked_symbols:
                     no_tracking_status = ["활성 매도 추적 종목이 없습니다."]
-                    signature = self._build_notification_signature(
+                    signature = self._dedupe.build_notification_signature(
                         {
                             "no_tracked_sell_symbols": True,
                             "status_summary": no_tracking_status,
                         }
                     )
-                    if self._is_duplicate_notification("sell", slot_label, signature):
+                    if self._dedupe.is_duplicate_notification("sell", slot_label, signature):
                         result = {
                             "success": True,
                             "executed": True,
@@ -944,7 +727,7 @@ class NotificationScheduler:
                         status_summary=no_tracking_status,
                     )
                     if sent:
-                        self._mark_notification_sent("sell", slot_label, signature)
+                        self._dedupe.mark_notification_sent("sell", slot_label, signature)
                     result = {
                         "success": bool(sent),
                         "executed": True,
@@ -971,79 +754,9 @@ class NotificationScheduler:
                 analyzed_items = refresh_result.items
                 errors = refresh_result.errors
 
-                pending_sell_alerts: list[dict] = []
-                analyzed_results: dict[str, dict] = {}
-                status_summary: list[str] = []
-
-                for item in analyzed_items:
-                    stage_value = str(item.sell_stage or "HOLD")
-                    # ETF 대장주 맵/요약 조회 키와 일치하도록 strip 정규화 키 사용
-                    analyzed_results[(item.symbol or "").strip()] = {
-                        "symbol": item.symbol,
-                        "name": item.name,
-                        "final_stage": stage_value,
-                    }
-
-                    stage_name = item.sell_stage_name or stage_value
-                    if len(status_summary) < 4:
-                        status_summary.append(f"{item.name or item.symbol}: {stage_name}")
-
-                    qualifies = stage_value in {"REDUCE_2", "EXIT_ALL"} or item.sell_phase in {
-                        "PHASE_4",
-                        "PHASE_5",
-                    }
-                    if not qualifies:
-                        continue
-
-                    entry_price = getattr(item, "entry_price", None)
-                    profit_ratio = None
-                    try:
-                        if entry_price:
-                            profit_ratio = (
-                                (float(item.current_price) - float(entry_price))
-                                / float(entry_price)
-                                * 100.0
-                            )
-                    except (TypeError, ValueError, ZeroDivisionError):
-                        profit_ratio = None
-
-                    pending_sell_alerts.append(
-                        {
-                            "symbol": item.symbol,
-                            "name": item.name,
-                            "current_price": float(item.current_price),
-                            "entry_price": float(entry_price) if entry_price else None,
-                            "profit_ratio": profit_ratio,
-                            "stoch_k": getattr(item, "stoch_k", None),
-                            "rsi": getattr(item, "rsi", None),
-                            "ma_gap_ratio": getattr(item, "ma_gap_ratio", None),
-                            "sell_ratio_min": getattr(item, "sell_ratio_min", None),
-                            "sell_ratio_max": getattr(item, "sell_ratio_max", None),
-                            "sell_phase": item.sell_phase,
-                            "sell_reasons": item.sell_reasons or [],
-                            "final_stage": stage_value,
-                            "sell_stage_name": item.sell_stage_name,
-                            "volume_ratio": item.volume_ratio,
-                            "is_volume_sell_signal": bool(item.is_volume_sell_signal),
-                            "is_volume_spike": bool(item.is_volume_spike),
-                            "is_volume_peak": False,
-                            "is_personal_buying_overheated": bool(
-                                getattr(item, "is_personal_buying_overheated", False)
-                            ),
-                            "market_credit_label": getattr(item, "market_credit_label", None),
-                            "is_market_credit_overheated": bool(
-                                getattr(item, "is_market_credit_overheated", False)
-                            ),
-                        }
-                    )
-
-                pending_sell_alerts = self._filter_duplicate_leader_alerts(pending_sell_alerts)
-                for alert in pending_sell_alerts:
-                    leader_summary = self._build_etf_leader_summary(
-                        alert["symbol"], analyzed_results
-                    )
-                    if leader_summary:
-                        alert["leader_summary"] = leader_summary
+                pending_sell_alerts, status_summary = alert_builders.assemble_sell_alerts(
+                    analyzed_items
+                )
 
                 if pending_sell_alerts:
                     notification_signature_payload: object = {
@@ -1051,8 +764,10 @@ class NotificationScheduler:
                         "status_summary": status_summary,
                         "errors": errors[:3],
                     }
-                    signature = self._build_notification_signature(notification_signature_payload)
-                    if self._is_duplicate_notification("sell", slot_label, signature):
+                    signature = self._dedupe.build_notification_signature(
+                        notification_signature_payload
+                    )
+                    if self._dedupe.is_duplicate_notification("sell", slot_label, signature):
                         result = {
                             "success": True,
                             "executed": True,
@@ -1087,8 +802,10 @@ class NotificationScheduler:
                         "failed_summary": errors[:3],
                         "status_summary": status_summary,
                     }
-                    signature = self._build_notification_signature(notification_signature_payload)
-                    if self._is_duplicate_notification("sell", slot_label, signature):
+                    signature = self._dedupe.build_notification_signature(
+                        notification_signature_payload
+                    )
+                    if self._dedupe.is_duplicate_notification("sell", slot_label, signature):
                         result = {
                             "success": True,
                             "executed": True,
@@ -1116,7 +833,7 @@ class NotificationScheduler:
                         status_summary=status_summary,
                     )
                 if sent:
-                    self._mark_notification_sent("sell", slot_label, signature)
+                    self._dedupe.mark_notification_sent("sell", slot_label, signature)
 
                 result = {
                     "success": bool(sent),
