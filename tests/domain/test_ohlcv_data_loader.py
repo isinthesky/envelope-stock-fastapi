@@ -240,7 +240,7 @@ class TestIncrementalUpdatePaths:
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -277,7 +277,7 @@ class TestIncrementalUpdatePaths:
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -306,7 +306,7 @@ class TestIncrementalUpdatePaths:
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -329,7 +329,7 @@ class TestIncrementalUpdatePaths:
         cached_df = create_cached_df([datetime(2024, 1, 14)])
 
         # When: API 호출 없이 반환
-        result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+        result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
             symbol="005930",
             cached_df=cached_df,
             last_cached_date=last_cached,
@@ -356,7 +356,7 @@ class TestIncrementalUpdatePaths:
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -394,7 +394,7 @@ class TestIncrementalUpdatePaths:
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -402,9 +402,9 @@ class TestIncrementalUpdatePaths:
                 interval="1d",
             )
 
-            # Then: 중복 제거 후 2개 (1/9, 1/10)
+            # Then: load_from_api가 중복 timestamp를 이미 제거하므로 new_count는 고유 2개(1/9, 1/10)
             assert result_df is not None
-            assert new_count == 3  # API에서 받은 캔들 수 (중복 제거 전)
+            assert new_count == 2  # load_from_api에서 중복 제거 후 고유 신규 캔들 수
             # 병합 후 총 3개 (1/8 cached + 1/9 + 1/10)
             assert len(result_df) == 3
 

@@ -191,9 +191,12 @@ class OHLCVCoreLoader:
         start_date: datetime,
         end_date: datetime,
         interval: str = "1d",
-    ) -> tuple[pd.DataFrame, int]:
+    ) -> tuple[pd.DataFrame, int, int]:
         """
         KIS API로부터 OHLCV 데이터 로딩 (동적 chunking)
+
+        Returns (df, api_calls, failed_chunks). failed_chunks>0이면 부분 실패로
+        시계열에 갭이 있을 수 있으므로 호출측은 캐시 저장을 건너뛰는 것이 안전하다.
 
         요청 기간에 따라 API 호출 횟수를 동적으로 계산:
         - 100일 이하: 1회 호출
@@ -214,11 +217,12 @@ class OHLCVCoreLoader:
         days_requested = (end_date - start_date).days
         max_days = settings.ohlcv_max_api_days_per_call
 
-        # 필요한 API 호출 횟수 계산
-        calls_needed = math.ceil(days_requested / max_days)
+        # 필요한 API 호출 횟수 계산 (start==end 단일일 요청도 최소 1회 보장)
+        calls_needed = max(1, math.ceil(days_requested / max_days))
 
         all_candles = []
         api_calls = 0
+        failed_chunks = 0  # 실패 청크 수(부분 실패 → 무음 갭 방지용으로 호출측에 반환)
 
         for i in range(calls_needed):
             # 각 청크의 시작/종료 계산
@@ -229,19 +233,23 @@ class OHLCVCoreLoader:
             )
 
             try:
+                # get_chart_data는 datetime을 기대(_as_kst가 .tzinfo 접근).
+                # .date()를 넘기면 'date' object has no attribute 'tzinfo'로 실패한다.
                 chart_data = await market_data.get_chart_data(
                     symbol=symbol,
                     interval=interval,
-                    start_date=chunk_start.date(),
-                    end_date=chunk_end.date(),
+                    start_date=chunk_start,
+                    end_date=chunk_end,
                 )
 
                 if chart_data and chart_data.candles:
                     all_candles.extend(chart_data.candles)
 
             except Exception as e:
-                logger.warning(
-                    f"[CoreLoader] API call {i+1}/{calls_needed} failed for {symbol}: {e}"
+                failed_chunks += 1
+                logger.error(
+                    f"[CoreLoader] chunk {i+1}/{calls_needed} FAILED for {symbol} "
+                    f"[{chunk_start:%Y%m%d}-{chunk_end:%Y%m%d}]: {e} (data hole risk)"
                 )
             finally:
                 # API 호출 시도는 성공/실패 여부와 관계없이 카운트
@@ -249,7 +257,7 @@ class OHLCVCoreLoader:
 
         if not all_candles:
             logger.warning(f"[CoreLoader] No data from API for {symbol}")
-            return pd.DataFrame(), api_calls
+            return pd.DataFrame(), api_calls, failed_chunks
 
         # DataFrame 변환
         df = pd.DataFrame([
@@ -266,13 +274,18 @@ class OHLCVCoreLoader:
 
         # 타임존 정규화 및 정렬
         df = normalize_df_timestamps(df)
-        df = df.sort_values("timestamp").reset_index(drop=True)
+        # 청크 경계 오버랩으로 생긴 중복 timestamp 제거(ON CONFLICT cardinality violation 방지)
+        df = (
+            df.sort_values("timestamp")
+            .drop_duplicates(subset=["timestamp"], keep="last")
+            .reset_index(drop=True)
+        )
 
         logger.debug(
             f"[CoreLoader] Loaded {len(df)} candles for {symbol} ({api_calls} API calls)"
         )
 
-        return df, api_calls
+        return df, api_calls, failed_chunks
 
     # ==================== 증분 업데이트 ====================
 
@@ -283,7 +296,7 @@ class OHLCVCoreLoader:
         last_cached_date: datetime,
         end_date: datetime,
         interval: str,
-    ) -> tuple[Optional[pd.DataFrame], int, int]:
+    ) -> tuple[Optional[pd.DataFrame], int, int, int]:
         """
         캐시된 데이터에 최신 데이터를 증분 추가
 
@@ -298,7 +311,8 @@ class OHLCVCoreLoader:
             interval: 캔들 간격
 
         Returns:
-            tuple: (병합된 DataFrame, 새로 추가된 캔들 수, API 호출 횟수)
+            tuple: (병합된 DataFrame, 새 캔들 수, API 호출 횟수, 실패 청크 수)
+            failed_chunks>0이면 갭 위험이 있어 호출측은 캐시 저장을 건너뛰어야 한다.
         """
         # 타임존 정규화
         last_cached_date = normalize_timestamp(last_cached_date)
@@ -307,11 +321,11 @@ class OHLCVCoreLoader:
         # 이미 최신이면 캐시 그대로 반환
         days_gap = (end_date - last_cached_date).days
         if days_gap <= 1:
-            return cached_df, 0, 0
+            return cached_df, 0, 0, 0
 
         # 증분 데이터 로딩
         increment_start = last_cached_date + timedelta(days=1)
-        new_df, api_calls = await self.load_from_api(
+        new_df, api_calls, failed_chunks = await self.load_from_api(
             symbol=symbol,
             start_date=increment_start,
             end_date=end_date,
@@ -319,7 +333,7 @@ class OHLCVCoreLoader:
         )
 
         if new_df.empty:
-            return cached_df, 0, api_calls
+            return cached_df, 0, api_calls, failed_chunks
 
         # 기존 캐시와 병합
         merged_df = pd.concat([cached_df, new_df], ignore_index=True)
@@ -333,7 +347,7 @@ class OHLCVCoreLoader:
             f"+{new_candles} candles ({api_calls} API calls)"
         )
 
-        return merged_df, new_candles, api_calls
+        return merged_df, new_candles, api_calls, failed_chunks
 
     # ==================== DB 캐싱 ====================
 
@@ -355,6 +369,12 @@ class OHLCVCoreLoader:
             int: 저장된 캔들 수
         """
         if not self.session or df.empty:
+            return 0
+
+        # NaN 가격/거래량 행 제외: Postgres numeric은 'NaN'을 받아 지표/백테스트를 오염시키고,
+        # int(NaN volume)은 ValueError로 심볼 전체 저장을 실패(saved=0)시킨다.
+        df = df.dropna(subset=["open", "high", "low", "close", "volume"])
+        if df.empty:
             return 0
 
         ohlcv_repo = OHLCVRepository(self.session)

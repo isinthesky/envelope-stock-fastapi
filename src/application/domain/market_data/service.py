@@ -317,7 +317,7 @@ class MarketDataService:
 
             candles = [
                 CandleDTO(
-                    timestamp=datetime.strptime(item.get("stck_bsop_date", ""), "%Y%m%d"),
+                    timestamp=datetime.strptime(item["stck_bsop_date"], "%Y%m%d"),
                     open=Decimal(item.get("stck_oprc", "0")),
                     high=Decimal(item.get("stck_hgpr", "0")),
                     low=Decimal(item.get("stck_lwpr", "0")),
@@ -325,6 +325,7 @@ class MarketDataService:
                     volume=int(item.get("acml_vol", "0")),
                 )
                 for item in output_list
+                if item.get("stck_bsop_date")  # KIS 빈 패딩 행 스킵(strptime 크래시→청크 무음 손실 방지)
             ]
 
             candles.sort(key=lambda c: c.timestamp)

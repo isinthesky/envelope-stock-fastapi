@@ -73,13 +73,19 @@ class Settings(BaseSettings):
         default=3, ge=1, le=7, description="OHLCV 워밍업/스케줄러 신선도 기준 (일)"
     )
     ohlcv_retention_days: int = Field(
-        default=365, ge=30, le=3650, description="OHLCV 데이터 보존 기간 (일)"
+        default=1400,
+        ge=30,
+        le=3650,
+        description="OHLCV 보존 기간 (일). 3년 백테스트(1095) + 지표 워밍업 버퍼(~300)",
     )
     ohlcv_cleanup_batch_size: int = Field(
         default=1000, ge=100, le=10000, description="OHLCV 정리 배치 크기"
     )
     ohlcv_max_api_days_per_call: int = Field(
-        default=100, ge=1, le=365, description="KIS API 단일 호출 최대 조회 기간 (일)"
+        default=100,
+        ge=1,
+        le=100,
+        description="KIS API 단일 호출 최대 조회 기간 (일). KIS 100행 캡 초과 시 과거분 무음 절삭되므로 ≤100",
     )
 
     # ==================== KIS API 설정 (실전투자) ====================

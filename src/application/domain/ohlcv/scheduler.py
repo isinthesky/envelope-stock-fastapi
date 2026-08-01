@@ -18,6 +18,7 @@ from src.application.domain.ohlcv.cache_manager import OHLCVCacheManager
 from src.application.domain.ohlcv.dto import CacheRetentionPolicyDTO
 from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService, previous_trading_day_kst
 from src.adapters.database.repositories.stock_universe_repository import StockUniverseRepository
+from src.settings.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ class OHLCVCacheScheduler:
                                     symbol=sym,
                                     end_date=end_date,
                                     interval="1d",
-                                    days_if_empty=450,
+                                    days_if_empty=settings.ohlcv_retention_days,
                                 )
                                 w_saved += saved
                                 w_calls += calls
@@ -217,7 +218,7 @@ class OHLCVCacheScheduler:
             async with get_async_session() as session:
                 manager = OHLCVCacheManager(session)
                 policy = CacheRetentionPolicyDTO(
-                    retention_days=365,
+                    retention_days=settings.ohlcv_retention_days,
                     cleanup_batch_size=1000,
                 )
                 result = await manager.cleanup_old_data(policy, dry_run=False)
@@ -263,7 +264,7 @@ class OHLCVCacheScheduler:
             async with get_async_session() as session:
                 manager = OHLCVCacheManager(session)
                 policy = CacheRetentionPolicyDTO(
-                    retention_days=365,
+                    retention_days=settings.ohlcv_retention_days,
                     cleanup_batch_size=1000,
                 )
                 result = await manager.cleanup_old_data(policy, dry_run=False)

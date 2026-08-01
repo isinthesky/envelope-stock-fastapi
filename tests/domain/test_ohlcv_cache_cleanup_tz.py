@@ -63,7 +63,10 @@ class TestCleanupOldDataTimezone:
         old_naive = datetime.now() - timedelta(days=400)
         manager = _make_manager({"000660": old_naive})
 
-        result = await manager.cleanup_old_data(dry_run=True)
+        result = await manager.cleanup_old_data(
+            CacheRetentionPolicyDTO(retention_days=365, cleanup_batch_size=1000),
+            dry_run=True,
+        )
 
         assert result.symbols_affected == ["000660"]
         assert result.dry_run is True

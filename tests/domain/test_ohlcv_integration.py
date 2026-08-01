@@ -150,7 +150,7 @@ class TestLongTermStaleChunking:
             mock_service.return_value = mock_mds
 
             # When
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -176,7 +176,7 @@ class TestLongTermStaleChunking:
             mock_mds.get_chart_data = AsyncMock(return_value=mock_response)
             mock_service.return_value = mock_mds
 
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -236,7 +236,7 @@ class TestAPICallStatistics:
             start_date = datetime(2023, 9, 1, tzinfo=timezone.utc)
             end_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
 
-            result_df, api_calls = await loader.core_loader.load_from_api(
+            result_df, api_calls, _failed_chunks = await loader.core_loader.load_from_api(
                 symbol="005930",
                 start_date=start_date,
                 end_date=end_date,
@@ -265,7 +265,7 @@ class TestAPICallStatistics:
             mock_mds.get_chart_data = AsyncMock(side_effect=mock_responses)
             mock_service.return_value = mock_mds
 
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -340,7 +340,7 @@ class TestFallbackBehavior:
             mock_mds.get_chart_data = AsyncMock(side_effect=Exception("Network Error"))
             mock_service.return_value = mock_mds
 
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,
@@ -372,7 +372,7 @@ class TestFallbackBehavior:
             mock_mds.get_chart_data = AsyncMock(side_effect=mock_responses)
             mock_service.return_value = mock_mds
 
-            result_df, new_count, api_calls = await loader.core_loader.incremental_update(
+            result_df, new_count, api_calls, _failed = await loader.core_loader.incremental_update(
                 symbol="005930",
                 cached_df=cached_df,
                 last_cached_date=last_cached,

@@ -45,6 +45,8 @@ async def _load_symbol(session, sym: str) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=["timestamp", "close"])
     df["close"] = df["close"].astype(float)
     df["d"] = pd.to_datetime(df["timestamp"]).dt.date
+    # 날짜 단위 방어적 dedup(잔여 팬텀/중복이 RSI·rolling-high를 밀지 않도록)
+    df = df.drop_duplicates(subset=["d"], keep="last").reset_index(drop=True)
     return df
 
 

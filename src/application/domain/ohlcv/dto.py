@@ -23,7 +23,7 @@ class CacheRetentionPolicyDTO(BaseDTO):
         cleanup_batch_size: 배치 삭제 크기
     """
 
-    retention_days: int = Field(default=365, ge=30, description="기본 보존 기간 (일)")
+    retention_days: int = Field(default=1000, ge=30, description="기본 보존 기간 (일)")
     min_recent_days: int = Field(default=90, ge=30, description="최소 최근 데이터 유지 기간")
     cleanup_batch_size: int = Field(default=1000, ge=100, description="배치 삭제 크기")
 

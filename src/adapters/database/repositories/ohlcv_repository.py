@@ -125,6 +125,13 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
 
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+        # 방어적 dedup: ON CONFLICT DO UPDATE는 한 INSERT 문에 동일 (symbol,timestamp,interval)이
+        # 두 번 들어오면 CardinalityViolation("cannot affect row a second time")으로 실패한다.
+        # symbol/interval은 호출당 상수이므로 timestamp 기준 dedup(최신 우선). 어떤 호출자가
+        # 중복을 넘겨도 심볼 전체 저장이 통째로 실패(saved=0)하는 것을 방지.
+        deduped: dict = {}
+        for candle in candles:
+            deduped[candle.timestamp] = candle
         rows = [
             {
                 "symbol": symbol,
@@ -137,7 +144,7 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
                 "volume": candle.volume,
                 "source": source,
             }
-            for candle in candles
+            for candle in deduped.values()
         ]
 
         chunk_size = 1000
@@ -157,7 +164,7 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
             )
             await self.session.execute(stmt)
 
-        return len(candles)
+        return len(rows)
 
     # ==================== Candle 데이터 조회 ====================
 
@@ -743,6 +750,7 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
         self,
         before_date: datetime,
         batch_size: int = 1000,
+        interval: str = "1d",
     ) -> int:
         """
         배치 단위 오래된 데이터 삭제 (전체 종목)
@@ -760,7 +768,12 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
             # 배치 단위로 삭제할 ID 조회
             ids_stmt = (
                 select(self.model.id)
-                .where(self.model.timestamp < before_date)
+                .where(
+                    and_(
+                        self.model.interval == interval,
+                        self.model.timestamp < before_date,
+                    )
+                )
                 .limit(batch_size)
             )
             ids_result = await self.session.execute(ids_stmt)

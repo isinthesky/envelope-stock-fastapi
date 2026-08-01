@@ -94,6 +94,7 @@ class OHLCVCacheManager:
             deleted_count = await self.ohlcv_repo.bulk_delete_old_data(
                 before_date=before_date,
                 batch_size=policy.cleanup_batch_size,
+                interval="1d",
             )
             await self.session.commit()
 

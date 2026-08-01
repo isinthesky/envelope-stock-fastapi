@@ -142,6 +142,7 @@ class OHLCVDataLoader:
         load_type = LoadType.FULL_LOAD
         api_calls = 0
         new_candles = 0
+        failed_chunks = 0  # 부분 실패 시 캐시 저장을 건너뛰어 갭 영구화 방지
 
         if cache_result["status"] == "fresh":
             # 캐시 완전 히트
@@ -154,7 +155,7 @@ class OHLCVDataLoader:
             cached_df = cache_result["df"]
             latest = cache_result["latest"]
 
-            incremental_df, new_count, inc_api_calls = await self.core_loader.incremental_update(
+            incremental_df, new_count, inc_api_calls, failed_chunks = await self.core_loader.incremental_update(
                 symbol=symbol,
                 cached_df=cached_df,
                 last_cached_date=latest,
@@ -173,7 +174,7 @@ class OHLCVDataLoader:
                 )
             else:
                 # 증분 업데이트 실패 시 전체 로딩
-                df, full_api_calls = await self.core_loader.load_from_api(
+                df, full_api_calls, failed_chunks = await self.core_loader.load_from_api(
                     symbol=symbol,
                     start_date=start_date,
                     end_date=end_date,
@@ -184,7 +185,7 @@ class OHLCVDataLoader:
 
         else:
             # 전체 로딩 (캐시 없음 또는 부족)
-            df, full_api_calls = await self.core_loader.load_from_api(
+            df, full_api_calls, failed_chunks = await self.core_loader.load_from_api(
                 symbol=symbol,
                 start_date=start_date,
                 end_date=end_date,
@@ -194,12 +195,14 @@ class OHLCVDataLoader:
             api_calls = full_api_calls
             new_candles = len(df) if df is not None else 0
 
-        # DB 캐싱 (새로운 데이터가 있고 세션이 있는 경우)
+        # DB 캐싱 (새로운 데이터가 있고 세션이 있는 경우).
+        # failed_chunks>0면 시계열에 갭이 있을 수 있어 저장을 건너뛴다(갭 영구화 방지, 다음 실행에 재시도).
         if (
             self.session
             and df is not None
             and not df.empty
             and load_type != LoadType.CACHE_HIT
+            and failed_chunks == 0
         ):
             await self.core_loader.cache_to_db(
                 symbol=symbol,

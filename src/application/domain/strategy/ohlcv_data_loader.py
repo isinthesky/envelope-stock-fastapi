@@ -104,9 +104,11 @@ def normalize_timestamp(dt: datetime) -> datetime:
     """
     if dt.tzinfo is None:
         # tz-naive → UTC로 가정
-        return dt.replace(tzinfo=timezone.utc)
-    # 이미 tz-aware → UTC로 변환
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=timezone.utc)
+    # 일봉은 'KST 거래일'만 의미. KST 자정을 단순 astimezone(utc)하면 전일 15:00으로
+    # 밀려 날짜가 어긋난다(팬텀 행 발생). KST 기준 날짜를 구해 UTC 자정으로 고정한다.
+    d = dt.astimezone(KST).date()
+    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
 
 
 def normalize_df_timestamps(df: pd.DataFrame) -> pd.DataFrame:
