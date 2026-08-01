@@ -11,7 +11,7 @@ Buy Strategy Service - 매수 전략 서비스
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pandas as pd
@@ -52,6 +52,26 @@ from src.settings.config import settings
 logger = logging.getLogger(__name__)
 
 MA5_VOLUME_RATIO_THRESHOLD = 1.5
+
+
+def _market_regime_up(closes, timestamps, source, ma_period) -> bool:
+    """시장 상승레짐 판정(하드 게이트). 오탐 하락레짐이 전체 매수를 억제할 수 있으므로,
+    신뢰 가능한 '최신 KOSPI 실데이터'일 때만 실제 판정하고 그 외(프록시/데이터부족/stale)는
+    True(fail-open)로 통과시킨다."""
+    if source != "KOSPI" or len(closes) < ma_period:
+        return True
+    try:
+        last = timestamps[-1]
+        if getattr(last, "tzinfo", None) is None:
+            last = last.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - last
+        # 오래됨(>7일) 또는 미래(음수 age, 데이터 오류)면 신뢰불가 → fail-open
+        if age > timedelta(days=7) or age < -timedelta(days=1):
+            logger.warning("[GC Scan] KOSPI regime series stale/future (last=%s), fail-open", last)
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    return TechnicalIndicators.is_market_uptrend(closes, ma_period)
 
 
 class BuyStrategyService:
@@ -190,8 +210,8 @@ class BuyStrategyService:
                         market_closes, window=settings.fear_buy_window_days
                     )
                 if settings.gc_regime_filter_enabled:
-                    market_regime_up = TechnicalIndicators.is_market_uptrend(
-                        market_closes, settings.gc_regime_ma
+                    market_regime_up = _market_regime_up(
+                        market_closes, _mts, _src, settings.gc_regime_ma
                     )
                 logger.info(
                     f"[GC Scan] market source={_src} closes={len(market_closes)} "
@@ -335,9 +355,10 @@ class BuyStrategyService:
                             prev_stoch_k=prev_stoch_k,
                             recent_oversold=self._has_recent_oversold(df, stoch_threshold),
                         )
-                        # fear-buy 전용 후보(비-GC)는 FEAR_BUY로 태깅 → 추천/알림에서 선택 가능
-                        # (그렇지 않으면 NOT_GC로 분류되어 OPTIMAL_BUY 필터에서 탈락)
-                        if fear_pass and not gc_pass and not is_gc_active:
+                        # gc_pass가 아닌데 fear_pass로 통과한 후보는 FEAR_BUY로 태깅.
+                        # (비-GC뿐 아니라 레짐에 막힌 GC-active도 포함 → OPTIMAL_BUY로 남아
+                        #  FEAR_BUY_NOTIFY_ENABLED opt-in을 우회하는 것을 방지)
+                        if fear_pass and not gc_pass:
                             gc_state = "FEAR_BUY"
 
                         worker_results.append(
@@ -515,6 +536,19 @@ class BuyStrategyService:
 
         logger.info(f"[GC Scan] Scanning {len(symbols)} symbols with MA55/MA165")
 
+        # 시장 레짐(스캔당 1회, fail-open) — GC(추세추종) 진입 게이트. scan_golden_cross_candidates와 일관.
+        market_regime_up = True
+        if settings.gc_regime_filter_enabled:
+            try:
+                market_closes, _mts, _src = await get_kospi_or_proxy_closes(session, days=500)
+                market_regime_up = _market_regime_up(
+                    market_closes, _mts, _src, settings.gc_regime_ma
+                )
+                logger.info(f"[GC Scan] regime source={_src} regime_up={market_regime_up}")
+            except Exception as e:  # noqa: BLE001 - fail-open
+                logger.warning(f"[GC Scan] regime load failed, fail-open: {e}")
+                market_regime_up = True
+
         data_loader = self._get_data_loader(session)
 
         # 종목명 조회를 위한 서비스 준비
@@ -586,6 +620,10 @@ class BuyStrategyService:
 
                 # 골든크로스 상태 판정
                 is_gc_active = ma_short > ma_long
+
+                # [regime] 하락레짐이면 GC(추세추종) 진입 차단 (scan_golden_cross_candidates와 일관)
+                if settings.gc_regime_filter_enabled and not market_regime_up and is_gc_active:
+                    continue
 
                 # [#A] Golden Cross + RSI <= 임계 (config 토글, scan_golden_cross_candidates와 일관)
                 if (

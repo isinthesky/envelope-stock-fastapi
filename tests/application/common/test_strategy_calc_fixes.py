@@ -46,6 +46,26 @@ def test_fear_recent_window_detects_prior_fear():
     assert TI.is_market_fear_recent(closes, window=7) is True
 
 
+def test_market_regime_guard_fail_open():
+    # 레짐 하드게이트는 신뢰가능한 최신 KOSPI 실데이터일 때만 판정, 그 외 fail-open(True)
+    from datetime import datetime, timezone, timedelta
+    from src.application.domain.strategy.buy_strategy_service import _market_regime_up
+
+    now = datetime.now(timezone.utc)
+    up = [float(x) for x in range(1, 251)]
+    down = [float(x) for x in range(250, 0, -1)]
+    fresh = [now - timedelta(days=250 - i) for i in range(250)]
+    stale = [now - timedelta(days=400 - i) for i in range(250)]
+
+    assert _market_regime_up(up, fresh, "PROXY", 200) is True      # 프록시 → fail-open
+    assert _market_regime_up(up[:100], fresh[:100], "KOSPI", 200) is True  # 이력부족 → fail-open
+    assert _market_regime_up(up, stale, "KOSPI", 200) is True       # stale → fail-open
+    future = [now + timedelta(days=i) for i in range(250)]          # 마지막이 미래(데이터오류)
+    assert _market_regime_up(down, future, "KOSPI", 200) is True    # 미래 timestamp → fail-open
+    assert _market_regime_up(up, fresh, "KOSPI", 200) is True       # 실KOSPI 상승레짐
+    assert _market_regime_up(down, fresh, "KOSPI", 200) is False    # 실KOSPI 하락레짐
+
+
 def test_market_uptrend_regime():
     # 마지막 종가 > MA200 → 상승레짐 True
     up = list(range(1, 251))  # 꾸준한 상승 → 마지막(250) > MA
