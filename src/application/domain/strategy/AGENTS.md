@@ -7,12 +7,19 @@ notifications, OHLCV loading, and universe analysis.
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Strategy CRUD/history | `strategy_service.py` | strategy configs, universe, analysis history |
-| Buy candidates | `buy_strategy_service.py` | golden-cross scan, MA/stochastic filters, concurrency |
-| Sell analysis | `sell_strategy_service.py` | MA/Stoch/RSI/ATR/ADX, personal flow, market credit overlays |
-| Sell rule research | `sell_rule_research_service.py` | peak-rule input evaluation and scoring helpers |
+| Strategy CRUD/history | `strategy_service.py` | **facade** — CRUD/analysis history; delegates universe/recommendation/cash-plan |
+| Universe refresh | `universe_service.py` | ETF + KRX seeding, worker pool, recount (KRX scraping in `adapters/external/krx/`) |
+| Recommendation scoring | `recommendation_service.py` | `RecommendationScorer`: scan → financial filter → score → Top-N |
+| Portfolio cash plan | `portfolio_cash_planner.py` | pure policy: urgency scores, ratio maps, heat thresholds |
+| Buy candidates | `buy_strategy_service.py` | golden-cross scan; `_run_scan_workers`/`_evaluate_gc_row` shared pipeline |
+| Sell analysis | `sell_strategy_service.py` | `analyze_sell_signal` split into load/overlay/score/format stages |
+| Sell scoring rules | `sell_score_rules.py` | `ScoreRule` list — each rule emits points AND max from one place (no mirror) |
+| Sell rule research | `sell_rule_research_service.py` | peak-rule input evaluation; thresholds from `PeakRuleThresholds` |
 | Risk backfill | `sell_risk_backfill_service.py` | persists derived sell-risk fields |
-| Notifications | `notification_scheduler.py` | scheduled data refresh plus Telegram alert slots |
+| Canonical contract | `strategy_contract.py` | GC state enum, `GOLDEN_CROSS_SCAN_STATE_ORDER`, `SELL_STAGE_ORDER` |
+| Notifications (wiring) | `notification_scheduler.py` | scheduler wiring + thin job orchestrators |
+| Alert payloads | `alert_builders.py` | ETF leader summary, buy/sell alert assembly (pure functions) |
+| Notification dedupe | `notification_dedupe.py` | freshness/signature/dedupe cache |
 | Golden-cross execution | `golden_cross_engine.py`, `state_machine.py` | state transition and dry-run/live execution |
 | OHLCV for strategies | `ohlcv_data_loader.py` | DB cache plus KIS/Naver loading for strategy services |
 | Shared DTOs | `dto.py` | large contract surface; check router/template consumers |
@@ -20,11 +27,18 @@ notifications, OHLCV loading, and universe analysis.
 
 ## CONVENTIONS
 - Preserve the current split: scan/selection in `buy_strategy_service.py`, exit analysis in
-  `sell_strategy_service.py`, persistence-heavy CRUD in `strategy_service.py`.
+  `sell_strategy_service.py`. `strategy_service.py` is a thin **facade** delegating to
+  `universe_service.py` / `recommendation_service.py` / `portfolio_cash_planner.py` — keep public
+  facade signatures and `@transaction` decorators intact when extending.
+- Reuse canonical constants from `strategy_contract.py` (`GOLDEN_CROSS_SCAN_STATE_ORDER`,
+  `DEFAULT_GOLDEN_CROSS_PULLBACK`, `SELL_STAGE_ORDER`) — do not redefine state/order literals.
+- Add sell-score weights/thresholds to `SellScoreSettings`/`PeakRuleThresholds`
+  (`src/settings/sell_score_settings.py`); model a new sell-score component as a `ScoreRule` so
+  points and max stay a single source.
 - Treat `dto.py` as a cross-interface contract. Router responses, templates, scripts, and tests may
   depend on field names.
 - Keep market-data loading behind `OHLCVDataLoader` or domain services; do not duplicate KIS/Naver
-  fetching loops in new strategy code.
+  fetching loops in new strategy code. KRX corp-list scraping lives in `adapters/external/krx/`.
 - Settings-backed thresholds belong in `src/settings/config.py` or `sell_score_settings.py`, with
   `.env.example` updated when environment-controlled.
 - For scheduler changes, verify both status endpoints and Telegram-disabled behavior.

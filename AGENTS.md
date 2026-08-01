@@ -63,9 +63,13 @@ Ignore generated or local-state directories when mapping the project: `.venv/`, 
 | `DatabaseSession` | DI alias | `src/application/common/dependencies.py` | async DB session injection |
 | `KISClientDep` | DI alias | `src/application/common/dependencies.py` | KIS REST client injection |
 | `ResponseDTO` | DTO | `src/application/common/dto.py` | standard REST response envelope |
-| `StrategyService` | service | `src/application/domain/strategy/strategy_service.py` | strategy CRUD/universe/analysis orchestration |
+| `StrategyService` | facade | `src/application/domain/strategy/strategy_service.py` | strategy CRUD/analysis facade; delegates universe/recommendation/cash-plan |
+| `UniverseService` | service | `src/application/domain/strategy/universe_service.py` | universe refresh: ETF+KRX seeding, worker pool, recount |
+| `RecommendationService` / `RecommendationScorer` | service | `src/application/domain/strategy/recommendation_service.py` | golden-cross recommendation scan/scoring/Top-N |
+| `PortfolioCashPlanner` | policy | `src/application/domain/strategy/portfolio_cash_planner.py` | portfolio cash-plan policy (urgency/ratio/heat) |
 | `BuyStrategyService` | service | `src/application/domain/strategy/buy_strategy_service.py` | golden-cross scan and candidate filtering |
-| `SellStrategyService` | service | `src/application/domain/strategy/sell_strategy_service.py` | sell signal scoring and overlays |
+| `SellStrategyService` | service | `src/application/domain/strategy/sell_strategy_service.py` | sell signal scoring (`ScoreRule` pipeline in `sell_score_rules.py`) and overlays |
+| `fetch_kind_corp_list` | adapter | `src/adapters/external/krx/kind_client.py` | KRX KIND corp-list scraping (pure I/O, moved out of the domain) |
 | `StrategyScheduler` | scheduler | `src/application/domain/strategy/scheduler.py` | 08:00 universe refresh and 15:35 golden-cross execution |
 | `NotificationScheduler` | scheduler | `src/application/domain/strategy/notification_scheduler.py` | 09:20/11:20/12:20/14:20 data refresh and 09:30/11:30/12:30/14:30 Telegram alerts |
 | `is_valid_krx_symbol` | function | `src/application/domain/strategy/symbol_validation.py` | `^[0-9A-Z]{6}$` KRX symbol check; filters memo rows before the pipeline |
@@ -133,5 +137,5 @@ docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -
 ## NOTES
 - ⚠️ `force_refresh=True`를 남발하지 않는다. KIS 토큰은 1일 1회 발급 원칙이다.
 - `docker compose build`와 `docker compose up -d --build`는 `kis_token_cache:/root/KIS/config` named volume을 유지하므로 토큰 재발급 없이 안전하다.
-- 전체 테스트의 현재 확인값은 `490 passed, 13 skipped`다.
+- 전체 테스트의 현재 확인값은 `517 passed, 13 skipped`다.
 - `/ops`, `/api/v1/ops/summary`, `/api/v1/ops/notification-scheduler-status`는 구현되어 있으며 `AdminAccessDep`로 보호된다.

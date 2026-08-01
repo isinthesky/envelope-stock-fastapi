@@ -15,6 +15,7 @@
 settings/
 ├── __init__.py
 ├── config.py               # Settings 정의 (Pydantic BaseSettings)
+├── sell_score_settings.py  # SellScoreSettings(매도 점수 가중치/임계값) + PeakRuleThresholds
 └── exception_handlers.py   # 전역 예외 핸들러 등록
 ```
 
@@ -32,6 +33,10 @@ settings/
 - 거래 환경/리스크 (`trading_environment`, `risk_*`)
 - JWT/CORS/로깅 (`jwt_*`, `cors_*`, `log_*`)
 - 대시보드/WS/uvicorn/Telegram (`dashboard_*`, `ws_*`, `uvicorn_*`, `telegram_*`)
+- 전략 실행/유니버스 스케줄 (`strategy_execution_hour/minute`, `strategy_execution_misfire_grace_seconds`(≥1), `universe_refresh_hour/minute`)
+- 알림 스케줄러 (`buy_notification_slots`/`sell_notification_slots`(시/분 범위 validator), `etf_leader_map`, `buy_notification_stoch_threshold`, `buy_notification_top_n`/`top_industries_n`/`scan_limit`)
+
+> 매도 점수 관련 설정(가중치·거래량 구간·개인수급/신용 피크 임계값)은 `sell_score_settings.py`의 `SellScoreSettings`/`PeakRuleThresholds`에 있다.
 
 ### Computed Properties
 - `is_production`, `is_development`, `is_paper_trading`

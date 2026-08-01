@@ -21,14 +21,18 @@ domain/
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Strategy CRUD/universe | `strategy/strategy_service.py` | repository-backed use cases |
+| Strategy CRUD (facade) | `strategy/strategy_service.py` | facade; delegates universe/recommendation/cash-plan collaborators |
+| Universe refresh | `strategy/universe_service.py` | KRX scraping via `adapters/external/krx/kind_client.py` |
+| Recommendation scoring | `strategy/recommendation_service.py` | scan → financial filter → score → Top-N |
 | Golden-cross candidate scan | `strategy/buy_strategy_service.py` | scan concurrency and financial filters |
-| Sell signal analysis | `strategy/sell_strategy_service.py` | scoring, overlays, KOFIA/Naver hints |
-| Telegram/ops alerts | `strategy/notification_scheduler.py` | data refresh and alert slots |
+| Sell signal analysis | `strategy/sell_strategy_service.py` | load/overlay/score/format stages; `ScoreRule` in `sell_score_rules.py` |
+| Telegram/ops alerts | `strategy/notification_scheduler.py` | wiring; payloads in `alert_builders.py`, dedupe in `notification_dedupe.py` |
 | OHLCV cache warmup | `ohlcv/warmup_service.py`, `ohlcv/core_loader.py` | KIS paging and freshness policy |
 | Backtest facade | `backtest/service.py` | wraps engine and result summaries |
 | Order operations | `order/service.py` | KIS order calls and repository updates |
 | Common indicators | `../common/indicators.py` | shared technical indicators, not strategy-only |
+
+> Note: the legacy Bollinger `strategy/engine.py` was removed; only `golden_cross` strategies run via the scheduler.
 
 ## CONVENTIONS
 - Services own policy: cache TTL choices, risk limits, scan filters, scheduler timing, retry budgets,

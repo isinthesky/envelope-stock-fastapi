@@ -54,15 +54,23 @@ domain/
 
 ### strategy/
 - `dto.py`: 전략/유니버스/시그널 DTO
-- `strategy_service.py`: 전략 CRUD/유니버스/분석 이력
-- `buy_strategy_service.py`: 골든크로스 매수 스캔
-- `sell_strategy_service.py`: 매도 시그널 분석
+- `strategy_contract.py`: GoldenCross 상태/파라미터 canonical 계약(enum·순서 상수·SELL_STAGE_ORDER)
+- `strategy_service.py`: **facade** — 전략 CRUD/분석 이력 + 아래 협력자에 위임
+  - `universe_service.py`: 유니버스 갱신(ETF 시딩 + KRX 시딩 + 워커풀 + 재집계)
+  - `recommendation_service.py`: 골든크로스 추천 스코어링/랭킹(`RecommendationScorer`)
+  - `portfolio_cash_planner.py`: 포트폴리오 현금계획 정책(순수 policy)
+- `buy_strategy_service.py`: 골든크로스 매수 스캔(`_run_scan_workers`/`_evaluate_gc_row` 공용화)
+- `sell_strategy_service.py`: 매도 시그널 분석(`analyze_sell_signal` 4단 분해)
+- `sell_score_rules.py`: 매도 점수 `ScoreRule` 파이프라인(points+max 단일 소스)
+- `sell_rule_research_service.py` / `sell_rule_preregistration_config.py` / `sell_risk_backfill_service.py`: 매도 룰 연구/사전등록/리스크 백필
 - `stock_screener.py`: 종목 스크리닝 기준
+- `signal_evaluator.py` / `presets.py` / `symbol_validation.py`: 시그널 평가/프리셋/심볼 검증
 - `ohlcv_data_loader.py`: DB 캐시 + KIS API OHLCV 로딩
-- `engine.py`: 레거시 전략 엔진
 - `golden_cross_engine.py`, `state_machine.py`: 골든크로스 실행/상태 관리
-- `scheduler.py`: 전략 실행 스케줄러
-- `notification_scheduler.py`: Telegram 알림 스케줄러
+- `scheduler.py`: 전략 실행 스케줄러(`create_async_scheduler`/`register_cron_job` 공용 팩토리)
+- `notification_scheduler.py`: Telegram 알림 스케줄러(wiring) — `alert_builders.py`(payload 조립)·`notification_dedupe.py`(freshness/dedupe)로 분리
+
+> ⚠️ 레거시 볼린저 `engine.py`는 제거됨(실주문 가드 없는 이중 엔진). 이제 `golden_cross` 타입만 스케줄러로 실행된다.
 
 ---
 

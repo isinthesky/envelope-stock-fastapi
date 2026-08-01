@@ -17,6 +17,9 @@ adapters/
     websocket/           # KIS WebSocket 연결/구독 관리
     telegram/            # Telegram notifier
     naver/               # Naver 금융 스크리닝용 client
+    dart_api/            # DART 재무 스크리닝 client
+    krx/                 # KRX KIND 상장사 목록 스크래핑(kind_client)
+    kofia_client.py      # KOFIA 시장 신용 스냅샷 client
 ```
 
 ## database/
@@ -47,6 +50,11 @@ adapters/
   - `notifier.py`: Bot API 메시지 전송
 - **naver/**
   - `stock_client.py`: 재무/지표 조회(스크리너 도메인에서 사용)
+- **dart_api/**
+  - `client.py`: DART 재무 스크리닝(매수 재무 필터에서 사용)
+- **krx/**
+  - `kind_client.py`: `fetch_kind_corp_list(market_type)` — KIND 상장사 목록 스크래핑(euc-kr, 6자리 코드). 유니버스 갱신에서 사용
+- **kofia_client.py**: KOFIA 시장 신용 스냅샷(매도 신용 과열 오버레이에서 사용)
 
 ## 구현 규칙
 - adapters는 **비즈니스 정책을 결정하지 않습니다**.
