@@ -951,3 +951,15 @@ class TechnicalIndicators:
             if TechnicalIndicators.is_market_fear_by_bollinger(closes[:end], period, std_mult):
                 return True
         return False
+
+    @staticmethod
+    def is_market_uptrend(closes: list[float], ma_period: int = 200) -> bool:
+        """시장 상승 레짐 여부 (마지막 종가 > MA(ma_period)).
+
+        추세추종 진입의 시장 게이트. 백테스트상 KOSPI>MA200일 때만 골든크로스
+        진입 시 약세·횡보장 whipsaw를 회피(승률·수익 개선). 데이터 부족 시 True(fail-open).
+        """
+        if len(closes) < ma_period:
+            return True
+        ma = sum(closes[-ma_period:]) / ma_period
+        return closes[-1] > ma

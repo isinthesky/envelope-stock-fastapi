@@ -301,6 +301,14 @@ class Settings(BaseSettings):
         description="[#2/#3] fear-buy 후보를 추천/Telegram 알림에 포함(opt-in, 기본 OFF). "
         "라이브 외부 알림 변경이므로 백테스트 확인 후 활성화 권장",
     )
+    gc_regime_filter_enabled: bool = Field(
+        default=False,
+        description="[regime] 시장 상승레짐(KOSPI>MA)일 때만 골든크로스 진입 허용(opt-in, 기본 OFF). "
+        "백테스트상 약세·횡보장 whipsaw 회피로 승률·수익 개선. fear-buy(역추세)에는 미적용",
+    )
+    gc_regime_ma: int = Field(
+        default=200, ge=20, le=300, description="[regime] 시장 레짐 판정용 KOSPI 이동평균 기간(일)"
+    )
     sell_regime_aware_enabled: bool = Field(
         default=False,
         description="[#8 defer] 매도에 시장 레짐 반영(기본 OFF). 하드 손절은 이 값과 무관하게 항상 적용",

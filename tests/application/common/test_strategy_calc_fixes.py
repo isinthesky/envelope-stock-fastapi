@@ -46,6 +46,17 @@ def test_fear_recent_window_detects_prior_fear():
     assert TI.is_market_fear_recent(closes, window=7) is True
 
 
+def test_market_uptrend_regime():
+    # 마지막 종가 > MA200 → 상승레짐 True
+    up = list(range(1, 251))  # 꾸준한 상승 → 마지막(250) > MA
+    assert TI.is_market_uptrend([float(x) for x in up], 200) is True
+    # 하락 추세 → 마지막 종가 < MA → False
+    down = list(range(250, 0, -1))
+    assert TI.is_market_uptrend([float(x) for x in down], 200) is False
+    # 데이터 부족 → fail-open True
+    assert TI.is_market_uptrend([100.0] * 50, 200) is True
+
+
 def test_fear_recent_window_expires():
     calm_tail = [100.0 + (i % 2) * 0.1 for i in range(20)]
     closes = [100.0] * 25 + [90.0, 85.0, 80.0, 74.0, 68.0] + calm_tail

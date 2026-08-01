@@ -177,24 +177,30 @@ class BuyStrategyService:
             f"force_refresh={force_refresh})"
         )
 
-        # === 시장 공포 윈도우 (#2/#3): 스캔당 1회 계산, fail-open ===
-        # KOSPI(또는 대형주 프록시) 종가로 시장 레짐을 판정하고, 개별 종목 프록시를 대체한다.
+        # === 시장 레짐/공포 (스캔당 1회 계산, fail-open) ===
+        # KOSPI(또는 대형주 프록시) 종가로 시장 상태를 판정한다.
         market_fear_window_open = False
-        if settings.fear_buy_window_enabled:
+        market_regime_up = True  # 레짐필터 off거나 데이터 부족 시 통과(fail-open)
+        if settings.fear_buy_window_enabled or settings.gc_regime_filter_enabled:
             try:
-                market_closes, _mts, _src = await get_kospi_or_proxy_closes(session, days=400)
-                market_fear_window_open = TechnicalIndicators.is_market_fear_recent(
-                    market_closes, window=settings.fear_buy_window_days
-                )
+                # MA(gc_regime_ma) 레짐 판정에 충분하도록 넉넉히 로드
+                market_closes, _mts, _src = await get_kospi_or_proxy_closes(session, days=500)
+                if settings.fear_buy_window_enabled:
+                    market_fear_window_open = TechnicalIndicators.is_market_fear_recent(
+                        market_closes, window=settings.fear_buy_window_days
+                    )
+                if settings.gc_regime_filter_enabled:
+                    market_regime_up = TechnicalIndicators.is_market_uptrend(
+                        market_closes, settings.gc_regime_ma
+                    )
                 logger.info(
-                    f"[GC Scan] market regime source={_src} closes={len(market_closes)} "
-                    f"fear_window_open={market_fear_window_open}"
+                    f"[GC Scan] market source={_src} closes={len(market_closes)} "
+                    f"fear_window_open={market_fear_window_open} regime_up={market_regime_up}"
                 )
-            except Exception as e:  # noqa: BLE001 - fail-open: 데이터 오류 시 평온 가정
-                logger.warning(
-                    f"[GC Scan] market fear load failed, fail-open (calm assumed): {e}"
-                )
+            except Exception as e:  # noqa: BLE001 - fail-open: 데이터 오류 시 통과 가정
+                logger.warning(f"[GC Scan] market load failed, fail-open: {e}")
                 market_fear_window_open = False
+                market_regime_up = True
 
         # 2. 종목별 기술적 지표 계산
 
@@ -292,11 +298,15 @@ class BuyStrategyService:
 
                         is_gc_active = ma_short > ma_long
 
-                        # === 매수 후보 판정 (#A GC+RSI, #2/#3 fear-window) ===
+                        # === 매수 후보 판정 (#A GC+RSI, #2/#3 fear-window, regime) ===
                         # GC 후보: 골든크로스 활성 + (옵션) RSI 과매도 (사용자 지정 GC+RSI<=40)
                         gc_pass = is_gc_active
                         if is_gc_active and settings.gc_require_rsi_oversold:
                             gc_pass = rsi is not None and rsi <= settings.gc_rsi_threshold
+                        # [regime] 시장 하락레짐(KOSPI<MA)이면 GC(추세추종) 진입 차단.
+                        # fear-buy(역추세)는 공포장에서 발동해야 하므로 레짐필터 미적용.
+                        if settings.gc_regime_filter_enabled and not market_regime_up:
+                            gc_pass = False
 
                         # Fear-buy 후보: 시장 공포 윈도우 열림 + 개별 과매도(RSI 임계).
                         # 위상차 흡수를 위해 '동일봉 AND'가 아니라 최근 N일 윈도우로 판정한다.
