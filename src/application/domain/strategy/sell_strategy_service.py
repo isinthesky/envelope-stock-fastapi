@@ -1196,9 +1196,12 @@ class SellStrategyService:
         total_score = 0.0
         for rule in rules:
             total_score += rule.points
+        # 개별 max 항을 순서대로 누적하여 기존 인라인 available_max 누적과
+        # bit-identical 하게 유지(거래량 weight 후 피크 +5 등 규칙 내 다중 항 포함).
         available_max = 0.0
         for rule in rules:
-            available_max += rule.max_points
+            for term in rule.max_contributions():
+                available_max += term
         for rule in rules:
             score_reasons.extend(rule.reasons)
 

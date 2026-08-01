@@ -35,12 +35,21 @@ class ScoreRule:
         max_points: 규칙이 가용 최대치(available_max)에 기여하는 값.
         reasons: 점수 근거 문구(누적 순서 보존용, 리스트 순서 유지).
         breakdown: ``score_breakdown`` 에 병합될 키/값(반올림 완료).
+        max_terms: available_max 합산 시 순차 누적할 개별 항(부동소수 결합순서
+            보존용). ``None`` 이면 ``(max_points,)`` 단일 항으로 간주한다. 기존
+            인라인 코드가 한 규칙 안에서 여러 번 ``available_max += ...`` 하던
+            경우(예: 거래량 weight 후 피크 +5)를 bit-identical 하게 재현한다.
     """
 
     points: float
     max_points: float
     reasons: list[str] = field(default_factory=list)
     breakdown: dict[str, float] = field(default_factory=dict)
+    max_terms: tuple[float, ...] | None = None
+
+    def max_contributions(self) -> tuple[float, ...]:
+        """available_max 누적에 사용할 순서 있는 항들."""
+        return self.max_terms if self.max_terms is not None else (self.max_points,)
 
 
 def stoch_rule(stoch_k: float | None, config: SellScoreSettings) -> ScoreRule:
@@ -113,11 +122,16 @@ def volume_rule(
         volume_score += 5.0
         reasons.append("거래량 피크 보너스 (+5)")
 
-    max_points = 0.0
+    # 기존 인라인 순서(available_max += volume_weight → += 5.0)를 그대로
+    # 재현하기 위해 개별 항을 순서대로 보존한다(부동소수 결합순서 보존).
+    max_term_list: list[float] = []
     if volume_ratio is not None:
-        max_points += config.volume_weight
+        max_term_list.append(config.volume_weight)
     if is_volume_peak:
-        max_points += 5.0
+        max_term_list.append(5.0)
+    max_points = 0.0
+    for term in max_term_list:
+        max_points += term
 
     return ScoreRule(
         volume_score,
@@ -127,6 +141,7 @@ def volume_rule(
             "volume_score": round(volume_score, 2),
             "volume_peak_score": round(peak_score_raw, 2),
         },
+        max_terms=tuple(max_term_list),
     )
 
 
