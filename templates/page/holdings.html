@@ -1,0 +1,102 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}보유 매도 점검 - Stock API Admin{% endblock %}
+
+{% block extra_css_links %}
+<link rel="stylesheet" href="/static/styles/sell_strategy.css?v={{ static_version }}" />
+{% endblock %}
+
+{% block extra_styles %}
+.hold-intro { color:#64748b; font-size:13px; margin:4px 0 14px; }
+.hold-input-table { width:100%; border-collapse:collapse; margin-top:8px; }
+.hold-input-table th, .hold-input-table td { padding:6px 8px; text-align:left; border-bottom:1px solid #e2e8f0; }
+.hold-input-table th { font-size:12px; color:#64748b; font-weight:600; }
+.hold-input-table input { width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; }
+.hold-input-table .col-sym { width:26%; } .hold-input-table .col-num { width:22%; } .hold-input-table .col-del { width:44px; text-align:center; }
+.hold-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+.hold-thresholds { display:flex; gap:10px; align-items:center; margin-top:10px; font-size:12px; color:#475569; flex-wrap:wrap; }
+.hold-thresholds input { width:60px; padding:4px 6px; border:1px solid #cbd5e1; border-radius:6px; }
+.btn-row-del { background:#fee2e2; color:#b91c1c; border:none; border-radius:6px; padding:4px 8px; cursor:pointer; font-size:12px; }
+.btn-primary { background:#1e3a5f; color:#fff; border:none; border-radius:8px; padding:9px 18px; cursor:pointer; font-weight:600; font-size:13px; }
+.btn-primary:disabled { opacity:.5; cursor:not-allowed; }
+.btn-ghost { background:#f1f5f9; color:#334155; border:1px solid #cbd5e1; border-radius:8px; padding:8px 14px; cursor:pointer; font-size:13px; }
+
+.pf-summary { display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; }
+.pf-card { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px 16px; min-width:120px; }
+.pf-card .label { font-size:11px; color:#64748b; } .pf-card .value { font-size:18px; font-weight:700; color:#1e293b; }
+.pf-card .value.pos { color:#dc2626; } .pf-card .value.neg { color:#2563eb; }
+
+.hold-result-table { width:100%; border-collapse:collapse; margin-top:12px; }
+.hold-result-table th, .hold-result-table td { padding:8px 10px; text-align:right; border-bottom:1px solid #e2e8f0; font-size:13px; white-space:nowrap; }
+.hold-result-table th { color:#64748b; font-weight:600; font-size:12px; text-align:right; }
+.hold-result-table th:first-child, .hold-result-table td:first-child,
+.hold-result-table th:nth-child(2), .hold-result-table td:nth-child(2) { text-align:left; }
+.hold-result-table td.reasons { text-align:left; white-space:normal; color:#64748b; font-size:12px; max-width:260px; }
+.stg { display:inline-block; font-size:11px; font-weight:700; padding:3px 9px; border-radius:10px; }
+.stg-HOLD { background:#dcfce7; color:#166534; }
+.stg-REDUCE_1 { background:#fef9c3; color:#854d0e; }
+.stg-REDUCE_2 { background:#ffedd5; color:#9a3412; }
+.stg-EXIT_ALL { background:#fee2e2; color:#991b1b; }
+.pl-pos { color:#dc2626; font-weight:600; } .pl-neg { color:#2563eb; font-weight:600; }
+{% endblock %}
+
+{% block content %}
+<h1>보유 종목 매도 점검</h1>
+<p class="hold-intro">내 보유 종목과 평단가를 입력하면 각 종목을 매도 시그널 전략에 대입해
+  매도 단계(HOLD/REDUCE/EXIT)·수익률·근거를 한눈에 보여줍니다. 입력값은 이 브라우저에만 저장됩니다(서버 미전송).</p>
+{% if etf_universe_enabled %}
+<p style="font-size:12px; color:#0369a1; background:#e0f2fe; display:inline-block; padding:4px 10px; border-radius:8px; margin:0 0 8px;">
+  📊 매수 유니버스: <strong>ETF {{ etf_universe_count }}종</strong> (매도 점검은 보유 중인 어떤 종목코드든 입력 가능)
+</p>
+{% endif %}
+
+<section>
+  <h2>보유 종목 입력</h2>
+  <table class="hold-input-table">
+    <thead>
+      <tr>
+        <th class="col-sym">종목코드</th>
+        <th class="col-num">평단가 (원)</th>
+        <th class="col-num">수량 (선택)</th>
+        <th class="col-del"></th>
+      </tr>
+    </thead>
+    <tbody id="holdings_input_body">
+      <!-- rows injected by JS -->
+    </tbody>
+  </table>
+
+  <div class="hold-thresholds">
+    <label>Stoch 과매수 임계값</label>
+    <input id="stoch_threshold" type="number" value="70" min="50" max="90" />
+    <label style="margin-left:8px;">RSI 과매수 임계값</label>
+    <input id="rsi_threshold" type="number" value="70" min="50" max="90" />
+    <span style="color:#94a3b8;">진입가(평단가) 기반 동적 임계값이 함께 적용됩니다.</span>
+  </div>
+
+  <div class="hold-actions">
+    <button class="btn-ghost" type="button" onclick="addHoldingRow()">+ 종목 추가</button>
+    <button class="btn-primary" id="run_btn" type="button" onclick="runHoldingsCheck()">매도 점검 실행</button>
+    <button class="btn-ghost" type="button" onclick="clearHoldings()">전체 지우기</button>
+    <span id="hold_status" style="font-size:12px; color:#64748b;"></span>
+  </div>
+</section>
+
+<section>
+  <h2>포트폴리오 요약</h2>
+  <div id="pf_summary" class="pf-summary">
+    <div class="placeholder-message">매도 점검을 실행하면 요약이 표시됩니다.</div>
+  </div>
+</section>
+
+<section>
+  <h2>매도 점검 결과</h2>
+  <div id="hold_result_wrap">
+    <div class="placeholder-message">아직 실행하지 않았습니다. 종목을 입력하고 "매도 점검 실행"을 누르세요.</div>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_script_tags %}
+<script src="/static/js/pages/holdings.js?v={{ static_version }}"></script>
+{% endblock %}

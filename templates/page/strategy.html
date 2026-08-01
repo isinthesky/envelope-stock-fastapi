@@ -167,7 +167,7 @@
           <th>종목명</th>
           <th>기술</th>
           {% if not etf_universe_enabled %}<th>재무</th>{% endif %}
-          <th>섹터</th>
+          {% if not etf_universe_enabled %}<th>섹터</th>{% endif %}
           <th>현재가</th>
           <th>MA Gap</th>
           <th>Stoch K/D</th>
@@ -176,7 +176,7 @@
         </tr>
       </thead>
       <tbody id="gc_scan_table_body">
-        <tr><td colspan="{{ 8 if etf_universe_enabled else 11 }}" class="placeholder-message" style="border: none;">
+        <tr><td colspan="{{ 7 if etf_universe_enabled else 11 }}" class="placeholder-message" style="border: none;">
           결과를 불러오는 중...
         </td></tr>
       </tbody>

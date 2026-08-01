@@ -870,7 +870,7 @@ const renderGcScanTable = (stocks) => {
 
   // 필터 결과가 없으면 안내 메시지 표시
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="${window.ETF_MODE ? 8 : 11}" class="placeholder-message" style="border: none;">
+    tbody.innerHTML = `<tr><td colspan="${window.ETF_MODE ? 7 : 11}" class="placeholder-message" style="border: none;">
       해당 조건에 맞는 종목이 없습니다.
     </td></tr>`;
     return;
@@ -903,6 +903,8 @@ const renderGcScanTable = (stocks) => {
     const finTechCol = window.ETF_MODE ? '' : `<td><span class="state-badge ${finClass}">${finLabel}</span></td>`;
     const finDataCols = window.ETF_MODE ? '' : `<td class="indicator ${revenueYoyClass}">${revenueYoy}</td>
       <td class="indicator ${opMarginClass}">${opMargin}</td>`;
+    // ETF 모드: 섹터(기업 산업분류) 컬럼 제거 — ETF는 산업분류가 없어 항상 공란
+    const sectorCol = window.ETF_MODE ? '' : `<td style="font-size:12px; color:#94a3b8;">${sectorText}</td>`;
 
     return `<tr>
       <td>
@@ -912,7 +914,7 @@ const renderGcScanTable = (stocks) => {
       <td>${nameText}</td>
       <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
       ${finTechCol}
-      <td style="font-size:12px; color:#94a3b8;">${sectorText}</td>
+      ${sectorCol}
       <td class="indicator">${formatNumber(stock.current_price)}</td>
       <td class="indicator ${maGapClass}">${stock.ma_gap_ratio.toFixed(2)}%</td>
       <td class="indicator ${stochClass}">${stock.stoch_k.toFixed(1)} / ${stock.stoch_d.toFixed(1)}</td>
@@ -1152,7 +1154,7 @@ const loadSavedScans = () => {
     // 저장된 결과 없음 - 안내 메시지 표시
     document.getElementById("gc_scan_container").style.display = "block";
     document.getElementById("gc_scan_table_body").innerHTML = `
-      <tr><td colspan="${window.ETF_MODE ? 8 : 11}" class="placeholder-message" style="border: none;">
+      <tr><td colspan="${window.ETF_MODE ? 7 : 11}" class="placeholder-message" style="border: none;">
         저장된 스캔 결과가 없습니다.<br>
         <small style="color: #94a3b8;">골든크로스 스캔 버튼을 클릭하세요.</small>
       </td></tr>

@@ -6,6 +6,17 @@
 <link rel="stylesheet" href="/static/styles/sell_strategy.css?v={{ static_version }}" />
 {% endblock %}
 
+{% block extra_styles %}
+.sell-tabs { display:flex; gap:4px; margin:14px 0 0; border-bottom:2px solid #e2e8f0; flex-wrap:wrap; }
+.sell-tab { appearance:none; border:none; background:transparent; padding:9px 16px; font-size:14px; font-weight:600;
+  color:#64748b; cursor:pointer; border-bottom:3px solid transparent; margin-bottom:-2px; text-align:left; }
+.sell-tab:hover { color:#334155; }
+.sell-tab.active { color:#1e3a5f; border-bottom-color:#1e3a5f; }
+.sell-tab .desc { display:block; font-size:11px; font-weight:400; color:#94a3b8; margin-top:2px; }
+.sell-panel { margin-top:16px; }
+.sell-panel[hidden] { display:none; }
+{% endblock %}
+
 {% block content %}
 <h1>매도 전략 분석</h1>
 <p>보유 종목의 기술적 지표를 분석하여 매도 시점을 추천합니다.</p>
@@ -15,161 +26,180 @@
 </p>
 {% endif %}
 
-<section class="strategy-info">
-  <h2>매도 시그널 분석 전략</h2>
-  <p>
-    MA55/MA165 데드크로스, Stochastic/RSI 과매수, 거래량 급증, ADX 추세 필터를 종합하여
-    최적의 매도 시점과 비중축소 비율을 추천합니다.
-  </p>
-  <div class="strategy-flow">
-    <span class="step">HOLD: 보유 유지</span>
-    <span class="arrow">→</span>
-    <span class="step">REDUCE_1: 20~30% 축소</span>
-    <span class="arrow">→</span>
-    <span class="step">REDUCE_2: 30~40% 축소</span>
-    <span class="arrow">→</span>
-    <span class="step">EXIT_ALL: 전량 청산</span>
-  </div>
-</section>
+<div class="sell-tabs" role="tablist" aria-label="매도 전략 탭">
+  <button class="sell-tab active" data-panel="panel-analysis" role="tab" aria-selected="true" aria-controls="panel-analysis" tabindex="0">
+    종목 분석 <span class="desc">시그널 · 결과 · 히스토리</span>
+  </button>
+  <button class="sell-tab" data-panel="panel-cash" role="tab" aria-selected="false" aria-controls="panel-cash" tabindex="-1">
+    현금화 계획 <span class="desc">포트폴리오 정리 순서</span>
+  </button>
+  <button class="sell-tab" data-panel="panel-research" role="tab" aria-selected="false" aria-controls="panel-research" tabindex="-1">
+    백테스트 / 룰셋 <span class="desc">유니버스 백테스트 · 규칙 리서치</span>
+  </button>
+</div>
 
-<section>
-  <h2>종목 분석</h2>
-  <div class="row">
-    <label>종목코드</label>
-    <input type="text" id="symbol_input" placeholder="예: 069500 (KODEX 200)" style="width: 160px;" />
-    <button onclick="analyzeSellSignal()">매도 시그널 분석</button>
-  </div>
-  <div class="row" style="margin-top: 8px;">
-    <label style="font-size: 12px;">전략 ID (선택):</label>
-    <input id="strategy_id_input" type="number" placeholder="예: 1" style="width: 90px;" />
-    <span style="font-size: 11px; color: #64748b; margin-left: 8px;">입력 시 진입가를 DB에서 자동 조회(가능하면)</span>
-  </div>
-  <div class="last-search" id="sell_last_analysis">마지막 분석: -</div>
-  <div class="row" style="margin-top: 8px;">
-    <label style="font-size: 12px;">진입가 (선택):</label>
-    <input id="entry_price_input" type="number" placeholder="예: 50000" style="width: 100px;" />
-    <span style="font-size: 11px; color: #64748b; margin-left: 8px;">수익률 기반 동적 임계값 적용</span>
-  </div>
-  <div class="row" style="margin-top: 8px;">
-    <label style="font-size: 12px;">Stoch 임계값:</label>
-    <input id="stoch_threshold" type="number" value="70" min="50" max="90" style="width: 60px;" />
-    <label style="font-size: 12px; margin-left: 12px;">RSI 임계값:</label>
-    <input id="rsi_threshold" type="number" value="70" min="50" max="90" style="width: 60px;" />
-  </div>
-  <pre id="scan_output" style="display: none;"></pre>
-</section>
+<!-- 탭 1: 종목 분석 -->
+<div id="panel-analysis" class="sell-panel" role="tabpanel" aria-label="종목 분석">
+  <section class="strategy-info">
+    <h2>매도 시그널 분석 전략</h2>
+    <p>
+      MA55/MA165 데드크로스, Stochastic/RSI 과매수, 거래량 급증, ADX 추세 필터를 종합하여
+      최적의 매도 시점과 비중축소 비율을 추천합니다.
+    </p>
+    <div class="strategy-flow">
+      <span class="step">HOLD: 보유 유지</span>
+      <span class="arrow">→</span>
+      <span class="step">REDUCE_1: 20~30% 축소</span>
+      <span class="arrow">→</span>
+      <span class="step">REDUCE_2: 30~40% 축소</span>
+      <span class="arrow">→</span>
+      <span class="step">EXIT_ALL: 전량 청산</span>
+    </div>
+  </section>
 
-<section id="result_section">
-  <h2>분석 결과</h2>
-  <div id="result_container">
-    <div class="placeholder-message">
-      결과를 불러오는 중...
+  <section>
+    <h2>종목 분석</h2>
+    <div class="row">
+      <label>종목코드</label>
+      <input type="text" id="symbol_input" placeholder="예: 069500 (KODEX 200)" style="width: 160px;" />
+      <button onclick="analyzeSellSignal()">매도 시그널 분석</button>
     </div>
-  </div>
-</section>
+    <div class="row" style="margin-top: 8px;">
+      <label style="font-size: 12px;">전략 ID (선택):</label>
+      <input id="strategy_id_input" type="number" placeholder="예: 1" style="width: 90px;" />
+      <span style="font-size: 11px; color: #64748b; margin-left: 8px;">입력 시 진입가를 DB에서 자동 조회(가능하면)</span>
+    </div>
+    <div class="last-search" id="sell_last_analysis">마지막 분석: -</div>
+    <div class="row" style="margin-top: 8px;">
+      <label style="font-size: 12px;">진입가 (선택):</label>
+      <input id="entry_price_input" type="number" placeholder="예: 50000" style="width: 100px;" />
+      <span style="font-size: 11px; color: #64748b; margin-left: 8px;">수익률 기반 동적 임계값 적용</span>
+    </div>
+    <div class="row" style="margin-top: 8px;">
+      <label style="font-size: 12px;">Stoch 임계값:</label>
+      <input id="stoch_threshold" type="number" value="70" min="50" max="90" style="width: 60px;" />
+      <label style="font-size: 12px; margin-left: 12px;">RSI 임계값:</label>
+      <input id="rsi_threshold" type="number" value="70" min="50" max="90" style="width: 60px;" />
+    </div>
+    <pre id="scan_output" style="display: none;"></pre>
+  </section>
 
-<section class="history-section">
-  <div class="history-header">
-    <h2>포트폴리오 현금화 계획</h2>
-    <div class="history-actions">
-      <button class="btn-refresh" onclick="loadPortfolioCashPlan()">현금화 계획 갱신</button>
+  <section id="result_section">
+    <h2>분석 결과</h2>
+    <div id="result_container">
+      <div class="placeholder-message">
+        결과를 불러오는 중...
+      </div>
     </div>
-  </div>
-  <p>활성 추적 중인 매도 종목을 기준으로 목표 현금 비중을 만들기 위한 우선 정리 순서를 보여줍니다.</p>
-  <div class="row" style="margin-top: 8px;">
-    <label>목표 현금 비중</label>
-    <input id="cash_plan_target_ratio" type="number" value="30" min="0" max="100" step="5" style="width: 80px;" />
-    <label style="margin-left: 12px;">현재 현금 비중</label>
-    <input id="cash_plan_current_ratio" type="number" placeholder="예: 10" min="0" max="100" step="1" style="width: 80px;" />
-    <span style="font-size: 11px; color: #64748b; margin-left: 8px;">비워두면 목표 기준 요약만 표시합니다.</span>
-  </div>
-  <div id="cash_plan_container" class="result-card" style="margin-top: 16px;">
-    <div class="placeholder-message">
-      아직 현금화 계획을 불러오지 않았습니다.
-    </div>
-  </div>
-</section>
+  </section>
 
-<section class="universe-backtest-section">
-  <h2>유니버스 백테스트 (공격형 매도 v1)</h2>
-  <p>현재 종목 유니버스를 대상으로 골든크로스 진입 + 공격형 중단기 스윙 매도 규칙의 승률/수익률을 집계합니다.</p>
-  <div class="row">
-    <label>시장</label>
-    <select id="universe_market_filter" style="width: 120px;">
-      <option value="">전체</option>
-      <option value="ETF"{% if etf_universe_enabled %} selected{% endif %}>ETF</option>
-      <option value="KOSPI">KOSPI</option>
-      <option value="KOSDAQ">KOSDAQ</option>
-    </select>
-    <label style="margin-left: 12px;">종목 수</label>
-    <input id="universe_limit" type="number" value="20" min="1" max="100" style="width: 80px;" />
-    <label style="margin-left: 12px;"><input id="universe_eligible_only" type="checkbox" checked /> 적격 종목만</label>
-  </div>
-  <div class="row" style="margin-top: 8px;">
-    <label>시작일</label>
-    <input id="universe_start_date" type="date" value="2024-01-01" style="width: 150px;" />
-    <label style="margin-left: 12px;">종료일</label>
-    <input id="universe_end_date" type="date" value="2024-12-31" style="width: 150px;" />
-    <button style="margin-left: 12px;" onclick="runUniverseBacktest()">유니버스 백테스트 실행</button>
-  </div>
-  <div id="universe_backtest_container" class="result-card" style="margin-top: 16px;">
-    <div class="placeholder-message">
-      아직 유니버스 백테스트를 실행하지 않았습니다.
+  <section class="history-section">
+    <div class="history-header">
+      <h2>분석 히스토리</h2>
+      <div class="history-actions">
+        <button class="btn-refresh" onclick="refreshHistory()">활성 종목 갱신</button>
+      </div>
     </div>
-  </div>
-</section>
+    <div class="last-search" id="sell_last_refresh" style="margin-bottom: 12px;">마지막 갱신: -</div>
+    <table class="history-table">
+      <thead>
+        <tr>
+          <th style="width: 30px;"></th>
+          <th>종목코드</th>
+          <th>종목명</th>
+          <th>현재가</th>
+          <th>비중축소</th>
+          <th>RSI</th>
+          <th>분석시간</th>
+          <th style="width: 100px;"></th>
+        </tr>
+      </thead>
+      <tbody id="history_body">
+        <tr><td colspan="8" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
+      </tbody>
+    </table>
+  </section>
+</div>
 
-<section class="sell-rule-research-section">
-  <div class="history-header">
-    <h2>사전등록 규칙 리서치</h2>
-    <div class="history-actions">
-      <button class="btn-refresh" type="button" id="preregistered_research_btn">리서치 실행</button>
+<!-- 탭 2: 현금화 계획 -->
+<div id="panel-cash" class="sell-panel" role="tabpanel" aria-label="현금화 계획" hidden>
+  <section class="history-section">
+    <div class="history-header">
+      <h2>포트폴리오 현금화 계획</h2>
+      <div class="history-actions">
+        <button class="btn-refresh" onclick="loadPortfolioCashPlan()">현금화 계획 갱신</button>
+      </div>
     </div>
-  </div>
-  <p>고정 후보 규칙을 요청 기간의 train/test 창으로 나누어 OOS 성능과 definition_hash를 확인합니다.</p>
-  <div class="row">
-    <label>종목코드</label>
-    <input id="preregistered_symbols" type="text" placeholder="069500,102110" style="width: 180px;" />
-    <label style="margin-left: 12px;">시작일</label>
-    <input id="preregistered_start_date" type="date" value="2024-01-01" style="width: 150px;" />
-    <label style="margin-left: 12px;">종료일</label>
-    <input id="preregistered_end_date" type="date" value="2024-12-31" style="width: 150px;" />
-  </div>
-  <div id="preregistered_research_container" class="result-card" style="margin-top: 16px;">
-    <div class="placeholder-message">
-      아직 사전등록 규칙 리서치를 실행하지 않았습니다.
+    <p>활성 추적 중인 매도 종목을 기준으로 목표 현금 비중을 만들기 위한 우선 정리 순서를 보여줍니다.</p>
+    <div class="row" style="margin-top: 8px;">
+      <label>목표 현금 비중</label>
+      <input id="cash_plan_target_ratio" type="number" value="30" min="0" max="100" step="5" style="width: 80px;" />
+      <label style="margin-left: 12px;">현재 현금 비중</label>
+      <input id="cash_plan_current_ratio" type="number" placeholder="예: 10" min="0" max="100" step="1" style="width: 80px;" />
+      <span style="font-size: 11px; color: #64748b; margin-left: 8px;">비워두면 목표 기준 요약만 표시합니다.</span>
     </div>
-  </div>
-</section>
+    <div id="cash_plan_container" class="result-card" style="margin-top: 16px;">
+      <div class="placeholder-message">
+        아직 현금화 계획을 불러오지 않았습니다.
+      </div>
+    </div>
+  </section>
+</div>
 
-<section class="history-section">
-  <div class="history-header">
-    <h2>분석 히스토리</h2>
-    <div class="history-actions">
-      <button class="btn-refresh" onclick="refreshHistory()">활성 종목 갱신</button>
+<!-- 탭 3: 백테스트 / 룰셋 -->
+<div id="panel-research" class="sell-panel" role="tabpanel" aria-label="백테스트 / 룰셋" hidden>
+  <section class="universe-backtest-section">
+    <h2>유니버스 백테스트 (공격형 매도 v1)</h2>
+    <p>현재 종목 유니버스를 대상으로 골든크로스 진입 + 공격형 중단기 스윙 매도 규칙의 승률/수익률을 집계합니다.</p>
+    <div class="row">
+      <label>시장</label>
+      <select id="universe_market_filter" style="width: 120px;">
+        <option value="">전체</option>
+        <option value="ETF"{% if etf_universe_enabled %} selected{% endif %}>ETF</option>
+        <option value="KOSPI">KOSPI</option>
+        <option value="KOSDAQ">KOSDAQ</option>
+      </select>
+      <label style="margin-left: 12px;">종목 수</label>
+      <input id="universe_limit" type="number" value="20" min="1" max="100" style="width: 80px;" />
+      <label style="margin-left: 12px;"><input id="universe_eligible_only" type="checkbox" checked /> 적격 종목만</label>
     </div>
-  </div>
-  <div class="last-search" id="sell_last_refresh" style="margin-bottom: 12px;">마지막 갱신: -</div>
-  <table class="history-table">
-    <thead>
-      <tr>
-        <th style="width: 30px;"></th>
-        <th>종목코드</th>
-        <th>종목명</th>
-        <th>현재가</th>
-        <th>비중축소</th>
-        <th>ADX</th>
-        <th>Stoch K</th>
-        <th>RSI</th>
-        <th>분석시간</th>
-        <th style="width: 100px;"></th>
-      </tr>
-    </thead>
-    <tbody id="history_body">
-      <tr><td colspan="10" style="text-align: center; color: #94a3b8;">로딩 중...</td></tr>
-    </tbody>
-  </table>
-</section>
+    <div class="row" style="margin-top: 8px;">
+      <label>시작일</label>
+      <input id="universe_start_date" type="date" value="2024-01-01" style="width: 150px;" />
+      <label style="margin-left: 12px;">종료일</label>
+      <input id="universe_end_date" type="date" value="2024-12-31" style="width: 150px;" />
+      <button style="margin-left: 12px;" onclick="runUniverseBacktest()">유니버스 백테스트 실행</button>
+    </div>
+    <div id="universe_backtest_container" class="result-card" style="margin-top: 16px;">
+      <div class="placeholder-message">
+        아직 유니버스 백테스트를 실행하지 않았습니다.
+      </div>
+    </div>
+  </section>
+
+  <section class="sell-rule-research-section">
+    <div class="history-header">
+      <h2>사전등록 규칙 리서치</h2>
+      <div class="history-actions">
+        <button class="btn-refresh" type="button" id="preregistered_research_btn">리서치 실행</button>
+      </div>
+    </div>
+    <p>고정 후보 규칙을 요청 기간의 train/test 창으로 나누어 OOS 성능과 definition_hash를 확인합니다.</p>
+    <div class="row">
+      <label>종목코드</label>
+      <input id="preregistered_symbols" type="text" placeholder="069500,102110" style="width: 180px;" />
+      <label style="margin-left: 12px;">시작일</label>
+      <input id="preregistered_start_date" type="date" value="2024-01-01" style="width: 150px;" />
+      <label style="margin-left: 12px;">종료일</label>
+      <input id="preregistered_end_date" type="date" value="2024-12-31" style="width: 150px;" />
+    </div>
+    <div id="preregistered_research_container" class="result-card" style="margin-top: 16px;">
+      <div class="placeholder-message">
+        아직 사전등록 규칙 리서치를 실행하지 않았습니다.
+      </div>
+    </div>
+  </section>
+</div>
 
 <!-- 수정 Modal -->
 <div id="edit_modal" class="modal-overlay" onclick="closeEditModal(event)">
@@ -204,6 +234,36 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+  // 매도 전략 탭 (관심사 분리): in-page show/hide + WAI-ARIA roving tabindex
+  const sellTabs = Array.from(document.querySelectorAll(".sell-tab"));
+  const sellPanels = Array.from(document.querySelectorAll(".sell-panel"));
+
+  function selectSellTab(tab, focus) {
+    sellTabs.forEach((t) => {
+      const on = t === tab;
+      t.classList.toggle("active", on);
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.setAttribute("tabindex", on ? "0" : "-1");  // roving tabindex
+    });
+    const target = tab.getAttribute("data-panel");
+    sellPanels.forEach((p) => { p.hidden = p.id !== target; });
+    if (focus) tab.focus();
+  }
+
+  sellTabs.forEach((tab, i) => {
+    tab.addEventListener("click", () => selectSellTab(tab, false));
+    tab.addEventListener("keydown", (e) => {
+      let next = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") next = sellTabs[(i + 1) % sellTabs.length];
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = sellTabs[(i - 1 + sellTabs.length) % sellTabs.length];
+      else if (e.key === "Home") next = sellTabs[0];
+      else if (e.key === "End") next = sellTabs[sellTabs.length - 1];
+      if (next) { e.preventDefault(); selectSellTab(next, true); }  // 화살표/Home/End 이동+선택
+    });
+  });
 {% endblock %}
 
 {% block extra_script_tags %}

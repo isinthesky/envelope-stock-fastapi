@@ -363,7 +363,7 @@ const loadHistory = async () => {
   } catch (e) {
     console.error('Failed to load history:', e);
     document.getElementById("history_body").innerHTML =
-      '<tr><td colspan="10" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
+      '<tr><td colspan="8" style="text-align: center; color: #ef4444;">히스토리 로딩 실패</td></tr>';
   }
 };
 
@@ -1202,7 +1202,7 @@ const renderHistoryTable = () => {
 
   try {
     if (!Array.isArray(analysisHistory) || analysisHistory.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #94a3b8;">분석 기록이 없습니다</td></tr>';
       return;
     }
 
@@ -1215,10 +1215,6 @@ const renderHistoryTable = () => {
 
       const entryPriceBadge = item.entry_price ? `<span class="entry-price-badge">진입가: ${formatNumber(item.entry_price)}</span>` : '';
       const stageName = getStageDisplayName(displayStage).replace(' 비중 축소', '').replace('보유 유지', '보유');
-      const adxValue = item.adx !== null && item.adx !== undefined ? Number(item.adx) : null;
-      const adxDisplay = adxValue !== null && !Number.isNaN(adxValue) ? adxValue.toFixed(1) : '-';
-      const adxBadge = item.is_strong_uptrend ? '↑' : ((adxValue !== null && adxValue > 25) ? '↓' : '');
-      const stochDisplay = item.stoch_k !== null && item.stoch_k !== undefined ? Number(item.stoch_k).toFixed(1) : '-';
       const rsiDisplay = item.rsi !== null && item.rsi !== undefined ? Number(item.rsi).toFixed(1) : '-';
 
       const safeId = parseInt(item.id, 10);
@@ -1230,8 +1226,6 @@ const renderHistoryTable = () => {
         <td>${escapeHtml(item.name || '-')}</td>
         <td>${formatNumber(item.current_price)}</td>
         <td><span class="stage-badge ${stageClass}" style="font-size: 11px; padding: 4px 8px;">${stageName}</span></td>
-        <td>${adxDisplay} ${adxBadge}</td>
-        <td>${stochDisplay}</td>
         <td>${rsiDisplay}</td>
         <td>${formatTime(item.analyzed_at)}</td>
         <td>
@@ -1242,7 +1236,7 @@ const renderHistoryTable = () => {
     }).join('');
   } catch (e) {
     console.error('renderHistoryTable failed:', e, analysisHistory);
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #ef4444;">추적 종목 렌더링 실패</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #ef4444;">추적 종목 렌더링 실패</td></tr>';
   }
 };
 
