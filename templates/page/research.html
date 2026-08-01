@@ -37,7 +37,11 @@
 .callout { background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:10px 12px; font-size:12.5px; color:#92400e; margin-top:10px; }
 .script-list { columns:2; font-size:12.5px; color:#475569; }
 .script-list li { margin-bottom:3px; }
-@media (max-width:640px){ .script-list{columns:1;} }
+@media (max-width:640px){
+  .script-list{columns:1;}
+  /* 좁은 화면: 다열 테이블 가로 스크롤(섹션 overflow-x:hidden에 의한 컬럼 클리핑 방지) */
+  .rs-table{ display:block; overflow-x:auto; white-space:nowrap; }
+}
 {% endblock %}
 
 {% block content %}
@@ -132,7 +136,7 @@
       <span class="badge {{ 'on' if flags.gc_regime_filter_enabled else 'off' }}">{{ 'ON' if flags.gc_regime_filter_enabled else 'OFF' }}</span></div>
     <div class="flag-row"><span><code>GC_REGIME_MA</code><br><small>레짐 판정 KOSPI MA</small></span>
       <span class="mono">{{ flags.gc_regime_ma }}</span></div>
-    <div class="flag-row"><span><code>GC_REQUIRE_RSI_OVERSOLD</code><br><small>GC + RSI≤임계</small></span>
+    <div class="flag-row"><span><code>GC_REQUIRE_RSI_OVERSOLD</code><br><small>GC + RSI≤{{ flags.gc_rsi_threshold|int }}</small></span>
       <span class="badge {{ 'on' if flags.gc_require_rsi_oversold else 'off' }}">{{ 'ON' if flags.gc_require_rsi_oversold else 'OFF' }}</span></div>
     <div class="flag-row"><span><code>FEAR_BUY_WINDOW_ENABLED</code><br><small>공포 윈도우 매수</small></span>
       <span class="badge {{ 'on' if flags.fear_buy_window_enabled else 'off' }}">{{ 'ON' if flags.fear_buy_window_enabled else 'OFF' }}</span></div>

@@ -14,6 +14,8 @@
     body.embedded .sidebar-backdrop { display: none !important; }
     body.embedded .layout { display: block; }
     body.embedded .content { margin-left: 0 !important; max-width: none !important; }
+    /* 허브 iframe 안에서 중복되는 페이지 간 이동 버튼 숨김 */
+    body.embedded .embed-hide { display: none !important; }
     {% block extra_styles %}{% endblock %}
   </style>
 </head>

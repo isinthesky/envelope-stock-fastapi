@@ -22,18 +22,23 @@
 </div>
 
 <div class="hub-tabs" role="tablist">
-  <button class="hub-tab active" data-src="/mypage/strategy/?embed=1" role="tab">
+  <button class="hub-tab active" data-src="/mypage/strategy/?embed=1" data-open="/mypage/strategy/" role="tab" aria-selected="true" aria-controls="hub-panel">
     매수 스캔 <span class="desc">골든크로스 · MA5 돌파 · 관심종목</span>
   </button>
-  <button class="hub-tab" data-src="/mypage/recommendation/?embed=1" role="tab">
+  <button class="hub-tab" data-src="/mypage/recommendation/?embed=1" data-open="/mypage/recommendation/" role="tab" aria-selected="false" aria-controls="hub-panel">
     추천 / 룰셋 <span class="desc">후보 추천 · 룰셋 · walk-forward</span>
   </button>
-  <button class="hub-tab" data-src="/mypage/strategy/dashboard?embed=1" role="tab">
+  <button class="hub-tab" data-src="/mypage/strategy/dashboard?embed=1" data-open="/mypage/strategy/dashboard" role="tab" aria-selected="false" aria-controls="hub-panel">
     내 전략 <span class="desc">전략 카탈로그 · 활성화</span>
   </button>
 </div>
 
-<div class="hub-frame-wrap">
+<div style="text-align:right; margin-top:6px;">
+  <a id="hub-open" href="/mypage/strategy/" target="_blank" rel="noopener"
+     style="font-size:12px; color:#64748b;">↗ 이 화면 직접 열기 (프레임이 안 보이면 클릭)</a>
+</div>
+
+<div class="hub-frame-wrap" id="hub-panel" role="tabpanel">
   <iframe id="hub-frame" class="hub-frame" src="/mypage/strategy/?embed=1" title="전략 화면"></iframe>
 </div>
 {% endblock %}
@@ -41,14 +46,17 @@
 {% block extra_scripts %}
   const hubTabs = document.querySelectorAll(".hub-tab");
   const hubFrame = document.getElementById("hub-frame");
+  const hubOpen = document.getElementById("hub-open");
   hubTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
-      hubTabs.forEach((t) => t.classList.remove("active"));
+      hubTabs.forEach((t) => { t.classList.remove("active"); t.setAttribute("aria-selected", "false"); });
       tab.classList.add("active");
+      tab.setAttribute("aria-selected", "true");
       const src = tab.getAttribute("data-src");
       if (hubFrame.getAttribute("src") !== src) {
         hubFrame.setAttribute("src", src);
       }
+      hubOpen.setAttribute("href", tab.getAttribute("data-open"));
     });
   });
 {% endblock %}

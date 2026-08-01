@@ -249,6 +249,17 @@ from src.application.common.middleware import AccessLoggingMiddleware
 app.add_middleware(AccessLoggingMiddleware)
 
 
+# 보안 헤더: 클릭재킹 방지. frame-ancestors 'self'로 동일 출처 프레임만 허용
+# (mypage 전략 센터 iframe은 동작, 외부 사이트의 admin 프레임 삽입은 차단).
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    return response
+
+
 # ==================== Root Endpoint ====================
 
 
