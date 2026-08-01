@@ -22,13 +22,13 @@
 </div>
 
 <div class="hub-tabs" role="tablist">
-  <button class="hub-tab active" data-src="/mypage/strategy/?embed=1" data-open="/mypage/strategy/" role="tab" aria-selected="true" aria-controls="hub-panel">
+  <button class="hub-tab active" data-src="/mypage/strategy/?embed=1" data-open="/mypage/strategy/" role="tab" aria-selected="true" aria-controls="hub-panel" tabindex="0">
     매수 스캔 <span class="desc">골든크로스 · MA5 돌파 · 관심종목</span>
   </button>
-  <button class="hub-tab" data-src="/mypage/recommendation/?embed=1" data-open="/mypage/recommendation/" role="tab" aria-selected="false" aria-controls="hub-panel">
+  <button class="hub-tab" data-src="/mypage/recommendation/?embed=1" data-open="/mypage/recommendation/" role="tab" aria-selected="false" aria-controls="hub-panel" tabindex="-1">
     추천 / 룰셋 <span class="desc">후보 추천 · 룰셋 · walk-forward</span>
   </button>
-  <button class="hub-tab" data-src="/mypage/strategy/dashboard?embed=1" data-open="/mypage/strategy/dashboard" role="tab" aria-selected="false" aria-controls="hub-panel">
+  <button class="hub-tab" data-src="/mypage/strategy/dashboard?embed=1" data-open="/mypage/strategy/dashboard" role="tab" aria-selected="false" aria-controls="hub-panel" tabindex="-1">
     내 전략 <span class="desc">전략 카탈로그 · 활성화</span>
   </button>
 </div>
@@ -44,19 +44,34 @@
 {% endblock %}
 
 {% block extra_scripts %}
-  const hubTabs = document.querySelectorAll(".hub-tab");
+  const hubTabs = Array.from(document.querySelectorAll(".hub-tab"));
   const hubFrame = document.getElementById("hub-frame");
   const hubOpen = document.getElementById("hub-open");
-  hubTabs.forEach((tab) => {
-    tab.addEventListener("click", () => {
-      hubTabs.forEach((t) => { t.classList.remove("active"); t.setAttribute("aria-selected", "false"); });
-      tab.classList.add("active");
-      tab.setAttribute("aria-selected", "true");
-      const src = tab.getAttribute("data-src");
-      if (hubFrame.getAttribute("src") !== src) {
-        hubFrame.setAttribute("src", src);
-      }
-      hubOpen.setAttribute("href", tab.getAttribute("data-open"));
+
+  function selectTab(tab, focus) {
+    hubTabs.forEach((t) => {
+      const on = t === tab;
+      t.classList.toggle("active", on);
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.setAttribute("tabindex", on ? "0" : "-1");  // roving tabindex
+    });
+    const src = tab.getAttribute("data-src");
+    if (hubFrame.getAttribute("src") !== src) {
+      hubFrame.setAttribute("src", src);
+    }
+    hubOpen.setAttribute("href", tab.getAttribute("data-open"));
+    if (focus) tab.focus();
+  }
+
+  hubTabs.forEach((tab, i) => {
+    tab.addEventListener("click", () => selectTab(tab, false));
+    tab.addEventListener("keydown", (e) => {
+      let next = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") next = hubTabs[(i + 1) % hubTabs.length];
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = hubTabs[(i - 1 + hubTabs.length) % hubTabs.length];
+      else if (e.key === "Home") next = hubTabs[0];
+      else if (e.key === "End") next = hubTabs[hubTabs.length - 1];
+      if (next) { e.preventDefault(); selectTab(next, true); }  // 화살표/Home/End로 이동+선택
     });
   });
 {% endblock %}
