@@ -42,10 +42,10 @@ async def backfill_one(sym: str, start, end) -> tuple[str, int, int]:
             return sym, -1, 0
 
 
-async def run(n: int, days: int, concurrency: int) -> None:
+async def run(n: int, days: int, concurrency: int, codes: list[str] | None = None) -> None:
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
-    syms = await top_symbols(n)
+    syms = codes if codes else await top_symbols(n)
     print(f"backfill {len(syms)} symbols, {days}d, concurrency={concurrency}", flush=True)
 
     sem = asyncio.Semaphore(concurrency)
@@ -77,8 +77,10 @@ def main():
     ap.add_argument("--symbols", type=int, default=100)
     ap.add_argument("--days", type=int, default=760)
     ap.add_argument("--concurrency", type=int, default=3)
+    ap.add_argument("--codes", type=str, default=None, help="쉼표구분 종목코드(지정 시 top-N 대신 사용)")
     a = ap.parse_args()
-    asyncio.run(run(a.symbols, a.days, a.concurrency))
+    codes = [c.strip() for c in a.codes.split(",")] if a.codes else None
+    asyncio.run(run(a.symbols, a.days, a.concurrency, codes))
 
 
 if __name__ == "__main__":
