@@ -14,23 +14,21 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import NamedTuple
 
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.connection import AsyncSessionLocal
-
 from src.adapters.database.models.naver_industry_code import NaverIndustryCodeModel
 from src.adapters.database.models.stock_universe import MarketType
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
 )
-from src.adapters.external.dart_api import get_dart_client, FinancialScreeningDTO
+from src.adapters.external.dart_api import FinancialScreeningDTO, get_dart_client
 from src.application.common.decorators import transaction
 from src.application.common.indicators import TechnicalIndicators
-from src.adapters.database.connection import AsyncSessionLocal
-from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
 from src.application.domain.strategy.dto import (
     GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
@@ -47,12 +45,35 @@ from src.application.domain.strategy.signal_evaluator import (
     GoldenCrossScanContext,
     GoldenCrossSignalEvaluator,
 )
+from src.application.domain.strategy.strategy_contract import (
+    DEFAULT_GOLDEN_CROSS_PULLBACK,
+    GOLDEN_CROSS_SCAN_STATE_ORDER,
+)
 from src.settings.config import settings
-
 
 logger = logging.getLogger(__name__)
 
 MA5_VOLUME_RATIO_THRESHOLD = 1.5
+
+# 골든크로스 스캔 결과 정렬 우선순위 (계약의 canonical 순서에서 파생).
+# {state_value: rank}. 미등록 상태(FEAR_BUY 등)는 .get(..., 99)로 최하위 처리한다.
+GC_SCAN_STATE_ORDER: dict[str, int] = {
+    state.value: idx for idx, state in enumerate(GOLDEN_CROSS_SCAN_STATE_ORDER)
+}
+
+
+class _Ma5BreakoutMetrics(NamedTuple):
+    """MA5 엔벨로프 돌파 스캔의 공통 계산 결과 (candidates/symbols 공유)."""
+
+    ma5: float
+    ma300: float
+    close: float
+    volume: float
+    volume_ma20: float
+    upper_band: float
+    ma5_above_upper: bool
+    is_breakout: bool
+    gap_ratio: float
 
 
 def _market_regime_up(closes, timestamps, source, ma_period) -> bool:
@@ -125,6 +146,283 @@ class BuyStrategyService:
                 f"(rate_limit={settings.kis_api_rate_limit}, total={total})"
             )
         return safe_limit
+
+    @staticmethod
+    def _update_cache_stats(target: dict[str, int], load_result: LoadResult) -> None:
+        """워커 캐시 통계 누적."""
+        if load_result.load_type == LoadType.CACHE_HIT:
+            target["cache_hits"] += 1
+        elif load_result.load_type == LoadType.INCREMENTAL:
+            target["incremental_updates"] += 1
+        else:
+            target["full_loads"] += 1
+        target["total_api_calls"] += load_result.api_calls
+        target["new_candles"] += load_result.new_candles
+
+    async def _run_scan_workers(
+        self,
+        stocks,
+        concurrency: int,
+        process_stock,
+        log_prefix: str,
+    ):
+        """work_queue/worker/세션/gather/error_map 동시성 스캐폴딩 (candidates 공용).
+
+        process_stock(worker_loader, worker_session, stock, worker_cache_stats) -> DTO | None
+        를 각 종목에 대해 호출한다. DTO를 반환하면 결과에 수집하고, None이면 스킵한다.
+        (load/commit/rollback/캐시통계 업데이트/rate-limit sleep은 process_stock 내부 책임)
+
+        Returns:
+            (results, errors, cache_stats): 원본 candidates 집계 순서/의미 그대로.
+        """
+        cache_stats = {
+            "cache_hits": 0,
+            "incremental_updates": 0,
+            "full_loads": 0,
+            "total_api_calls": 0,
+            "new_candles": 0,
+        }
+
+        work_queue: asyncio.Queue[tuple[int, object]] = asyncio.Queue()
+        for idx, stock in enumerate(stocks):
+            work_queue.put_nowait((idx, stock))
+
+        async def worker():
+            worker_results: list[tuple[int, object]] = []
+            worker_errors: list[tuple[int, str]] = []
+            worker_cache_stats = {
+                "cache_hits": 0,
+                "incremental_updates": 0,
+                "full_loads": 0,
+                "total_api_calls": 0,
+                "new_candles": 0,
+            }
+
+            # 워커(코루틴) 단위로 세션/로더를 1회 생성하여 재사용
+            async with AsyncSessionLocal() as worker_session:
+                worker_loader = OHLCVDataLoader(worker_session)
+
+                while True:
+                    try:
+                        if worker_session.in_transaction():
+                            await worker_session.rollback()
+                        idx, stock = work_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
+                    try:
+                        dto = await process_stock(
+                            worker_loader, worker_session, stock, worker_cache_stats
+                        )
+                        if dto is not None:
+                            worker_results.append((idx, dto))
+                    except ValueError as e:
+                        error_msg = f"{stock.symbol}: {str(e)}"
+                        logger.warning(f"{log_prefix} {error_msg}")
+                        worker_errors.append((idx, error_msg))
+                        if worker_session.in_transaction():
+                            await worker_session.rollback()
+                    except Exception as e:
+                        error_msg = f"{stock.symbol}: {str(e)}"
+                        logger.warning(f"{log_prefix} Error processing {error_msg}")
+                        worker_errors.append((idx, error_msg))
+                        if worker_session.in_transaction():
+                            await worker_session.rollback()
+                    finally:
+                        work_queue.task_done()
+
+            return worker_results, worker_errors, worker_cache_stats
+
+        workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
+        completed = await asyncio.gather(*workers, return_exceptions=True)
+
+        results: list = []
+        errors: list[str] = []
+        error_map: dict[int, str] = {}
+        for item in completed:
+            if isinstance(item, BaseException):
+                errors.append(str(item))
+                continue
+            worker_results, worker_errors, worker_cache_stats = item
+            results.extend([result for _, result in worker_results])
+            for idx, error_msg in worker_errors:
+                error_map[idx] = error_msg
+            for key in cache_stats:
+                cache_stats[key] += worker_cache_stats.get(key, 0)
+
+        if error_map:
+            for idx in sorted(error_map):
+                errors.append(error_map[idx])
+
+        return results, errors, cache_stats
+
+    def _evaluate_gc_row(
+        self,
+        df: pd.DataFrame,
+        *,
+        symbol: str,
+        name: str | None,
+        market: str | None,
+        sector_name: str | None,
+        industry_code: str | None,
+        industry_name: str | None,
+        market_cap,
+        screening_score,
+        short_ma_period: int,
+        long_ma_period: int,
+        stoch_threshold: float,
+        gc_only: bool,
+        market_regime_up: bool,
+        market_fear_window_open: bool,
+        enable_fear_buy: bool,
+    ) -> GoldenCrossScanItemDTO | None:
+        """골든크로스 스캔 1종목 평가 → DTO(or None).
+
+        candidates(worker)와 symbols 경로의 공통 지표추출/MA유한가드/후보판정/상태판정/
+        DTO조립을 공유한다. 경로별 의도된 차이는 플래그로 보존한다.
+        - enable_fear_buy=True(candidates): fear-buy 후보 태깅 활성 + gc_only=True 고정 호출.
+        - enable_fear_buy=False(symbols): fear-buy 미적용, 인자 gc_only 존중.
+        """
+        df = TechnicalIndicators.prepare_golden_cross_indicators(
+            df,
+            short_ma_period=short_ma_period,
+            long_ma_period=long_ma_period,
+            stoch_k_period=DEFAULT_GOLDEN_CROSS_PULLBACK.stoch_k_period,
+            stoch_d_period=DEFAULT_GOLDEN_CROSS_PULLBACK.stoch_d_period,
+            include_rsi=True,
+            rsi_period=14,
+        )
+
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) >= 2 else None
+        ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
+        ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
+        stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
+        stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
+        rsi = float(latest["rsi"]) if pd.notna(latest.get("rsi", None)) else None
+        prev_stoch_k = (
+            float(prev["stoch_k"]) if prev is not None and pd.notna(prev["stoch_k"]) else None
+        )
+        close = float(latest["close"])
+
+        # 장·단기 MA가 유한 양수가 아니면(캔들 부족 NaN→0, 비정상 inf 등) 골든크로스 오판 방지: 스킵.
+        if not (
+            ma_short > 0 and ma_long > 0 and math.isfinite(ma_short) and math.isfinite(ma_long)
+        ):
+            return None
+
+        is_gc_active = ma_short > ma_long
+
+        # === 매수 후보 판정 (#A GC+RSI, #2/#3 fear-window, regime) ===
+        gc_pass = is_gc_active
+        if is_gc_active and settings.gc_require_rsi_oversold:
+            gc_pass = rsi is not None and rsi <= settings.gc_rsi_threshold
+        # [regime] 시장 하락레짐(KOSPI<MA)이면 GC(추세추종) 진입 차단.
+        if settings.gc_regime_filter_enabled and not market_regime_up:
+            gc_pass = False
+
+        # Fear-buy 후보: 시장 공포 윈도우 열림 + 개별 과매도(RSI 임계). symbols 경로는 미적용.
+        fear_pass = (
+            enable_fear_buy
+            and settings.fear_buy_window_enabled
+            and market_fear_window_open
+            and rsi is not None
+            and rsi <= settings.fear_buy_rsi_threshold
+        )
+
+        # gc_only=False(symbols 경로)에서만 비-GC 종목을 NOT_GC로 통과시킨다.
+        # candidates 경로는 gc_only=True 고정 호출 → 항상 (gc_pass or fear_pass) 게이트.
+        keep = True if (not gc_only and not is_gc_active) else (gc_pass or fear_pass)
+        if not keep:
+            return None
+
+        ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
+
+        gc_state = self._determine_gc_state(
+            is_gc_active=is_gc_active,
+            stoch_k=stoch_k,
+            stoch_threshold=stoch_threshold,
+            stoch_d=stoch_d,
+            ma_gap_ratio=ma_gap_ratio,
+            prev_stoch_k=prev_stoch_k,
+            recent_oversold=self._has_recent_oversold(df, stoch_threshold),
+        )
+        # gc_pass가 아닌데 fear_pass로 통과한 후보는 FEAR_BUY로 태깅 (symbols 경로는 fear_pass=False).
+        if fear_pass and not gc_pass:
+            gc_state = "FEAR_BUY"
+
+        return GoldenCrossScanItemDTO(
+            symbol=symbol,
+            name=name,
+            market=market,
+            current_price=Decimal(str(close)),
+            sector_name=sector_name,
+            industry_code=industry_code,
+            industry_name=industry_name,
+            ma_short=Decimal(str(round(ma_short, 2))),
+            ma_long=Decimal(str(round(ma_long, 2))),
+            ma_gap_ratio=round(ma_gap_ratio, 2),
+            stoch_k=round(stoch_k, 2),
+            stoch_d=round(stoch_d, 2),
+            is_gc_active=is_gc_active,
+            gc_state=gc_state,
+            market_cap=market_cap,
+            screening_score=screening_score,
+        )
+
+    def _evaluate_ma5_row(
+        self,
+        df: pd.DataFrame,
+        short_period: int,
+        long_period: int,
+        envelope_pct: float,
+    ) -> "_Ma5BreakoutMetrics | None":
+        """MA5 엔벨로프 돌파 공통 계산 → metrics(or None).
+
+        candidates/symbols가 공유하는 MA·엔벨로프·돌파 판정만 계산한다. 상태분류/거래량
+        필터/DTO 조립은 경로별로 상이하므로 각 호출부에 남긴다.
+        upper_band는 원본과 동일하게 `ma300 * (1 + envelope_pct/100)` 인라인 유지
+        (TechnicalIndicators.calculate_envelope는 prices 리스트에서 SMA를 재계산하므로
+         pandas rolling ma300과 수치가 달라질 수 있어 사용하지 않는다).
+        """
+        if len(df) < long_period:
+            return None
+
+        df["ma_short"] = df["close"].rolling(window=short_period).mean()
+        df["ma_long"] = df["close"].rolling(window=long_period).mean()
+        df["volume_ma20"] = df["volume"].rolling(window=20).mean()
+
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) > 1 else latest
+
+        ma5 = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
+        ma300 = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
+        close = float(latest["close"])
+        volume = float(latest["volume"]) if pd.notna(latest["volume"]) else 0
+        volume_ma20 = float(latest["volume_ma20"]) if pd.notna(latest["volume_ma20"]) else 1
+        prev_ma5 = float(prev["ma_short"]) if pd.notna(prev["ma_short"]) else 0
+
+        if ma300 <= 0:
+            return None
+
+        upper_band = ma300 * (1 + envelope_pct / 100)
+        ma5_above_upper = ma5 > upper_band
+        prev_ma5_above_upper = prev_ma5 > (ma300 * (1 + envelope_pct / 100))
+        price_above_upper = close > upper_band
+        is_breakout = ma5_above_upper and not prev_ma5_above_upper and price_above_upper
+        gap_ratio = ((ma5 - upper_band) / upper_band * 100) if upper_band > 0 else 0
+
+        return _Ma5BreakoutMetrics(
+            ma5=ma5,
+            ma300=ma300,
+            close=close,
+            volume=volume,
+            volume_ma20=volume_ma20,
+            upper_band=upper_band,
+            ma5_above_upper=ma5_above_upper,
+            is_breakout=is_breakout,
+            gap_ratio=gap_ratio,
+        )
 
     @transaction
     async def scan_golden_cross_candidates(
@@ -227,29 +525,6 @@ class BuyStrategyService:
 
         # 2. 종목별 기술적 지표 계산
 
-        # 캐시 통계 추적
-        cache_stats = {
-            "cache_hits": 0,
-            "incremental_updates": 0,
-            "full_loads": 0,
-            "total_api_calls": 0,
-            "new_candles": 0,
-        }
-
-        work_queue: asyncio.Queue[tuple[int, object]] = asyncio.Queue()
-        for idx, stock in enumerate(stocks):
-            work_queue.put_nowait((idx, stock))
-
-        def update_cache_stats(target: dict[str, int], load_result: LoadResult) -> None:
-            if load_result.load_type == LoadType.CACHE_HIT:
-                target["cache_hits"] += 1
-            elif load_result.load_type == LoadType.INCREMENTAL:
-                target["incremental_updates"] += 1
-            else:
-                target["full_loads"] += 1
-            target["total_api_calls"] += load_result.api_calls
-            target["new_candles"] += load_result.new_candles
-
         # MA 기간: 명시 override 우선, 없으면 운영 config (live 경로는 항상 config)
         resolved_short_ma = (
             short_ma_period if short_ma_period is not None else settings.gc_short_ma_period
@@ -261,204 +536,56 @@ class BuyStrategyService:
         # 거래일↔캘린더일 환산(거래일≈캘린더×0.69) 여유 계수 1.6, 최소 400일.
         scan_lookback_days = max(400, int((resolved_long_ma + 20) * 1.6))
 
-        async def worker() -> (
-            tuple[list[tuple[int, GoldenCrossScanItemDTO]], list[tuple[int, str]], dict[str, int]]
-        ):
-            worker_results: list[tuple[int, GoldenCrossScanItemDTO]] = []
-            worker_errors: list[tuple[int, str]] = []
-            worker_cache_stats = {
-                "cache_hits": 0,
-                "incremental_updates": 0,
-                "full_loads": 0,
-                "total_api_calls": 0,
-                "new_candles": 0,
-            }
+        async def process_stock(worker_loader, worker_session, stock, worker_cache_stats):
+            load_result = await worker_loader.load_ohlcv_with_stats(
+                symbol=stock.symbol,
+                days=scan_lookback_days,
+                interval="1d",
+                min_candles=resolved_long_ma + 20,
+                cache_freshness_days=cache_freshness_days,
+                force_refresh=force_refresh,
+                include_today_candle=True,
+                today_refresh_ttl_seconds=600,
+            )
+            if load_result.load_type == LoadType.CACHE_HIT:
+                if worker_session.in_transaction():
+                    await worker_session.rollback()
+            else:
+                await worker_session.commit()
 
-            # 워커(코루틴) 단위로 세션/로더를 1회 생성하여 재사용
-            async with AsyncSessionLocal() as worker_session:
-                worker_loader = OHLCVDataLoader(worker_session)
+            self._update_cache_stats(worker_cache_stats, load_result)
 
-                while True:
-                    try:
-                        if worker_session.in_transaction():
-                            await worker_session.rollback()
-                        idx, stock = work_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
+            dto = self._evaluate_gc_row(
+                load_result.df,
+                symbol=stock.symbol,
+                name=stock.name,
+                market=stock.market,
+                sector_name=getattr(stock, "sector", None),
+                industry_code=getattr(stock, "industry", None),
+                industry_name=None,
+                market_cap=stock.market_cap,
+                screening_score=stock.screening_score,
+                short_ma_period=resolved_short_ma,
+                long_ma_period=resolved_long_ma,
+                stoch_threshold=stoch_threshold,
+                gc_only=True,  # candidates 경로는 gc_only 인자를 사용하지 않던 기존 동작 보존
+                market_regime_up=market_regime_up,
+                market_fear_window_open=market_fear_window_open,
+                enable_fear_buy=True,
+            )
+            if dto is not None:
+                await asyncio.sleep(0.05)
+            return dto
 
-                    try:
-                        load_result = await worker_loader.load_ohlcv_with_stats(
-                            symbol=stock.symbol,
-                            days=scan_lookback_days,
-                            interval="1d",
-                            min_candles=resolved_long_ma + 20,
-                            cache_freshness_days=cache_freshness_days,
-                            force_refresh=force_refresh,
-                            include_today_candle=True,
-                            today_refresh_ttl_seconds=600,
-                        )
-                        if load_result.load_type == LoadType.CACHE_HIT:
-                            if worker_session.in_transaction():
-                                await worker_session.rollback()
-                        else:
-                            await worker_session.commit()
-                        df = load_result.df
-
-                        update_cache_stats(worker_cache_stats, load_result)
-
-                        df = TechnicalIndicators.prepare_golden_cross_indicators(
-                            df,
-                            short_ma_period=resolved_short_ma,
-                            long_ma_period=resolved_long_ma,
-                            stoch_k_period=14,
-                            stoch_d_period=3,
-                            include_rsi=True,
-                            rsi_period=14,
-                        )
-
-                        latest = df.iloc[-1]
-                        prev = df.iloc[-2] if len(df) >= 2 else None
-                        ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
-                        ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
-                        stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
-                        stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
-                        rsi = float(latest["rsi"]) if pd.notna(latest.get("rsi", None)) else None
-                        prev_stoch_k = (
-                            float(prev["stoch_k"])
-                            if prev is not None and pd.notna(prev["stoch_k"])
-                            else None
-                        )
-                        close = float(latest["close"])
-
-                        # 장·단기 MA가 유한 양수가 아니면(캔들 부족 NaN→0, 비정상 inf 등)
-                        # 골든크로스 오판 방지: 스킵. finally의 task_done은 그대로 실행됨.
-                        if not (
-                            ma_short > 0
-                            and ma_long > 0
-                            and math.isfinite(ma_short)
-                            and math.isfinite(ma_long)
-                        ):
-                            continue
-
-                        is_gc_active = ma_short > ma_long
-
-                        # === 매수 후보 판정 (#A GC+RSI, #2/#3 fear-window, regime) ===
-                        # GC 후보: 골든크로스 활성 + (옵션) RSI 과매도 (사용자 지정 GC+RSI<=40)
-                        gc_pass = is_gc_active
-                        if is_gc_active and settings.gc_require_rsi_oversold:
-                            gc_pass = rsi is not None and rsi <= settings.gc_rsi_threshold
-                        # [regime] 시장 하락레짐(KOSPI<MA)이면 GC(추세추종) 진입 차단.
-                        # fear-buy(역추세)는 공포장에서 발동해야 하므로 레짐필터 미적용.
-                        if settings.gc_regime_filter_enabled and not market_regime_up:
-                            gc_pass = False
-
-                        # Fear-buy 후보: 시장 공포 윈도우 열림 + 개별 과매도(RSI 임계).
-                        # 위상차 흡수를 위해 '동일봉 AND'가 아니라 최근 N일 윈도우로 판정한다.
-                        fear_pass = (
-                            settings.fear_buy_window_enabled
-                            and market_fear_window_open
-                            and rsi is not None
-                            and rsi <= settings.fear_buy_rsi_threshold
-                        )
-
-                        # fear-buy는 gc_only와 무관하게 통과시킨다(#2/#3: 라이브 알림 경로에서
-                        # 실제로 동작하도록). fear_pass는 fear_buy_window_enabled + 실제 시장 공포
-                        # 윈도우 + 개별 과매도가 모두 성립할 때만 True라 노출량은 제한적이다.
-                        # gc_only=True여도 GC 후보(gc_pass)와 fear-buy 후보(fear_pass)만 통과.
-                        if not (gc_pass or fear_pass):
-                            continue
-
-                        ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
-
-                        gc_state = self._determine_gc_state(
-                            is_gc_active=is_gc_active,
-                            stoch_k=stoch_k,
-                            stoch_threshold=stoch_threshold,
-                            stoch_d=stoch_d,
-                            ma_gap_ratio=ma_gap_ratio,
-                            prev_stoch_k=prev_stoch_k,
-                            recent_oversold=self._has_recent_oversold(df, stoch_threshold),
-                        )
-                        # gc_pass가 아닌데 fear_pass로 통과한 후보는 FEAR_BUY로 태깅.
-                        # (비-GC뿐 아니라 레짐에 막힌 GC-active도 포함 → OPTIMAL_BUY로 남아
-                        #  FEAR_BUY_NOTIFY_ENABLED opt-in을 우회하는 것을 방지)
-                        if fear_pass and not gc_pass:
-                            gc_state = "FEAR_BUY"
-
-                        worker_results.append(
-                            (
-                                idx,
-                                GoldenCrossScanItemDTO(
-                                    symbol=stock.symbol,
-                                    name=stock.name,
-                                    market=stock.market,
-                                    current_price=Decimal(str(close)),
-                                    sector_name=getattr(stock, "sector", None),
-                                    industry_code=getattr(stock, "industry", None),
-                                    industry_name=None,
-                                    ma_short=Decimal(str(round(ma_short, 2))),
-                                    ma_long=Decimal(str(round(ma_long, 2))),
-                                    ma_gap_ratio=round(ma_gap_ratio, 2),
-                                    stoch_k=round(stoch_k, 2),
-                                    stoch_d=round(stoch_d, 2),
-                                    is_gc_active=is_gc_active,
-                                    gc_state=gc_state,
-                                    market_cap=stock.market_cap,
-                                    screening_score=stock.screening_score,
-                                ),
-                            )
-                        )
-
-                        await asyncio.sleep(0.05)
-
-                    except ValueError as e:
-                        error_msg = f"{stock.symbol}: {str(e)}"
-                        logger.warning(f"[GC Scan] {error_msg}")
-                        worker_errors.append((idx, error_msg))
-                        if worker_session.in_transaction():
-                            await worker_session.rollback()
-                    except Exception as e:
-                        error_msg = f"{stock.symbol}: {str(e)}"
-                        logger.warning(f"[GC Scan] Error processing {error_msg}")
-                        worker_errors.append((idx, error_msg))
-                        if worker_session.in_transaction():
-                            await worker_session.rollback()
-                    finally:
-                        work_queue.task_done()
-
-            return worker_results, worker_errors, worker_cache_stats
-
-        workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
-        completed = await asyncio.gather(*workers, return_exceptions=True)
-
-        error_map: dict[int, str] = {}
-        for item in completed:
-            if isinstance(item, BaseException):
-                errors.append(str(item))
-                continue
-            worker_results, worker_errors, worker_cache_stats = item
-            results.extend([result for _, result in worker_results])
-            for idx, error_msg in worker_errors:
-                error_map[idx] = error_msg
-            for key in cache_stats:
-                cache_stats[key] += worker_cache_stats.get(key, 0)
-
-        if error_map:
-            for idx in sorted(error_map):
-                errors.append(error_map[idx])
+        results, worker_errors, cache_stats = await self._run_scan_workers(
+            stocks, concurrency, process_stock, "[GC Scan]"
+        )
+        errors.extend(worker_errors)
 
         # 3. 결과 정렬 (OPTIMAL_BUY > BUY_INTEREST > READY_TO_BUY > WAITING_FOR_PULLBACK > 기타)
-        state_order = {
-            "OPTIMAL_BUY": 0,
-            "BUY_INTEREST": 1,
-            "READY_TO_BUY": 2,
-            "WAITING_FOR_PULLBACK": 3,
-            "GC_ACTIVE": 4,
-            "NOT_GC": 5,
-        }
         results.sort(
             key=lambda x: (
-                state_order.get(x.gc_state, 99),
+                GC_SCAN_STATE_ORDER.get(x.gc_state, 99),
                 -float(x.screening_score or 0),
                 x.symbol,
             )
@@ -609,9 +736,7 @@ class BuyStrategyService:
             try:
                 # OHLCV 데이터 로딩 (장기 MA 계산에 충분한 캔들 확보: long_ma + 20).
                 # 조회 창도 long MA에서 파생(큰 long MA에서 고정 400일이면 캔들 부족 방지).
-                sym_lookback_days = max(
-                    400, int((settings.gc_long_ma_period + 20) * 1.6)
-                )
+                sym_lookback_days = max(400, int((settings.gc_long_ma_period + 20) * 1.6))
                 df = await data_loader.load_ohlcv_dataframe(
                     symbol=symbol,
                     days=sym_lookback_days,
@@ -620,98 +745,30 @@ class BuyStrategyService:
                     force_refresh=force_refresh,
                 )
 
-                # 지표 계산 (MA는 gc_short/long_ma_period config)
-                df = TechnicalIndicators.prepare_golden_cross_indicators(
+                # 지표추출/필터/상태판정/DTO조립은 candidates 경로와 공유(_evaluate_gc_row).
+                # symbols 경로: fear-buy 미적용(enable_fear_buy=False), gc_only 인자 존중.
+                dto = self._evaluate_gc_row(
                     df,
+                    symbol=symbol,
+                    name=name,
+                    market=market,
+                    sector_name=sector_name,
+                    industry_code=industry_code,
+                    industry_name=industry_name,
+                    market_cap=None,
+                    screening_score=None,
                     short_ma_period=settings.gc_short_ma_period,
                     long_ma_period=settings.gc_long_ma_period,
-                    stoch_k_period=14,
-                    stoch_d_period=3,
-                    include_rsi=True,
-                    rsi_period=14,
-                )
-
-                # 최신 행 추출
-                latest = df.iloc[-1]
-                prev = df.iloc[-2] if len(df) >= 2 else None
-                ma_short = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
-                ma_long = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
-                stoch_k = float(latest["stoch_k"]) if pd.notna(latest["stoch_k"]) else 50
-                stoch_d = float(latest["stoch_d"]) if pd.notna(latest["stoch_d"]) else 50
-                rsi = float(latest["rsi"]) if pd.notna(latest.get("rsi", None)) else None
-                prev_stoch_k = (
-                    float(prev["stoch_k"])
-                    if prev is not None and pd.notna(prev["stoch_k"])
-                    else None
-                )
-                close = float(latest["close"])
-
-                # 장·단기 MA가 유한 양수가 아니면(캔들 부족 NaN→0, 비정상 inf 등) 골든크로스 오판 방지: 스킵
-                if not (
-                    ma_short > 0
-                    and ma_long > 0
-                    and math.isfinite(ma_short)
-                    and math.isfinite(ma_long)
-                ):
-                    continue
-
-                # 골든크로스 상태 판정
-                is_gc_active = ma_short > ma_long
-
-                # [regime] 하락레짐이면 GC(추세추종) 진입 차단 (scan_golden_cross_candidates와 일관)
-                if settings.gc_regime_filter_enabled and not market_regime_up and is_gc_active:
-                    continue
-
-                # [#A] Golden Cross + RSI <= 임계 (config 토글, scan_golden_cross_candidates와 일관)
-                if (
-                    is_gc_active
-                    and settings.gc_require_rsi_oversold
-                    and (rsi is None or rsi > settings.gc_rsi_threshold)
-                ):
-                    continue
-
-                # gc_only 필터
-                if gc_only and not is_gc_active:
-                    continue
-
-                # MA 갭 비율 계산
-                ma_gap_ratio = ((ma_short - ma_long) / ma_long * 100) if ma_long > 0 else 0
-
-                # 상태 결정 (stoch_d, ma_gap_ratio 전달)
-                gc_state = self._determine_gc_state(
-                    is_gc_active=is_gc_active,
-                    stoch_k=stoch_k,
                     stoch_threshold=stoch_threshold,
-                    stoch_d=stoch_d,
-                    ma_gap_ratio=ma_gap_ratio,
-                    prev_stoch_k=prev_stoch_k,
-                    recent_oversold=self._has_recent_oversold(df, stoch_threshold),
+                    gc_only=gc_only,
+                    market_regime_up=market_regime_up,
+                    market_fear_window_open=False,
+                    enable_fear_buy=False,
                 )
-
-                # 결과 추가
-                results.append(
-                    GoldenCrossScanItemDTO(
-                        symbol=symbol,
-                        name=name,
-                        market=market,
-                        current_price=Decimal(str(close)),
-                        sector_name=sector_name,
-                        industry_code=industry_code,
-                        industry_name=industry_name,
-                        ma_short=Decimal(str(round(ma_short, 2))),
-                        ma_long=Decimal(str(round(ma_long, 2))),
-                        ma_gap_ratio=round(ma_gap_ratio, 2),
-                        stoch_k=round(stoch_k, 2),
-                        stoch_d=round(stoch_d, 2),
-                        is_gc_active=is_gc_active,
-                        gc_state=gc_state,
-                        market_cap=None,
-                        screening_score=None,
-                    )
-                )
-
-                # Rate limit 대응
-                await asyncio.sleep(0.05)
+                if dto is not None:
+                    results.append(dto)
+                    # Rate limit 대응
+                    await asyncio.sleep(0.05)
 
             except ValueError as e:
                 logger.debug(f"[GC Scan] {symbol}: {e}")
@@ -721,7 +778,9 @@ class BuyStrategyService:
                 errors.append(error_msg)
 
         # industry_code → industry_name 매핑 (DB 스캔 경로와 동일)
-        industry_codes = {r.industry_code for r in results if r.industry_code and not r.industry_name}
+        industry_codes = {
+            r.industry_code for r in results if r.industry_code and not r.industry_name
+        }
         if industry_codes:
             try:
                 stmt = select(NaverIndustryCodeModel).where(
@@ -736,15 +795,7 @@ class BuyStrategyService:
                 logger.warning(f"[GC Scan symbols] Failed to attach industry names: {e}")
 
         # 결과 정렬 (BUY_INTEREST 추가)
-        state_order = {
-            "OPTIMAL_BUY": 0,
-            "BUY_INTEREST": 1,
-            "READY_TO_BUY": 2,
-            "WAITING_FOR_PULLBACK": 3,
-            "GC_ACTIVE": 4,
-            "NOT_GC": 5,
-        }
-        results.sort(key=lambda x: state_order.get(x.gc_state, 99))
+        results.sort(key=lambda x: GC_SCAN_STATE_ORDER.get(x.gc_state, 99))
 
         # 통계 계산
         gc_active_count = sum(1 for r in results if r.is_gc_active)
@@ -964,17 +1015,9 @@ class BuyStrategyService:
 
         # 결과 재정렬 (재무 필터 PASS > TURNAROUND > FAIL > PENDING)
         def sort_key(stock: GoldenCrossScanItemDTO) -> tuple:
-            state_order = {
-                "OPTIMAL_BUY": 0,
-                "BUY_INTEREST": 1,
-                "READY_TO_BUY": 2,
-                "WAITING_FOR_PULLBACK": 3,
-                "GC_ACTIVE": 4,
-                "NOT_GC": 5,
-            }
             fin_order = {"PASS": 0, "TURNAROUND": 1, "FAIL": 2, "ERROR": 3, "PENDING": 4, None: 5}
             return (
-                state_order.get(stock.gc_state, 99),
+                GC_SCAN_STATE_ORDER.get(stock.gc_state, 99),
                 fin_order.get(stock.financial_filter_status, 99),
                 -float(stock.screening_score or 0),
             )
@@ -1066,176 +1109,62 @@ class BuyStrategyService:
 
         # 2. 종목별 기술적 지표 계산
 
-        cache_stats = {
-            "cache_hits": 0,
-            "incremental_updates": 0,
-            "full_loads": 0,
-            "total_api_calls": 0,
-            "new_candles": 0,
-        }
-
-        work_queue: asyncio.Queue[tuple[int, object]] = asyncio.Queue()
-        for idx, stock in enumerate(stocks):
-            work_queue.put_nowait((idx, stock))
-
-        def update_cache_stats(target: dict[str, int], load_result: LoadResult) -> None:
+        async def process_stock(worker_loader, worker_session, stock, worker_cache_stats):
+            load_result = await worker_loader.load_ohlcv_with_stats(
+                symbol=stock.symbol,
+                days=500,
+                interval="1d",
+                min_candles=long_period + 20,
+                cache_freshness_days=1,
+                include_today_candle=True,
+                today_refresh_ttl_seconds=600,
+            )
             if load_result.load_type == LoadType.CACHE_HIT:
-                target["cache_hits"] += 1
-            elif load_result.load_type == LoadType.INCREMENTAL:
-                target["incremental_updates"] += 1
+                if worker_session.in_transaction():
+                    await worker_session.rollback()
             else:
-                target["full_loads"] += 1
-            target["total_api_calls"] += load_result.api_calls
-            target["new_candles"] += load_result.new_candles
+                await worker_session.commit()
 
-        async def worker() -> (
-            tuple[list[tuple[int, MA5BreakoutScanItemDTO]], list[tuple[int, str]], dict[str, int]]
-        ):
-            worker_results: list[tuple[int, MA5BreakoutScanItemDTO]] = []
-            worker_errors: list[tuple[int, str]] = []
-            worker_cache_stats = {
-                "cache_hits": 0,
-                "incremental_updates": 0,
-                "full_loads": 0,
-                "total_api_calls": 0,
-                "new_candles": 0,
-            }
+            self._update_cache_stats(worker_cache_stats, load_result)
 
-            # 워커(코루틴) 단위로 세션/로더를 1회 생성하여 재사용
-            async with AsyncSessionLocal() as worker_session:
-                worker_loader = OHLCVDataLoader(worker_session)
+            metrics = self._evaluate_ma5_row(
+                load_result.df, short_period, long_period, envelope_pct
+            )
+            # 유니버스 스캔은 돌파 종목만 반환
+            if metrics is None or not metrics.is_breakout:
+                return None
 
-                while True:
-                    try:
-                        if worker_session.in_transaction():
-                            await worker_session.rollback()
-                        idx, stock = work_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
+            if use_volume_filter and metrics.volume_ma20 > 0:
+                volume_ratio = metrics.volume / metrics.volume_ma20
+                if volume_ratio < MA5_VOLUME_RATIO_THRESHOLD:
+                    return None
+            else:
+                volume_ratio = (
+                    metrics.volume / metrics.volume_ma20 if metrics.volume_ma20 > 0 else 0
+                )
 
-                    try:
-                        load_result = await worker_loader.load_ohlcv_with_stats(
-                            symbol=stock.symbol,
-                            days=500,
-                            interval="1d",
-                            min_candles=long_period + 20,
-                            cache_freshness_days=1,
-                            include_today_candle=True,
-                            today_refresh_ttl_seconds=600,
-                        )
-                        if load_result.load_type == LoadType.CACHE_HIT:
-                            if worker_session.in_transaction():
-                                await worker_session.rollback()
-                        else:
-                            await worker_session.commit()
-                        df = load_result.df
+            dto = MA5BreakoutScanItemDTO(
+                symbol=stock.symbol,
+                name=stock.name,
+                market=stock.market,
+                current_price=Decimal(str(metrics.close)),
+                ma5=Decimal(str(round(metrics.ma5, 2))),
+                ma300=Decimal(str(round(metrics.ma300, 2))),
+                upper_band=Decimal(str(round(metrics.upper_band, 2))),
+                ma5_state="BREAKOUT",
+                gap_ratio=round(metrics.gap_ratio, 2),
+                envelope_pct=envelope_pct,
+                volume_ratio=round(volume_ratio, 2),
+                market_cap=stock.market_cap,
+                screening_score=stock.screening_score,
+            )
+            await asyncio.sleep(0.05)
+            return dto
 
-                        update_cache_stats(worker_cache_stats, load_result)
-
-                        if len(df) < long_period:
-                            continue
-
-                        df["ma_short"] = df["close"].rolling(window=short_period).mean()
-                        df["ma_long"] = df["close"].rolling(window=long_period).mean()
-                        df["volume_ma20"] = df["volume"].rolling(window=20).mean()
-
-                        latest = df.iloc[-1]
-                        prev = df.iloc[-2] if len(df) > 1 else latest
-
-                        ma5 = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
-                        ma300 = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
-                        close = float(latest["close"])
-                        volume = float(latest["volume"]) if pd.notna(latest["volume"]) else 0
-                        volume_ma20 = (
-                            float(latest["volume_ma20"]) if pd.notna(latest["volume_ma20"]) else 1
-                        )
-
-                        prev_ma5 = float(prev["ma_short"]) if pd.notna(prev["ma_short"]) else 0
-
-                        if ma300 <= 0:
-                            continue
-
-                        upper_band = ma300 * (1 + envelope_pct / 100)
-
-                        ma5_above_upper = ma5 > upper_band
-                        prev_ma5_above_upper = prev_ma5 > (ma300 * (1 + envelope_pct / 100))
-                        price_above_upper = close > upper_band
-
-                        is_breakout = (
-                            ma5_above_upper and not prev_ma5_above_upper and price_above_upper
-                        )
-
-                        if not is_breakout:
-                            continue
-
-                        ma5_state = "BREAKOUT"  # 유니버스 스캔은 돌파 종목만 반환
-                        gap_ratio = ((ma5 - upper_band) / upper_band * 100) if upper_band > 0 else 0
-
-                        if use_volume_filter and volume_ma20 > 0:
-                            volume_ratio = volume / volume_ma20
-                            if volume_ratio < MA5_VOLUME_RATIO_THRESHOLD:
-                                continue
-                        else:
-                            volume_ratio = volume / volume_ma20 if volume_ma20 > 0 else 0
-
-                        worker_results.append(
-                            (
-                                idx,
-                                MA5BreakoutScanItemDTO(
-                                    symbol=stock.symbol,
-                                    name=stock.name,
-                                    market=stock.market,
-                                    current_price=Decimal(str(close)),
-                                    ma5=Decimal(str(round(ma5, 2))),
-                                    ma300=Decimal(str(round(ma300, 2))),
-                                    upper_band=Decimal(str(round(upper_band, 2))),
-                                    ma5_state=ma5_state,
-                                    gap_ratio=round(gap_ratio, 2),
-                                    envelope_pct=envelope_pct,
-                                    volume_ratio=round(volume_ratio, 2),
-                                    market_cap=stock.market_cap,
-                                    screening_score=stock.screening_score,
-                                ),
-                            )
-                        )
-
-                        await asyncio.sleep(0.05)
-
-                    except ValueError as e:
-                        error_msg = f"{stock.symbol}: {str(e)}"
-                        logger.warning(f"[MA5 Scan] {error_msg}")
-                        worker_errors.append((idx, error_msg))
-                        if worker_session.in_transaction():
-                            await worker_session.rollback()
-                    except Exception as e:
-                        error_msg = f"{stock.symbol}: {str(e)}"
-                        logger.warning(f"[MA5 Scan] Error processing {error_msg}")
-                        worker_errors.append((idx, error_msg))
-                        if worker_session.in_transaction():
-                            await worker_session.rollback()
-                    finally:
-                        work_queue.task_done()
-
-            return worker_results, worker_errors, worker_cache_stats
-
-        workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
-        completed = await asyncio.gather(*workers, return_exceptions=True)
-
-        error_map: dict[int, str] = {}
-        for item in completed:
-            if isinstance(item, BaseException):
-                errors.append(str(item))
-                continue
-            worker_results, worker_errors, worker_cache_stats = item
-            results.extend([result for _, result in worker_results])
-            for idx, error_msg in worker_errors:
-                error_map[idx] = error_msg
-            for key in cache_stats:
-                cache_stats[key] += worker_cache_stats.get(key, 0)
-
-        if error_map:
-            for idx in sorted(error_map):
-                errors.append(error_map[idx])
+        results, worker_errors, cache_stats = await self._run_scan_workers(
+            stocks, concurrency, process_stock, "[MA5 Scan]"
+        )
+        errors.extend(worker_errors)
 
         # 3. 결과 정렬 (BREAKOUT > ABOVE > BELOW)
         state_order = {"BREAKOUT": 0, "ABOVE": 1, "BELOW": 2}
@@ -1352,61 +1281,37 @@ class BuyStrategyService:
                     min_candles=long_period + 20,
                 )
 
-                if len(df) < long_period:
+                # 공통 돌파 계산은 candidates 경로와 공유(_evaluate_ma5_row).
+                metrics = self._evaluate_ma5_row(df, short_period, long_period, envelope_pct)
+                if metrics is None:
                     continue
 
-                # MA 계산
-                df["ma_short"] = df["close"].rolling(window=short_period).mean()
-                df["ma_long"] = df["close"].rolling(window=long_period).mean()
-                df["volume_ma20"] = df["volume"].rolling(window=20).mean()
-
-                latest = df.iloc[-1]
-                prev = df.iloc[-2] if len(df) > 1 else latest
-
-                ma5 = float(latest["ma_short"]) if pd.notna(latest["ma_short"]) else 0
-                ma300 = float(latest["ma_long"]) if pd.notna(latest["ma_long"]) else 0
-                close = float(latest["close"])
-                volume = float(latest["volume"]) if pd.notna(latest["volume"]) else 0
-                volume_ma20 = float(latest["volume_ma20"]) if pd.notna(latest["volume_ma20"]) else 1
-
-                prev_ma5 = float(prev["ma_short"]) if pd.notna(prev["ma_short"]) else 0
-
-                if ma300 <= 0:
-                    continue
-
-                upper_band = ma300 * (1 + envelope_pct / 100)
-
-                ma5_above_upper = ma5 > upper_band
-                prev_ma5_above_upper = prev_ma5 > (ma300 * (1 + envelope_pct / 100))
-                price_above_upper = close > upper_band
-
-                is_breakout = ma5_above_upper and not prev_ma5_above_upper and price_above_upper
-
-                volume_ratio = volume / volume_ma20 if volume_ma20 > 0 else 1.0
-
+                # symbols 경로: 거래량 필터는 돌파를 취소(다운그레이드)하며, ABOVE/BELOW도 반환.
+                is_breakout = metrics.is_breakout
+                volume_ratio = (
+                    metrics.volume / metrics.volume_ma20 if metrics.volume_ma20 > 0 else 1.0
+                )
                 if use_volume_filter and is_breakout and volume_ratio < MA5_VOLUME_RATIO_THRESHOLD:
                     is_breakout = False
 
                 if is_breakout:
                     ma5_state = "BREAKOUT"
-                elif ma5_above_upper:
+                elif metrics.ma5_above_upper:
                     ma5_state = "ABOVE"
                 else:
                     ma5_state = "BELOW"
-
-                gap_ratio = ((ma5 - upper_band) / upper_band * 100) if upper_band > 0 else 0
 
                 results.append(
                     MA5BreakoutScanItemDTO(
                         symbol=symbol,
                         name=name,
                         market=market,
-                        current_price=close,
-                        ma5=round(ma5, 2),
-                        ma300=round(ma300, 2),
-                        upper_band=round(upper_band, 2),
+                        current_price=metrics.close,
+                        ma5=round(metrics.ma5, 2),
+                        ma300=round(metrics.ma300, 2),
+                        upper_band=round(metrics.upper_band, 2),
                         ma5_state=ma5_state,
-                        gap_ratio=round(gap_ratio, 2),
+                        gap_ratio=round(metrics.gap_ratio, 2),
                         volume_ratio=round(volume_ratio, 2),
                     )
                 )

@@ -22,8 +22,7 @@ src/
   - DB 연결 점검(`SELECT 1`)
   - Redis 연결 점검(`ping`)
   - `settings.auto_reauth`가 true면 KIS 토큰 발급 및 자동갱신 태스크 시작
-  - 전략 엔진/스케줄러/알림/캐시 스케줄러 시작
-    - `domain.strategy.engine`
+  - 전략 스케줄러/알림/캐시 스케줄러 시작
     - `domain.strategy.scheduler` (Golden Cross)
     - `domain.strategy.notification_scheduler` (Telegram)
     - `domain.ohlcv.scheduler` (OHLCV cache)

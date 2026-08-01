@@ -86,17 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         print(f"⚠️  KIS API token issue failed (will retry on first request): {e}")
 
-    # 4. 전략 실행 엔진 시작 (레거시 볼린저 밴드)
-    strategy_engine = None
-    try:
-        from src.application.domain.strategy.engine import get_strategy_engine
-
-        strategy_engine = get_strategy_engine()
-        await strategy_engine.start()
-    except Exception as e:
-        print(f"⚠️  Strategy engine start failed: {e}")
-
-    # 5. 골든크로스 전략 스케줄러 시작
+    # 4. 골든크로스 전략 스케줄러 시작
     gc_scheduler = None
     try:
         from src.application.domain.strategy.scheduler import get_strategy_scheduler
@@ -107,7 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         print(f"⚠️  Golden Cross scheduler start failed: {e}")
 
-    # 6. Telegram 알림 스케줄러 시작
+    # 5. Telegram 알림 스케줄러 시작
     notification_scheduler = None
     try:
         from src.application.domain.strategy.notification_scheduler import (
@@ -126,7 +116,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         print(f"⚠️  Notification scheduler start failed: {e}")
 
-    # 7. OHLCV 캐시 스케줄러 시작
+    # 6. OHLCV 캐시 스케줄러 시작
     ohlcv_scheduler = None
     try:
         from src.application.domain.ohlcv.scheduler import get_ohlcv_scheduler
@@ -169,12 +159,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         print("✅ Golden Cross scheduler stopped")
     except Exception as e:
         print(f"⚠️  Golden Cross scheduler stop error: {e}")
-
-    try:
-        if strategy_engine:
-            await strategy_engine.stop()
-    except Exception as e:
-        print(f"⚠️  Strategy engine stop error: {e}")
 
     try:
         if token_refresh_task:
@@ -330,7 +314,6 @@ from src.application.interface.api.auth_router import router as auth_router
 from src.application.interface.api.backtest_router import router as backtest_router
 from src.application.interface.api.market_data_router import router as market_data_router
 from src.application.interface.api.ops_router import router as ops_router
-
 from src.application.interface.api.order_router import router as order_router
 from src.application.interface.api.recommendation_router import router as recommendation_router
 from src.application.interface.api.screener_router import router as screener_router

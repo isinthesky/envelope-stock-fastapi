@@ -7,6 +7,7 @@ from src.application.domain.strategy.sell_rule_research_service import (
     PreRegisteredSellRuleCandidate,
     SellRulePreRegistrationConfig,
 )
+from src.settings.sell_score_settings import DEFAULT_PEAK_RULE_THRESHOLDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,7 @@ def build_preregistered_sell_rule_config(
         raise SellRulePreRegistrationConfigError(
             f"symbols must contain at most {symbol_limit} items",
         )
+    peak = DEFAULT_PEAK_RULE_THRESHOLDS
     candidates = (
         PreRegisteredSellRuleCandidate.model_validate(
             {
@@ -70,19 +72,31 @@ def build_preregistered_sell_rule_config(
                 "description": "personal flow plus credit heat near 52-week high",
                 "rule_type": "all_thresholds",
                 "thresholds": [
-                    {"field": "personal_buy_days_5d", "operator": "gte", "value": 4.0},
+                    {
+                        "field": "personal_buy_days_5d",
+                        "operator": "gte",
+                        "value": float(peak.personal_strong_days),
+                    },
                     {
                         "field": "personal_buy_ratio_5d_to_volume",
                         "operator": "gte",
-                        "value": 0.15,
+                        "value": peak.personal_strong_ratio,
                     },
-                    {"field": "market_credit_change_ratio", "operator": "gte", "value": 0.008},
+                    {
+                        "field": "market_credit_change_ratio",
+                        "operator": "gte",
+                        "value": peak.credit_hot_change,
+                    },
                     {
                         "field": "market_credit_recent_high_ratio",
                         "operator": "gte",
-                        "value": 0.99,
+                        "value": peak.credit_hot_recent_high,
                     },
-                    {"field": "high_52week_ratio", "operator": "gte", "value": 0.98},
+                    {
+                        "field": "high_52week_ratio",
+                        "operator": "gte",
+                        "value": peak.near_high_ratio,
+                    },
                 ],
                 "evaluation_window": window,
             }

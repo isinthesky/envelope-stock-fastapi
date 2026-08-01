@@ -18,11 +18,69 @@ from src.adapters.database.repositories.strategy_repository import StrategyRepos
 from src.adapters.external.kis_api.client import get_kis_client
 from src.application.domain.market_data.service import MarketDataService
 from src.application.domain.strategy.golden_cross_engine import GoldenCrossEngine
+from src.settings.config import settings
 
 logger = logging.getLogger(__name__)
 
 # 한국 시간대
 KST = ZoneInfo("Asia/Seoul")
+
+# AsyncIOScheduler 기본 job 설정 (StrategyScheduler / NotificationScheduler 공용)
+# 이벤트 루프 지연으로 초 단위 지각 시에도 잡을 건너뛰지 않도록
+# 기본 misfire_grace_time(1초)을 5분(300초)으로 완화한다.
+SCHEDULER_JOB_DEFAULTS: dict[str, object] = {
+    "coalesce": True,
+    "misfire_grace_time": 300,
+}
+
+
+def create_async_scheduler():
+    """KST/coalesce/misfire=300 공용 설정의 AsyncIOScheduler 팩토리.
+
+    apscheduler는 선택적 의존성이므로 import는 호출 시점에 수행한다.
+    """
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    return AsyncIOScheduler(timezone=KST, job_defaults=dict(SCHEDULER_JOB_DEFAULTS))
+
+
+def register_cron_job(
+    scheduler,
+    func,
+    *,
+    hour: int,
+    minute: int,
+    job_id: str,
+    name: str,
+    kwargs: dict | None = None,
+    misfire_grace_time: int | None = None,
+    day_of_week: str = "mon-fri",
+):
+    """mon-fri CronTrigger 잡 등록 공용 헬퍼.
+
+    misfire_grace_time을 명시하지 않으면 job_defaults(300초)를 사용하도록
+    add_job 인자에서 생략한다(None을 넘기면 '무한 유예'가 되어 동작이 달라짐).
+    """
+    from apscheduler.triggers.cron import CronTrigger
+
+    add_job_kwargs: dict = {}
+    if misfire_grace_time is not None:
+        add_job_kwargs["misfire_grace_time"] = misfire_grace_time
+
+    return scheduler.add_job(
+        func,
+        CronTrigger(
+            day_of_week=day_of_week,
+            hour=hour,
+            minute=minute,
+            timezone=KST,
+        ),
+        kwargs=kwargs,
+        id=job_id,
+        name=name,
+        replace_existing=True,
+        **add_job_kwargs,
+    )
 
 
 class StrategyScheduler:
@@ -49,49 +107,31 @@ class StrategyScheduler:
             return
 
         try:
-            from apscheduler.schedulers.asyncio import AsyncIOScheduler
-            from apscheduler.triggers.cron import CronTrigger
-
-            self.scheduler = AsyncIOScheduler(
-                timezone=KST,
-                job_defaults={
-                    # 이벤트 루프 지연으로 초 단위 지각 시에도 잡을 건너뛰지 않도록
-                    "coalesce": True,
-                    "misfire_grace_time": 300,
-                },
-            )
+            self.scheduler = create_async_scheduler()
 
             # 장 마감 후 전략 실행 (월~금 15:35)
-            self.scheduler.add_job(
+            # 실주문(dry_run=False) 경로: 기본 misfire_grace_time=300(5분)을 쓰면
+            # 5분 지각 주문까지 실행될 수 있음. 관측된 이벤트 루프 지연은 ~2초라
+            # 90초면 충분히 흡수하면서 지각 실주문을 차단한다.
+            register_cron_job(
+                self.scheduler,
                 self._execute_strategies_job,
-                CronTrigger(
-                    day_of_week="mon-fri",
-                    hour=15,
-                    minute=35,
-                    timezone=KST,
-                ),
-                id="daily_strategy_execution",
+                hour=settings.strategy_execution_hour,
+                minute=settings.strategy_execution_minute,
+                job_id="daily_strategy_execution",
                 name="Daily Strategy Execution",
-                replace_existing=True,
-                # 실주문(dry_run=False) 경로: 기본 misfire_grace_time=300(5분)을 쓰면
-                # 5분 지각 주문까지 실행될 수 있음. 관측된 이벤트 루프 지연은 ~2초라
-                # 90초면 충분히 흡수하면서 지각 실주문을 차단한다.
-                misfire_grace_time=90,
+                misfire_grace_time=settings.strategy_execution_misfire_grace_seconds,
             )
 
             # 유니버스 갱신 (B-1: 기존 유니버스 데이터 갱신 + 스크리닝 재적용)
             # 월~금 08:00 (장 시작 전)
-            self.scheduler.add_job(
+            register_cron_job(
+                self.scheduler,
                 self._refresh_universe_job,
-                CronTrigger(
-                    day_of_week="mon-fri",
-                    hour=8,
-                    minute=0,
-                    timezone=KST,
-                ),
-                id="daily_universe_refresh",
+                hour=settings.universe_refresh_hour,
+                minute=settings.universe_refresh_minute,
+                job_id="daily_universe_refresh",
                 name="Daily Universe Refresh",
-                replace_existing=True,
             )
 
             self.scheduler.start()
@@ -99,10 +139,7 @@ class StrategyScheduler:
             logger.info("[Scheduler] Strategy scheduler started")
 
         except ImportError:
-            logger.warning(
-                "[Scheduler] APScheduler not installed. "
-                "Run: uv add apscheduler"
-            )
+            logger.warning("[Scheduler] APScheduler not installed. " "Run: uv add apscheduler")
         except Exception as e:
             logger.error(f"[Scheduler] Failed to start: {e}")
 
@@ -200,12 +237,11 @@ class StrategyScheduler:
                 "[Scheduler] Universe refresh completed: "
                 f"target={result.get('target')}, updated={result.get('updated')}, screened={result.get('screened')}, errors={len(result.get('errors', []))}"
             )
-            if result.get('errors'):
-                for err in result['errors'][:20]:
+            if result.get("errors"):
+                for err in result["errors"][:20]:
                     logger.warning(f"[Scheduler] Universe refresh error: {err}")
         except Exception as e:
             logger.exception(f"[Scheduler] Universe refresh failed: {e}")
-
 
     async def _is_holiday(self) -> bool:
         """휴장일 체크"""
@@ -308,19 +344,18 @@ class StrategyScheduler:
         jobs = []
         if self.scheduler:
             for job in self.scheduler.get_jobs():
-                jobs.append({
-                    "id": job.id,
-                    "name": job.name,
-                    "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
-                })
+                jobs.append(
+                    {
+                        "id": job.id,
+                        "name": job.name,
+                        "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+                    }
+                )
 
         return {
             "is_running": self.is_running,
             "jobs": jobs,
-            "last_executions": {
-                str(k): v.isoformat()
-                for k, v in self._last_execution.items()
-            },
+            "last_executions": {str(k): v.isoformat() for k, v in self._last_execution.items()},
         }
 
 

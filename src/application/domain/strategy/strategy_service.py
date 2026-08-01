@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.adapters.database.models.strategy import StrategyStatus
 from src.adapters.database.models.stock_universe import MarketType
+from src.adapters.database.models.strategy import StrategyStatus
 from src.adapters.database.repositories.stock_universe_repository import (
     StockUniverseRepository,
 )
@@ -34,25 +34,23 @@ from src.adapters.database.repositories.strategy_symbol_state_repository import 
 from src.application.common.decorators import transaction
 from src.application.common.exceptions import NotFoundError, StrategyError
 from src.application.domain.strategy.dto import (
+    SELL_PHASE_INFO,
+    SELL_STAGE_INFO,
     AnalysisHistoryCreateDTO,
     AnalysisHistoryDTO,
     AnalysisHistoryListDTO,
     AnalysisHistoryRefreshResultDTO,
     GoldenCrossConfigDTO,
-    PortfolioCashActionDTO,
-    PortfolioCashPlanDTO,
+    GoldenCrossRecommendationDTO,
     GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
-    GoldenCrossRecommendationDTO,
     IndustrySummaryDTO,
+    PortfolioCashActionDTO,
+    PortfolioCashPlanDTO,
     PresetActivateRequestDTO,
-    SELL_PHASE_INFO,
-    SELL_STAGE_INFO,
     SellSignalAnalysisDTO,
     SignalListDTO,
     SignalStatisticsDTO,
-    StrategyPresetDTO,
-    StrategyPresetListDTO,
     StockUniverseItemDTO,
     StockUniverseListDTO,
     StrategyConfigDTO,
@@ -60,10 +58,16 @@ from src.application.domain.strategy.dto import (
     StrategyDetailResponseDTO,
     StrategyExecuteResultDTO,
     StrategyListResponseDTO,
+    StrategyPresetDTO,
+    StrategyPresetListDTO,
     StrategySignalDTO,
     StrategyUpdateRequestDTO,
     SymbolStateDTO,
     SymbolStateListDTO,
+)
+from src.application.domain.strategy.strategy_contract import (
+    GOLDEN_CROSS_SCAN_STATE_ORDER,
+    GoldenCrossScanState,
 )
 from src.application.domain.strategy.symbol_validation import split_valid_symbol_pairs
 from src.settings.config import settings
@@ -249,10 +253,7 @@ class StrategyService:
         Returns:
             StrategyDetailResponseDTO: 전략 상세 정보
         """
-        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
-
-        if not strategy:
-            raise StrategyError(f"Strategy not found: {strategy_id}")
+        strategy = await self._get_or_raise(strategy_id, session)
 
         return self._to_detail_dto(strategy)
 
@@ -318,10 +319,7 @@ class StrategyService:
         Returns:
             StrategyDetailResponseDTO: 수정된 전략 정보
         """
-        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
-
-        if not strategy:
-            raise StrategyError(f"Strategy not found: {strategy_id}")
+        strategy = await self._get_or_raise(strategy_id, session)
 
         # 수정할 필드 준비
         update_data = {}
@@ -369,10 +367,7 @@ class StrategyService:
             session: Database Session (@transaction이 주입)
             strategy_id: 전략 ID
         """
-        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
-
-        if not strategy:
-            raise StrategyError(f"Strategy not found: {strategy_id}")
+        strategy = await self._get_or_raise(strategy_id, session)
 
         # 활성 상태 전략은 삭제 불가
         if strategy.is_active:
@@ -387,33 +382,40 @@ class StrategyService:
         self, session: AsyncSession, strategy_id: int
     ) -> StrategyDetailResponseDTO:
         """전략 시작 (활성화)"""
-        await self.strategy_repo.activate_strategy(strategy_id, session=session)
-
-        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
-        if not strategy:
-            raise StrategyError("Failed to retrieve strategy")
-
-        return self._to_detail_dto(strategy)
+        return await self._transition_status(
+            strategy_id, self.strategy_repo.activate_strategy, session
+        )
 
     @transaction
     async def pause_strategy(
         self, session: AsyncSession, strategy_id: int
     ) -> StrategyDetailResponseDTO:
         """전략 일시정지"""
-        await self.strategy_repo.pause_strategy(strategy_id, session=session)
-
-        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
-        if not strategy:
-            raise StrategyError("Failed to retrieve strategy")
-
-        return self._to_detail_dto(strategy)
+        return await self._transition_status(
+            strategy_id, self.strategy_repo.pause_strategy, session
+        )
 
     @transaction
     async def stop_strategy(
         self, session: AsyncSession, strategy_id: int
     ) -> StrategyDetailResponseDTO:
         """전략 중지"""
-        await self.strategy_repo.stop_strategy(strategy_id, session=session)
+        return await self._transition_status(strategy_id, self.strategy_repo.stop_strategy, session)
+
+    # ==================== Helper Methods ====================
+
+    async def _get_or_raise(self, strategy_id: int, session: AsyncSession):
+        """전략 조회 후 없으면 StrategyError(not found) 발생"""
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
+        if not strategy:
+            raise StrategyError(f"Strategy not found: {strategy_id}")
+        return strategy
+
+    async def _transition_status(
+        self, strategy_id: int, repo_fn, session: AsyncSession
+    ) -> StrategyDetailResponseDTO:
+        """전략 상태 전이(activate/pause/stop) 공통 처리"""
+        await repo_fn(strategy_id, session=session)
 
         strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
         if not strategy:
@@ -421,27 +423,43 @@ class StrategyService:
 
         return self._to_detail_dto(strategy)
 
-    # ==================== Helper Methods ====================
+    def _symbol_state_repo(self, session: AsyncSession) -> StrategySymbolStateRepository:
+        """StrategySymbolStateRepository 지연 획득(세션 바인딩)"""
+        return StrategySymbolStateRepository(session)
+
+    def _signal_repo(self, session: AsyncSession) -> StrategySignalRepository:
+        """StrategySignalRepository 지연 획득(세션 바인딩)"""
+        return StrategySignalRepository(session)
+
+    def _universe_repo(self, session: AsyncSession) -> StockUniverseRepository:
+        """StockUniverseRepository 지연 획득(세션 바인딩)"""
+        return StockUniverseRepository(session)
+
+    @staticmethod
+    def _build_config_dto(config_dict: dict, dto_class):
+        """config dict → DTO 변환 (실패 시 기본값)"""
+        try:
+            return dto_class(**config_dict)
+        except Exception:
+            return dto_class()
+
+    def _parse_strategy_config(
+        self, strategy
+    ) -> "tuple[StrategyConfigDTO | None, GoldenCrossConfigDTO | None]":
+        """Strategy config_json을 전략 유형에 맞는 DTO로 파싱
+
+        Returns:
+            (config, golden_cross_config) 튜플. 전략 유형에 해당하지 않는 쪽은 None.
+        """
+        config_dict = json.loads(strategy.config_json)
+        if strategy.strategy_type == "golden_cross":
+            return None, self._build_config_dto(config_dict, GoldenCrossConfigDTO)
+        return self._build_config_dto(config_dict, StrategyConfigDTO), None
 
     def _to_detail_dto(self, strategy) -> StrategyDetailResponseDTO:
         """Strategy Model을 DetailResponseDTO로 변환"""
-        config_dict = json.loads(strategy.config_json)
-
-        # 전략 유형에 따라 적절한 config 파싱
-        config = None
-        golden_cross_config = None
-
-        if strategy.strategy_type == "golden_cross":
-            try:
-                golden_cross_config = GoldenCrossConfigDTO(**config_dict)
-            except Exception:
-                # 파싱 실패 시 기본값 사용
-                golden_cross_config = GoldenCrossConfigDTO()
-        else:
-            try:
-                config = StrategyConfigDTO(**config_dict)
-            except Exception:
-                config = StrategyConfigDTO()
+        # 전략 유형에 따라 적절한 config 파싱 (파싱 실패 시 기본값)
+        config, golden_cross_config = self._parse_strategy_config(strategy)
 
         return StrategyDetailResponseDTO(
             id=strategy.id,
@@ -471,14 +489,11 @@ class StrategyService:
         self, session: AsyncSession, strategy_id: int
     ) -> GoldenCrossConfigDTO:
         """골든크로스 전략 설정 조회"""
-        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
-
-        if not strategy:
-            raise StrategyError(f"Strategy not found: {strategy_id}")
+        strategy = await self._get_or_raise(strategy_id, session)
 
         try:
             config_dict = json.loads(strategy.config_json)
-            return GoldenCrossConfigDTO(**config_dict)
+            return self._build_config_dto(config_dict, GoldenCrossConfigDTO)
         except Exception:
             return GoldenCrossConfigDTO()
 
@@ -490,10 +505,7 @@ class StrategyService:
         config: GoldenCrossConfigDTO,
     ) -> GoldenCrossConfigDTO:
         """골든크로스 전략 설정 수정"""
-        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
-
-        if not strategy:
-            raise StrategyError(f"Strategy not found: {strategy_id}")
+        strategy = await self._get_or_raise(strategy_id, session)
 
         config_json = config.model_dump_json()
         await self.strategy_repo.update_by_id(strategy_id, session=session, config_json=config_json)
@@ -505,7 +517,7 @@ class StrategyService:
         self, session: AsyncSession, strategy_id: int
     ) -> SymbolStateListDTO:
         """종목별 상태 조회"""
-        state_repo = StrategySymbolStateRepository(session)
+        state_repo = self._symbol_state_repo(session)
         states = await state_repo.get_all_by_strategy(strategy_id)
         state_counts = await state_repo.count_by_state(strategy_id)
 
@@ -544,7 +556,7 @@ class StrategyService:
         self, session: AsyncSession, strategy_id: int, limit: int = 50, offset: int = 0
     ) -> SignalListDTO:
         """시그널 이력 조회"""
-        signal_repo = StrategySignalRepository(session)
+        signal_repo = self._signal_repo(session)
         signals = await signal_repo.get_by_strategy(strategy_id, limit, offset)
 
         signal_dtos = [
@@ -585,7 +597,7 @@ class StrategyService:
         self, session: AsyncSession, strategy_id: int, days: int = 30
     ) -> SignalStatisticsDTO:
         """시그널 통계 조회"""
-        signal_repo = StrategySignalRepository(session)
+        signal_repo = self._signal_repo(session)
         stats = await signal_repo.get_statistics(strategy_id, days)
 
         return SignalStatisticsDTO(**stats)
@@ -615,7 +627,7 @@ class StrategyService:
         limit: int = 1000,
     ) -> StockUniverseListDTO:
         """종목 유니버스 조회"""
-        universe_repo = StockUniverseRepository(session)
+        universe_repo = self._universe_repo(session)
 
         market_type = MarketType(market) if market else None
 
@@ -681,6 +693,7 @@ class StrategyService:
         # (B-2) 유니버스가 500 미만이면, KRX KIND 상장 목록에서 종목을 채워 넣어 500개까지 확장
         # - 최소 필드(symbol/name/market)만 채우고, 이후 아래 갱신 로직에서 시총/거래량/스크리닝을 업데이트
         from sqlalchemy import func, select
+
         from src.adapters.database.models.stock_universe import StockUniverseModel
 
         target_universe_size = 500
@@ -702,9 +715,7 @@ class StrategyService:
             import logging as _logging
 
             _etf_logger = _logging.getLogger(__name__)
-            etf_symbols = [
-                s.strip() for s in settings.etf_universe_symbols if s and s.strip()
-            ]
+            etf_symbols = [s.strip() for s in settings.etf_universe_symbols if s and s.strip()]
             # ETF 실제명(예: "KODEX 200")은 네이버 통합 API의 stockName에서만 얻는다.
             # (KIS 현재가는 ETF에 일반명 "ETF(실물복제/수익증권)"만 반환)
             naver_client_seed = get_naver_stock_client()
@@ -761,9 +772,7 @@ class StrategyService:
                     timeout=name_phase_timeout,
                 )
             except asyncio.TimeoutError:
-                resolved = [
-                    ((existing_names.get(s) or s), False) for s in etf_symbols
-                ]
+                resolved = [((existing_names.get(s) or s), False) for s in etf_symbols]
                 _etf_logger.warning(
                     "[universe.refresh] ETF name-fetch phase timed out "
                     f"(>{name_phase_timeout}s); fell back to existing/symbol names"
@@ -888,7 +897,8 @@ class StrategyService:
         market_data_service = MarketDataService(kis_client, redis_client)
         naver_client = get_naver_stock_client()
 
-        import logging, time
+        import logging
+        import time
 
         logger = logging.getLogger(__name__)
         started_at = time.monotonic()
@@ -1297,15 +1307,7 @@ class StrategyService:
 
     @staticmethod
     def _validate_recommendation_target_states(target_states: list[str]) -> list[str]:
-        allowed_states = {
-            "OPTIMAL_BUY",
-            "BUY_INTEREST",
-            "READY_TO_BUY",
-            "WAITING_FOR_PULLBACK",
-            "GC_ACTIVE",
-            "NOT_GC",
-            "FEAR_BUY",
-        }
+        allowed_states = {state.value for state in GoldenCrossScanState}
         invalid = sorted(set(target_states) - allowed_states)
         if invalid:
             raise StrategyError(
@@ -1316,15 +1318,14 @@ class StrategyService:
 
     @staticmethod
     def _recommendation_state_rank(gc_state: str) -> int:
-        return {
-            "OPTIMAL_BUY": 0,
-            "FEAR_BUY": 1,
-            "BUY_INTEREST": 2,
-            "READY_TO_BUY": 3,
-            "WAITING_FOR_PULLBACK": 4,
-            "GC_ACTIVE": 5,
-            "NOT_GC": 6,
-        }.get(gc_state, 99)
+        # canonical scan-state 우선순위를 그대로 사용하되, FEAR_BUY를
+        # OPTIMAL_BUY 바로 다음(랭크 1)에 삽입해 기존 순위를 보존한다.
+        rank_order = (
+            GoldenCrossScanState.OPTIMAL_BUY,
+            GoldenCrossScanState.FEAR_BUY,
+            *GOLDEN_CROSS_SCAN_STATE_ORDER[1:],
+        )
+        return {state: rank for rank, state in enumerate(rank_order)}.get(gc_state, 99)
 
     @staticmethod
     def _passes_recommendation_financial_filter(
@@ -1382,11 +1383,11 @@ class StrategyService:
         score = 0.0
 
         state_score = {
-            "OPTIMAL_BUY": 55.0,
-            "BUY_INTEREST": 42.0,
-            "READY_TO_BUY": 32.0,
-            "WAITING_FOR_PULLBACK": 16.0,
-            "GC_ACTIVE": 8.0,
+            GoldenCrossScanState.OPTIMAL_BUY: 55.0,
+            GoldenCrossScanState.BUY_INTEREST: 42.0,
+            GoldenCrossScanState.READY_TO_BUY: 32.0,
+            GoldenCrossScanState.WAITING_FOR_PULLBACK: 16.0,
+            GoldenCrossScanState.GC_ACTIVE: 8.0,
         }.get(stock.gc_state, 0.0)
         score += state_score
         if state_score:
@@ -1829,7 +1830,7 @@ class StrategyService:
         from src.application.domain.strategy.sell_strategy_service import SellStrategyService
 
         sell_service = SellStrategyService(session)
-        universe_repo = StockUniverseRepository(session)
+        universe_repo = self._universe_repo(session)
         for model in histories:
             universe_stock = await universe_repo.get_by_symbol(model.symbol, session=session)
             resolved_name = model.name or (universe_stock.name if universe_stock else None)
@@ -1921,7 +1922,7 @@ class StrategyService:
         logger.info(f"[Refresh] Refreshing {len(symbol_pairs)} {analysis_type} items")
 
         # 종목명 조회를 위한 유니버스 레포지토리
-        universe_repo = StockUniverseRepository(session)
+        universe_repo = self._universe_repo(session)
 
         for db_symbol, symbol in symbol_pairs:
             # DB 행 조회/갱신에는 원본(raw) 값, KIS/유니버스 등 외부·정규화 조회에는
@@ -2130,7 +2131,7 @@ class StrategyService:
 
         Router에서 session 없이 Repository 호출이 어려워 Service에서 처리
         """
-        state_repo = StrategySymbolStateRepository(session)
+        state_repo = self._symbol_state_repo(session)
         state = await state_repo.get_by_strategy_and_symbol(strategy_id, symbol, session=session)
         if not state:
             return None
@@ -2152,7 +2153,7 @@ class StrategyService:
 
         DB 유니버스에서 종목명 조회
         """
-        universe_repo = StockUniverseRepository(session)
+        universe_repo = self._universe_repo(session)
         stock = await universe_repo.get_by_symbol(symbol, session=session)
         if stock and stock.name:
             return stock.name

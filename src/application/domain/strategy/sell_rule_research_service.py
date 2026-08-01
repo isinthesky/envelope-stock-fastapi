@@ -24,7 +24,6 @@ from src.adapters.database.models.stock_universe import StockUniverseModel
 from src.adapters.database.repositories.analysis_history_repository import (
     AnalysisHistoryRepository,
 )
-from src.application.domain.strategy.symbol_validation import filter_tradable_items
 from src.adapters.database.repositories.market_credit_snapshot_repository import (
     MarketCreditSnapshotRepository,
 )
@@ -33,6 +32,9 @@ from src.adapters.database.repositories.personal_flow_snapshot_repository import
     PersonalFlowSnapshotRepository,
 )
 from src.application.common.indicators import TechnicalIndicators
+from src.application.domain.strategy.strategy_contract import market_credit_label
+from src.application.domain.strategy.symbol_validation import filter_tradable_items
+from src.settings.sell_score_settings import DEFAULT_PEAK_RULE_THRESHOLDS
 
 DEFAULT_PREREGISTERED_SYMBOL_LIMIT: Final = 50
 
@@ -158,34 +160,38 @@ class SellPeakRuleResearchService:
         is_52week_high: bool,
         high_52week_ratio: float | None,
     ) -> dict[str, Any]:
+        peak = DEFAULT_PEAK_RULE_THRESHOLDS
+        # TODO(refactor): 0.15 vs 0.20 drift — confirm intended value
+        # (peak.personal_strong_ratio=0.15 vs SellScoreSettings.personal_buy_ratio_high=0.20)
         personal_strong = (
             personal_buy_days_5d is not None
-            and personal_buy_days_5d >= 4
+            and personal_buy_days_5d >= peak.personal_strong_days
             and personal_buy_ratio_5d_to_volume is not None
-            and personal_buy_ratio_5d_to_volume >= 0.15
+            and personal_buy_ratio_5d_to_volume >= peak.personal_strong_ratio
         )
         personal_extreme = (
             personal_buy_days_5d is not None
-            and personal_buy_days_5d >= 5
+            and personal_buy_days_5d >= peak.personal_extreme_days
             and personal_buy_ratio_5d_to_volume is not None
-            and personal_buy_ratio_5d_to_volume >= 0.20
+            and personal_buy_ratio_5d_to_volume >= peak.personal_extreme_ratio
         )
         market_credit_hot = (
             market_credit_change_ratio is not None
-            and market_credit_change_ratio >= 0.008
+            and market_credit_change_ratio >= peak.credit_hot_change
             and market_credit_recent_high_ratio is not None
-            and market_credit_recent_high_ratio >= 0.99
+            and market_credit_recent_high_ratio >= peak.credit_hot_recent_high
         )
         market_credit_extreme = (
             market_credit_change_ratio is not None
-            and market_credit_change_ratio >= 0.01
+            and market_credit_change_ratio >= peak.credit_extreme_change
             and market_credit_recent_high_ratio is not None
-            and market_credit_recent_high_ratio >= 0.995
+            and market_credit_recent_high_ratio >= peak.credit_extreme_recent_high
         )
         near_high = bool(
-            is_52week_high or (high_52week_ratio is not None and high_52week_ratio >= 0.98)
+            is_52week_high
+            or (high_52week_ratio is not None and high_52week_ratio >= peak.near_high_ratio)
         )
-        stoch_hot = stoch_k is not None and stoch_k >= 85.0
+        stoch_hot = stoch_k is not None and stoch_k >= peak.stoch_hot
 
         risk_combo_peak = personal_strong and market_credit_hot and near_high
         risk_combo_extreme = personal_extreme and market_credit_extreme and near_high
@@ -237,10 +243,7 @@ class SellPeakRuleResearchService:
     ) -> list[dict[str, str | None]]:
         if symbols:
             if self.session is None:
-                return [
-                    {"symbol": symbol, "name": None, "market": None}
-                    for symbol in symbols
-                ]
+                return [{"symbol": symbol, "name": None, "market": None} for symbol in symbols]
             stmt = select(
                 StockUniverseModel.symbol,
                 StockUniverseModel.name,
@@ -381,15 +384,6 @@ class SellPeakRuleResearchService:
         )
         return merged.sort_values("timestamp").reset_index(drop=True)
 
-    @staticmethod
-    def _market_credit_label(market: str | None) -> str:
-        market_key = (market or "").upper()
-        if market_key == "KOSPI":
-            return "유가증권"
-        if market_key == "KOSDAQ":
-            return "코스닥"
-        return "전체"
-
     async def _load_market_credit_frame(
         self,
         market: str | None,
@@ -397,7 +391,7 @@ class SellPeakRuleResearchService:
         end_date: str,
     ) -> pd.DataFrame:
         credit_rows = await MarketCreditSnapshotRepository(self.session).get_by_market_between(
-            market_label=self._market_credit_label(market),
+            market_label=market_credit_label(market),
             start_date=start_date,
             end_date=end_date,
             session=self.session,
@@ -439,18 +433,21 @@ class SellPeakRuleResearchService:
 
     @staticmethod
     def _candidate_rules() -> list[SellRuleCandidate]:
+        peak = DEFAULT_PEAK_RULE_THRESHOLDS
         return [
             SellRuleCandidate(
                 rule_id="combo_peak_near_high",
                 description="개인수급 + 시장신용 + 고점권",
                 evaluator=lambda row: bool(
-                    row.get("personal_buy_days_5d", 0) >= 4
-                    and (row.get("personal_buy_ratio_5d_to_volume") or 0) >= 0.15
-                    and (row.get("market_credit_change_ratio") or 0) >= 0.008
-                    and (row.get("market_credit_recent_high_ratio") or 0) >= 0.99
+                    row.get("personal_buy_days_5d", 0) >= peak.personal_strong_days
+                    and (row.get("personal_buy_ratio_5d_to_volume") or 0)
+                    >= peak.personal_strong_ratio
+                    and (row.get("market_credit_change_ratio") or 0) >= peak.credit_hot_change
+                    and (row.get("market_credit_recent_high_ratio") or 0)
+                    >= peak.credit_hot_recent_high
                     and (
                         bool(row.get("is_52week_high"))
-                        or (row.get("high_52week_ratio") or 0) >= 0.98
+                        or (row.get("high_52week_ratio") or 0) >= peak.near_high_ratio
                     )
                 ),
             ),
@@ -458,21 +455,25 @@ class SellPeakRuleResearchService:
                 rule_id="credit_hot_personal_strong",
                 description="[research] 개인수급 강함 + 시장신용 과열",
                 evaluator=lambda row: bool(
-                    row.get("personal_buy_days_5d", 0) >= 4
-                    and (row.get("personal_buy_ratio_5d_to_volume") or 0) >= 0.15
-                    and (row.get("market_credit_change_ratio") or 0) >= 0.008
-                    and (row.get("market_credit_recent_high_ratio") or 0) >= 0.99
+                    row.get("personal_buy_days_5d", 0) >= peak.personal_strong_days
+                    and (row.get("personal_buy_ratio_5d_to_volume") or 0)
+                    >= peak.personal_strong_ratio
+                    and (row.get("market_credit_change_ratio") or 0) >= peak.credit_hot_change
+                    and (row.get("market_credit_recent_high_ratio") or 0)
+                    >= peak.credit_hot_recent_high
                 ),
             ),
             SellRuleCandidate(
                 rule_id="combo_peak_with_stoch",
                 description="[research] 개인수급 극단 + 시장신용 극단 + Stoch 과열",
                 evaluator=lambda row: bool(
-                    row.get("personal_buy_days_5d", 0) >= 5
-                    and (row.get("personal_buy_ratio_5d_to_volume") or 0) >= 0.20
-                    and (row.get("market_credit_change_ratio") or 0) >= 0.01
-                    and (row.get("market_credit_recent_high_ratio") or 0) >= 0.995
-                    and (row.get("stoch_k") or 0) >= 85
+                    row.get("personal_buy_days_5d", 0) >= peak.personal_extreme_days
+                    and (row.get("personal_buy_ratio_5d_to_volume") or 0)
+                    >= peak.personal_extreme_ratio
+                    and (row.get("market_credit_change_ratio") or 0) >= peak.credit_extreme_change
+                    and (row.get("market_credit_recent_high_ratio") or 0)
+                    >= peak.credit_extreme_recent_high
+                    and (row.get("stoch_k") or 0) >= peak.stoch_hot
                 ),
             ),
         ]
@@ -738,7 +739,7 @@ class SellPeakRuleResearchService:
         credit_frames: dict[str, pd.DataFrame] = {}
         for row in symbol_rows:
             market = row.get("market")
-            market_label = self._market_credit_label(market)
+            market_label = market_credit_label(market)
             if self.session is not None and market_label not in credit_frames:
                 credit_frames[market_label] = await self._load_market_credit_frame(
                     market=market,

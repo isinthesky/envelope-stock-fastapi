@@ -15,26 +15,29 @@ from decimal import Decimal
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.adapters.external.kofia_client import MarketCreditTrendData, get_kofia_client
+from src.adapters.external.naver.stock_client import StockPersonalFlowData, get_naver_stock_client
 from src.application.common.exceptions import StrategyError
 from src.application.common.indicators import TechnicalIndicators
-from src.settings.config import settings
 from src.application.domain.strategy.dto import (
-    DynamicSellThresholdConfig,
     PHASE_TO_STAGE_MAP,
     SELL_PHASE_INFO,
     SELL_STAGE_INFO,
     SELL_STAGE_RATIOS,
+    DynamicSellThresholdConfig,
     SellPhaseEnum,
-    SellSignalAnalysisDTO,
     SellScoreResultDTO,
+    SellSignalAnalysisDTO,
     SellStageEnum,
 )
 from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
 from src.application.domain.strategy.sell_rule_research_service import SellPeakRuleResearchService
-from src.settings.sell_score_settings import SellScoreSettings
-from src.adapters.external.kofia_client import MarketCreditTrendData, get_kofia_client
-from src.adapters.external.naver.stock_client import StockPersonalFlowData, get_naver_stock_client
-
+from src.application.domain.strategy.strategy_contract import (
+    SELL_STAGE_ORDER,
+    market_credit_label,
+)
+from src.settings.config import settings
+from src.settings.sell_score_settings import DEFAULT_PEAK_RULE_THRESHOLDS, SellScoreSettings
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +93,7 @@ class SellStrategyService:
         if cache_key in self._market_credit_cache:
             return self._market_credit_cache[cache_key]
 
-        market_label = "전체"
-        if cache_key == "KOSPI":
-            market_label = "유가증권"
-        elif cache_key == "KOSDAQ":
-            market_label = "코스닥"
+        market_label = market_credit_label(market)
 
         try:
             result = await get_kofia_client().get_market_credit_trend(
@@ -148,14 +147,8 @@ class SellStrategyService:
         if not is_triggered:
             return stage, []
 
-        stage_order = [
-            SellStageEnum.HOLD,
-            SellStageEnum.REDUCE_1,
-            SellStageEnum.REDUCE_2,
-            SellStageEnum.EXIT_ALL,
-        ]
-        current_index = stage_order.index(stage)
-        upgraded_stage = stage_order[min(current_index + 1, len(stage_order) - 1)]
+        current_index = SELL_STAGE_ORDER.index(stage)
+        upgraded_stage = SELL_STAGE_ORDER[min(current_index + 1, len(SELL_STAGE_ORDER) - 1)]
 
         if upgraded_stage == stage:
             return stage, []
@@ -765,14 +758,15 @@ class SellStrategyService:
             f"volume_spike={volume_indicators.get('is_volume_spike')}"
         )
 
-
         # Mode support (simple/hybrid) - simple_compute already injected earlier
         # For full hybrid stage upgrade, use analyze_sell_signal_hybrid or post-process the DTO
         if sell_mode in ("simple", "hybrid") and "simple_sell_info" in locals():
             if simple_sell_info.get("should_sell"):
                 # Append to reasons for visibility
                 if "sell_reasons" in locals():
-                    sell_reasons = list(sell_reasons) + ["[MODE:" + sell_mode + "] " + r for r in simple_sell_info.get("reasons", [])]
+                    sell_reasons = list(sell_reasons) + [
+                        "[MODE:" + sell_mode + "] " + r for r in simple_sell_info.get("reasons", [])
+                    ]
 
         return SellSignalAnalysisDTO(
             symbol=symbol,
@@ -1033,11 +1027,18 @@ class SellStrategyService:
         total_score += personal_flow_score
 
         market_credit_score = 0.0
+        peak = DEFAULT_PEAK_RULE_THRESHOLDS
         if market_credit_change_ratio is not None and market_credit_recent_high_ratio is not None:
-            if market_credit_change_ratio >= 0.01 and market_credit_recent_high_ratio >= 0.995:
+            if (
+                market_credit_change_ratio >= peak.credit_extreme_change
+                and market_credit_recent_high_ratio >= peak.credit_extreme_recent_high
+            ):
                 market_credit_score = config.market_credit_weight
                 score_reasons.append("시장 신용 과열 강함 (일간 증가율 + 고점권)")
-            elif market_credit_change_ratio >= 0.008 and market_credit_recent_high_ratio >= 0.99:
+            elif (
+                market_credit_change_ratio >= peak.credit_hot_change
+                and market_credit_recent_high_ratio >= peak.credit_hot_recent_high
+            ):
                 market_credit_score = config.market_credit_weight * 0.625
                 score_reasons.append("시장 신용 과열 경고 (증가율/고점권)")
         total_score += market_credit_score
@@ -1230,13 +1231,7 @@ class SellStrategyService:
         if merge_strategy == "rule_only":
             return rule_stage
 
-        stage_order = [
-            SellStageEnum.HOLD,
-            SellStageEnum.REDUCE_1,
-            SellStageEnum.REDUCE_2,
-            SellStageEnum.EXIT_ALL,
-        ]
-        return max(rule_stage, score_stage, key=lambda s: stage_order.index(s))
+        return max(rule_stage, score_stage, key=lambda s: SELL_STAGE_ORDER.index(s))
 
     def _apply_position_risk_stage(
         self,
@@ -1264,14 +1259,8 @@ class SellStrategyService:
         if not is_take_profit_triggered:
             return stage, reasons
 
-        stage_order = [
-            SellStageEnum.HOLD,
-            SellStageEnum.REDUCE_1,
-            SellStageEnum.REDUCE_2,
-            SellStageEnum.EXIT_ALL,
-        ]
         target_stage = SellStageEnum.REDUCE_2
-        if stage_order.index(stage) < stage_order.index(target_stage):
+        if SELL_STAGE_ORDER.index(stage) < SELL_STAGE_ORDER.index(target_stage):
             reasons.append("익절 목표 도달로 최종 Stage를 2차 비중 축소로 강화")
             return target_stage, reasons
 
@@ -1306,7 +1295,10 @@ class SellStrategyService:
             signals.append("거래량 피크 경고")
         elif is_volume_spike:
             signals.append("거래량 급증")
-        if is_52week_high or (high_52week_ratio is not None and high_52week_ratio >= 0.98):
+        if is_52week_high or (
+            high_52week_ratio is not None
+            and high_52week_ratio >= DEFAULT_PEAK_RULE_THRESHOLDS.near_high_ratio
+        ):
             signals.append("신고가권/고점권")
         if ma_gap_ratio >= 12.0:
             signals.append(f"장기 이격 과대 ({ma_gap_ratio:.1f}%)")
@@ -1858,8 +1850,6 @@ class SellStrategyService:
 
         return SellStageEnum.HOLD, reasons
 
-
-
     def compute_simple_sell_signal(
         self,
         df: pd.DataFrame,
@@ -1893,9 +1883,7 @@ class SellStrategyService:
                     prev2_close = float(closes.iloc[-3])
                     rolling_down = prev2_close >= prev_close >= current_price
                 # 히스토리 부족 시(3봉 미만) 단일 하락 폴백
-                if (below_ma and rolling_down) or (
-                    len(closes) < 3 and current_price < prev_close
-                ):
+                if (below_ma and rolling_down) or (len(closes) < 3 and current_price < prev_close):
                     decline_confirmed = True
                     decline_detail = f" (3일선 {ma_short:.0f} 하회 + 연속 하락)"
 
@@ -1929,14 +1917,19 @@ class SellStrategyService:
             curr_profit = (current_price - entry_price) / entry_price
             if curr_profit < peak_profit * 0.85:
                 should_sell = True
-                reasons.append(f"85% 수익 보호 트리거 (peak={peak_profit:.1%}, 현재={curr_profit:.1%})")
+                reasons.append(
+                    f"85% 수익 보호 트리거 (peak={peak_profit:.1%}, 현재={curr_profit:.1%})"
+                )
 
         return {
             "should_sell": should_sell,
             "reasons": reasons or ["단순 규칙 미발동"],
-            "recent_20d_high": float(df["close"].tail(20).max()) if len(df) >= 20 and "close" in df.columns else None,
+            "recent_20d_high": (
+                float(df["close"].tail(20).max())
+                if len(df) >= 20 and "close" in df.columns
+                else None
+            ),
         }
-
 
     async def analyze_sell_signal_hybrid(
         self,
@@ -1991,7 +1984,9 @@ class SellStrategyService:
                     added_reasons.append("[HYBRID] RSI+하락 감지 (Legacy HOLD 유지)")
 
             if added_reasons:
-                legacy_result.sell_reasons = list(legacy_result.sell_reasons) + added_reasons + simple_reasons
+                legacy_result.sell_reasons = (
+                    list(legacy_result.sell_reasons) + added_reasons + simple_reasons
+                )
 
         return {
             "legacy": legacy_result,

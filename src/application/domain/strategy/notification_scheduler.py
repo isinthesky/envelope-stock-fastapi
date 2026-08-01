@@ -33,13 +33,16 @@ from src.adapters.external.kofia_client import get_kofia_client
 from src.adapters.external.naver.stock_client import get_naver_stock_client
 from src.adapters.external.telegram import get_telegram_notifier
 from src.application.domain.ohlcv.warmup_service import OHLCVWarmupService
+from src.application.domain.strategy.scheduler import (
+    create_async_scheduler,
+    register_cron_job,
+)
 from src.application.domain.strategy.strategy_service import StrategyService
 from src.application.domain.strategy.symbol_validation import (
     filter_tradable_items,
     is_valid_krx_symbol,
 )
 from src.settings.config import settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -60,21 +63,8 @@ class NotificationScheduler:
     (sell_notification_enabled=false)
     """
 
-    ETF_LEADER_MAP: dict[str, tuple[str, str]] = {
-        "396500": ("005930", "000660"),
-        "466920": ("329180", "042660"),
-        "270810": ("196170", "247540"),
-        "0117V0": ("298040", "267260"),
-    }
-
-    BUY_SLOTS: tuple[tuple[int, int, int, int, str], ...] = (
-        (11, 20, 11, 30, "11:30"),
-        (14, 20, 14, 30, "14:30"),
-    )
-    SELL_SLOTS: tuple[tuple[int, int, int, int, str], ...] = (
-        (9, 20, 9, 30, "09:30"),
-        (12, 20, 12, 30, "12:30"),
-    )
+    # 단일 소스는 settings.etf_leader_map. 하위 호환용 클래스 표면 별칭(동일 dict 참조).
+    ETF_LEADER_MAP: dict[str, tuple[str, str]] = settings.etf_leader_map
 
     def __init__(self):
         """초기화"""
@@ -89,7 +79,7 @@ class NotificationScheduler:
         cls, symbol: str, analyzed_results: dict[str, dict]
     ) -> str | None:
         """ETF 본체 알림에 붙일 대장주 보조 판정 요약 생성"""
-        leader_symbols = cls.ETF_LEADER_MAP.get((symbol or "").strip())
+        leader_symbols = settings.etf_leader_map.get((symbol or "").strip())
         if not leader_symbols:
             return None
 
@@ -121,12 +111,12 @@ class NotificationScheduler:
         etf_alert_symbols = {
             (item.get("symbol") or "").strip()
             for item in pending_sell_alerts
-            if (item.get("symbol") or "").strip() in cls.ETF_LEADER_MAP
+            if (item.get("symbol") or "").strip() in settings.etf_leader_map
         }
         hidden_leader_symbols = {
             leader_symbol
             for etf_symbol in etf_alert_symbols
-            for leader_symbol in cls.ETF_LEADER_MAP.get(etf_symbol, ())
+            for leader_symbol in settings.etf_leader_map.get(etf_symbol, ())
         }
 
         return [
@@ -369,8 +359,8 @@ class NotificationScheduler:
             "telegram_enabled": bool(getattr(notifier, "enabled", False)),
             "execution_lock_locked": self._execution_lock.locked(),
             "buy_notification_enabled": settings.buy_notification_enabled,
-            "buy_slots": self._slot_definitions(self.BUY_SLOTS, "buy"),
-            "sell_slots": self._slot_definitions(self.SELL_SLOTS, "sell"),
+            "buy_slots": self._slot_definitions(settings.buy_notification_slots, "buy"),
+            "sell_slots": self._slot_definitions(settings.sell_notification_slots, "sell"),
             "jobs": jobs,
             "last_job_results": sorted(
                 self._last_job_results.values(),
@@ -381,6 +371,36 @@ class NotificationScheduler:
             "sell_notification_available": getattr(settings, "sell_notification_enabled", False),
         }
 
+    @staticmethod
+    def _register_slot(scheduler, slot, kind: str, update_fn, notify_fn) -> None:
+        """슬롯 1개에 대해 데이터 갱신 잡 + 알림 잡 한 쌍을 등록한다.
+
+        기존 add_job 4중 중복(매수 2 슬롯 × update/notify, 매도 동일)을 제거한다.
+        trigger/cron/id/name/kwargs는 기존과 동일하게 보존한다.
+        """
+        update_hour, update_minute, notify_hour, notify_minute, label = slot
+        kind_title = kind.capitalize()
+        suffix = f"{notify_hour:02d}{notify_minute:02d}"
+
+        register_cron_job(
+            scheduler,
+            update_fn,
+            hour=update_hour,
+            minute=update_minute,
+            job_id=f"{kind}_data_update_{suffix}",
+            name=f"{kind_title} Data Update ({label} alert prep)",
+            kwargs={"slot_label": label},
+        )
+        register_cron_job(
+            scheduler,
+            notify_fn,
+            hour=notify_hour,
+            minute=notify_minute,
+            job_id=f"{kind}_notification_{suffix}",
+            name=f"{kind_title} Signal Notification ({label})",
+            kwargs={"slot_label": label},
+        )
+
     async def start(self) -> None:
         """스케줄러 시작"""
         if self.is_running:
@@ -388,48 +408,18 @@ class NotificationScheduler:
             return
 
         try:
-            from apscheduler.schedulers.asyncio import AsyncIOScheduler
-            from apscheduler.triggers.cron import CronTrigger
-
-            self.scheduler = AsyncIOScheduler(
-                timezone=KST,
-                job_defaults={
-                    # 이벤트 루프 지연으로 초 단위 지각 시에도 잡을 건너뛰지 않도록
-                    # 기본 misfire_grace_time(1초)을 5분으로 완화한다.
-                    "coalesce": True,
-                    "misfire_grace_time": 300,
-                },
-            )
+            self.scheduler = create_async_scheduler()
 
             # 매수 알림은 BUY_NOTIFICATION_ENABLED로 끌 수 있다.
             # 비활성 시 잡을 등록하지 않아 발송 경로가 열리지 않는다.
             if settings.buy_notification_enabled:
-                for update_hour, update_minute, notify_hour, notify_minute, label in self.BUY_SLOTS:
-                    self.scheduler.add_job(
+                for slot in settings.buy_notification_slots:
+                    self._register_slot(
+                        self.scheduler,
+                        slot,
+                        "buy",
                         self._buy_data_update_job,
-                        CronTrigger(
-                            day_of_week="mon-fri",
-                            hour=update_hour,
-                            minute=update_minute,
-                            timezone=KST,
-                        ),
-                        kwargs={"slot_label": label},
-                        id=f"buy_data_update_{notify_hour:02d}{notify_minute:02d}",
-                        name=f"Buy Data Update ({label} alert prep)",
-                        replace_existing=True,
-                    )
-                    self.scheduler.add_job(
                         self._buy_notification_job,
-                        CronTrigger(
-                            day_of_week="mon-fri",
-                            hour=notify_hour,
-                            minute=notify_minute,
-                            timezone=KST,
-                        ),
-                        kwargs={"slot_label": label},
-                        id=f"buy_notification_{notify_hour:02d}{notify_minute:02d}",
-                        name=f"Buy Signal Notification ({label})",
-                        replace_existing=True,
                     )
             else:
                 logger.info(
@@ -438,32 +428,13 @@ class NotificationScheduler:
                 )
 
             if getattr(settings, "sell_notification_enabled", False):
-                for update_hour, update_minute, notify_hour, notify_minute, label in self.SELL_SLOTS:
-                    self.scheduler.add_job(
+                for slot in settings.sell_notification_slots:
+                    self._register_slot(
+                        self.scheduler,
+                        slot,
+                        "sell",
                         self._sell_data_update_job,
-                        CronTrigger(
-                            day_of_week="mon-fri",
-                            hour=update_hour,
-                            minute=update_minute,
-                            timezone=KST,
-                        ),
-                        kwargs={"slot_label": label},
-                        id=f"sell_data_update_{notify_hour:02d}{notify_minute:02d}",
-                        name=f"Sell Data Update ({label} alert prep)",
-                        replace_existing=True,
-                    )
-                    self.scheduler.add_job(
                         self._sell_notification_job,
-                        CronTrigger(
-                            day_of_week="mon-fri",
-                            hour=notify_hour,
-                            minute=notify_minute,
-                            timezone=KST,
-                        ),
-                        kwargs={"slot_label": label},
-                        id=f"sell_notification_{notify_hour:02d}{notify_minute:02d}",
-                        name=f"Sell Signal Notification ({label})",
-                        replace_existing=True,
                     )
             else:
                 logger.info(
@@ -801,13 +772,13 @@ class NotificationScheduler:
 
                 recommendations = await service.get_golden_cross_recommendations(
                     market=None,
-                    stoch_threshold=30.0,
+                    stoch_threshold=settings.buy_notification_stoch_threshold,
                     gc_only=True,
                     include_etf=True,
-                    limit=1000,
+                    limit=settings.buy_notification_scan_limit,
                     max_concurrent=None,
-                    top_n=5,
-                    top_industries_n=3,
+                    top_n=settings.buy_notification_top_n,
+                    top_industries_n=settings.buy_notification_top_industries_n,
                 )
 
                 notification_payload = recommendations.model_dump(mode="json")

@@ -4,6 +4,27 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from src.application.domain.strategy.dto import SellStageEnum
+
+# 매도 Stage 강도 순서 (약함 → 강함) 단일 출처.
+# sell_strategy_service 여러 곳에 중복되어 있던 리터럴을 이 상수로 통합한다.
+SELL_STAGE_ORDER: tuple[SellStageEnum, ...] = (
+    SellStageEnum.HOLD,
+    SellStageEnum.REDUCE_1,
+    SellStageEnum.REDUCE_2,
+    SellStageEnum.EXIT_ALL,
+)
+
+
+def market_credit_label(market: str | None) -> str:
+    """시장 코드를 KOFIA 시장 신용 라벨로 매핑한다 (공유 헬퍼)."""
+    market_key = (market or "").upper()
+    if market_key == "KOSPI":
+        return "유가증권"
+    if market_key == "KOSDAQ":
+        return "코스닥"
+    return "전체"
+
 
 class GoldenCrossScanState(StrEnum):
     NOT_GC = "NOT_GC"
