@@ -1,26 +1,31 @@
 <nav class="sidebar" id="sidebar">
   <h2><a href="/mypage/">Stock API</a></h2>
   <ul>
+    <li class="section-title">운영</li>
     <li><a href="/mypage/" class="{% if active_page == 'index' %}active{% endif %}">Dashboard</a></li>
-    <li><a href="/mypage/auth/" class="{% if active_page == 'auth' %}active{% endif %}">Auth</a></li>
-    <li><a href="/mypage/account/" class="{% if active_page == 'account' %}active{% endif %}">Account</a></li>
-    <li><a href="/mypage/market-data/" class="{% if active_page == 'market_data' %}active{% endif %}">Market Data</a></li>
-    <li><a href="/mypage/order/" class="{% if active_page == 'order' %}active{% endif %}">Order</a></li>
+    <li><a href="/ops/" class="{% if active_page == 'ops' %}active{% endif %}">Operations</a></li>
+    <li><a href="/mypage/access-logs/" class="{% if active_page == 'access_logs' %}active{% endif %}">Access Logs</a></li>
 
-    <li class="section-title">Data</li>
-    <li><a href="/mypage/ohlcv/" class="{% if active_page == 'ohlcv' %}active{% endif %}">OHLCV Cache</a></li>
-    <li><a href="/mypage/websocket/" class="{% if active_page == 'websocket' %}active{% endif %}">WebSocket</a></li>
-
-    <li class="section-title">Strategy</li>
-    <li><a href="/mypage/strategy/" class="{% if active_page == 'strategy' %}active{% endif %}">Scan (Buy)</a></li>
-    <li><a href="/mypage/strategy/dashboard" class="{% if active_page == 'strategy_dashboard' %}active{% endif %}">My Strategies</a></li>
+    <li class="section-title">전략</li>
+    <li><a href="/mypage/strategy-hub/" class="{% if active_page in ['strategy_hub','strategy','recommendation','strategy_dashboard'] %}active{% endif %}">전략 센터</a></li>
     <li><a href="/mypage/sell-strategy/" class="{% if active_page == 'sell_strategy' %}active{% endif %}">Sell Strategy</a></li>
-    <li><a href="/mypage/recommendation/" class="{% if active_page == 'recommendation' %}active{% endif %}">Recommendation</a></li>
     <li><a href="/mypage/backtest/" class="{% if active_page == 'backtest' %}active{% endif %}">Backtest</a></li>
     <li><a href="/mypage/research/" class="{% if active_page == 'research' %}active{% endif %}">전략 연구</a></li>
 
-    <li class="section-title">Admin</li>
-    <li><a href="/mypage/access-logs/" class="{% if active_page == 'access_logs' %}active{% endif %}">Access Logs</a></li>
-    <li><a href="/ops/" class="{% if active_page == 'ops' %}active{% endif %}">Operations</a></li>
+    <li class="section-title">데이터</li>
+    <li><a href="/mypage/ohlcv/" class="{% if active_page == 'ohlcv' %}active{% endif %}">OHLCV Cache</a></li>
+    <li><a href="/mypage/websocket/" class="{% if active_page == 'websocket' %}active{% endif %}">WebSocket</a></li>
+
+    <li>
+      <details {% if active_page in ['auth','account','order','market_data'] %}open{% endif %} style="margin-top:8px;">
+        <summary class="section-title" style="cursor:pointer; list-style:revert;">수동 / 고급 <small style="font-weight:400; opacity:.7;">(자동화로 대체됨)</small></summary>
+        <ul style="list-style:none; padding-left:0; margin:4px 0 0;">
+          <li><a href="/mypage/auth/" class="{% if active_page == 'auth' %}active{% endif %}">Auth</a></li>
+          <li><a href="/mypage/account/" class="{% if active_page == 'account' %}active{% endif %}">Account</a></li>
+          <li><a href="/mypage/order/" class="{% if active_page == 'order' %}active{% endif %}">Order <small style="opacity:.6;">수동</small></a></li>
+          <li><a href="/mypage/market-data/" class="{% if active_page == 'market_data' %}active{% endif %}">Market Data <small style="opacity:.6;">수동</small></a></li>
+        </ul>
+      </details>
+    </li>
   </ul>
 </nav>

@@ -8,10 +8,16 @@
   <link rel="stylesheet" href="/static/styles/mypage.css" />
     {% block extra_css_links %}{% endblock %}
   <style>
+    /* embed 모드: 허브 탭 iframe 등에서 사이드바/토글 숨기고 콘텐츠 전체폭 */
+    body.embedded .sidebar,
+    body.embedded .sidebar-toggle,
+    body.embedded .sidebar-backdrop { display: none !important; }
+    body.embedded .layout { display: block; }
+    body.embedded .content { margin-left: 0 !important; max-width: none !important; }
     {% block extra_styles %}{% endblock %}
   </style>
 </head>
-<body>
+<body class="{% if request.query_params.get('embed') %}embedded{% endif %}">
   <button class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true">Hide menu</button>
   <div class="sidebar-backdrop" data-sidebar-backdrop="1"></div>
   <div class="layout">

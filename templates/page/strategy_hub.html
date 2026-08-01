@@ -1,0 +1,54 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}전략 센터 - Stock API Admin{% endblock %}
+
+{% block extra_styles %}
+.hub-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+.hub-head p { color:#64748b; margin:4px 0 0; font-size:13px; }
+.hub-tabs { display:flex; gap:4px; margin:14px 0 0; border-bottom:2px solid #e2e8f0; flex-wrap:wrap; }
+.hub-tab { appearance:none; border:none; background:transparent; padding:9px 16px; font-size:14px; font-weight:600;
+  color:#64748b; cursor:pointer; border-bottom:3px solid transparent; margin-bottom:-2px; }
+.hub-tab:hover { color:#334155; }
+.hub-tab.active { color:#1e3a5f; border-bottom-color:#1e3a5f; }
+.hub-tab .desc { display:block; font-size:11px; font-weight:400; color:#94a3b8; margin-top:2px; }
+.hub-frame-wrap { margin-top:12px; border:1px solid #e2e8f0; border-radius:10px; overflow:hidden; background:#fff; }
+.hub-frame { width:100%; height:calc(100vh - 210px); min-height:520px; border:0; display:block; }
+{% endblock %}
+
+{% block content %}
+<div class="hub-head">
+  <h1>전략 센터</h1>
+  <p>매수 스캔 · 추천/룰셋 · 내 전략을 한 화면에서. (자동 스케줄러가 11:30/14:30 스캔·알림을 수행하므로, 여기서는 검토·수동 실행 용도)</p>
+</div>
+
+<div class="hub-tabs" role="tablist">
+  <button class="hub-tab active" data-src="/mypage/strategy/?embed=1" role="tab">
+    매수 스캔 <span class="desc">골든크로스 · MA5 돌파 · 관심종목</span>
+  </button>
+  <button class="hub-tab" data-src="/mypage/recommendation/?embed=1" role="tab">
+    추천 / 룰셋 <span class="desc">후보 추천 · 룰셋 · walk-forward</span>
+  </button>
+  <button class="hub-tab" data-src="/mypage/strategy/dashboard?embed=1" role="tab">
+    내 전략 <span class="desc">전략 카탈로그 · 활성화</span>
+  </button>
+</div>
+
+<div class="hub-frame-wrap">
+  <iframe id="hub-frame" class="hub-frame" src="/mypage/strategy/?embed=1" title="전략 화면"></iframe>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+  const hubTabs = document.querySelectorAll(".hub-tab");
+  const hubFrame = document.getElementById("hub-frame");
+  hubTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      hubTabs.forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      const src = tab.getAttribute("data-src");
+      if (hubFrame.getAttribute("src") !== src) {
+        hubFrame.setAttribute("src", src);
+      }
+    });
+  });
+{% endblock %}

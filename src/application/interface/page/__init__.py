@@ -37,6 +37,9 @@ from src.application.interface.page.sell_strategy_page_router import (
 from src.application.interface.page.strategy_dashboard_page_router import (
     router as strategy_dashboard_page_router,
 )
+from src.application.interface.page.strategy_hub_page_router import (
+    router as strategy_hub_page_router,
+)
 from src.application.interface.page.strategy_page_router import router as strategy_page_router
 from src.application.interface.page.websocket_page_router import (
     router as websocket_page_router,
@@ -50,6 +53,7 @@ mypage_routers = [
     market_data_page_router,
     order_page_router,
     ops_page_router,
+    strategy_hub_page_router,
     strategy_page_router,
     strategy_dashboard_page_router,
     sell_strategy_page_router,
@@ -75,6 +79,7 @@ __all__ = [
     "account_page_router",
     "market_data_page_router",
     "order_page_router",
+    "strategy_hub_page_router",
     "strategy_page_router",
     "strategy_dashboard_page_router",
     "sell_strategy_page_router",
