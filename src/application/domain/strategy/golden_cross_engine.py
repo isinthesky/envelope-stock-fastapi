@@ -14,7 +14,7 @@ Golden Cross Engine - 골든크로스 전략 실행 엔진
 import json
 import logging
 from types import SimpleNamespace
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 
 import pandas as pd
@@ -34,7 +34,6 @@ from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.external.kis_api.client import KISAPIClient, get_kis_client
 from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.account.service import AccountService
-from src.application.domain.market_data.service import MarketDataService
 from src.application.domain.risk.safety_guard import SafetyGuard
 from src.application.domain.order.dto import OrderCreateRequestDTO
 from src.application.domain.order.service import OrderService
@@ -43,6 +42,7 @@ from src.application.domain.strategy.dto import (
     StrategyExecuteResultDTO,
     StrategySignalDTO,
 )
+from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
 from src.application.domain.strategy.state_machine import (
     GoldenCrossStateMachine,
     IndicatorSnapshot,
@@ -83,15 +83,14 @@ class GoldenCrossEngine:
         self.signal_repo = StrategySignalRepository(session)
 
         # Services (redis_client가 없으면 lazy init)
-        self._market_data_service = None
         self._account_service = None
+        self._data_loader: OHLCVDataLoader | None = None
 
-    async def _get_market_data_service(self) -> MarketDataService:
-        if self._market_data_service is None:
-            if self.redis_client is None:
-                self.redis_client = await get_redis_client()
-            self._market_data_service = MarketDataService(self.kis_client, self.redis_client)
-        return self._market_data_service
+    def _get_data_loader(self) -> OHLCVDataLoader:
+        """청크·캐시 지원 OHLCV 로더(스캐너/매도와 동일 경로)."""
+        if self._data_loader is None:
+            self._data_loader = OHLCVDataLoader(self.session)
+        return self._data_loader
 
     async def _get_account_service(self) -> AccountService:
         if self._account_service is None:
@@ -234,8 +233,9 @@ class GoldenCrossEngine:
         fetch_days = max(
             config.lookback_days, int((config.ma_config.long_period + 20) * 1.6)
         )
-        df = await self._fetch_ohlcv(symbol, fetch_days)
-        if df is None or len(df) < config.ma_config.long_period + 10:
+        min_candles = config.ma_config.long_period + 10
+        df = await self._fetch_ohlcv(symbol, fetch_days, min_candles=min_candles)
+        if df is None or len(df) < min_candles:
             logger.warning(f"[GC Engine] Insufficient data for {symbol}")
             return None
 
@@ -557,43 +557,26 @@ class GoldenCrossEngine:
         elif transition.signal == Signal.SELL:
             await self.symbol_state_repo.reset_to_waiting(strategy_id, symbol)
 
-    async def _fetch_ohlcv(self, symbol: str, days: int) -> pd.DataFrame | None:
-        """OHLCV 데이터 조회"""
+    async def _fetch_ohlcv(
+        self, symbol: str, days: int, min_candles: int = 1
+    ) -> pd.DataFrame | None:
+        """OHLCV 데이터 조회.
+
+        스캐너/매도와 동일한 청크·캐시 지원 로더(OHLCVDataLoader)를 사용한다.
+        KIS 일봉 API는 1콜당 최대 100행이므로, 단일 호출 경로로는 장기 MA(예: MA200→210캔들)
+        데이터를 확보할 수 없다. 로더는 max_days 청크로 분할 조회한다.
+        """
         try:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days + 50)
-
-            market_data_service = await self._get_market_data_service()
-            chart_data = await market_data_service.get_chart_data(
+            data_loader = self._get_data_loader()
+            df = await data_loader.load_ohlcv_dataframe(
                 symbol=symbol,
+                days=days,
                 interval="1d",
-                start_date=start_date,
-                end_date=end_date,
+                min_candles=min_candles,
             )
-
-            if not chart_data.candles:
+            if df is None or df.empty:
                 return None
-
-            # DataFrame 변환
-            records = []
-            for candle in chart_data.candles:
-                records.append(
-                    {
-                        "timestamp": candle.timestamp,
-                        "open": float(candle.open),
-                        "high": float(candle.high),
-                        "low": float(candle.low),
-                        "close": float(candle.close),
-                        "volume": candle.volume,
-                    }
-                )
-
-            df = pd.DataFrame(records)
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-            df = df.sort_values("timestamp").reset_index(drop=True)
-
-            return df
-
+            return df.sort_values("timestamp").reset_index(drop=True)
         except Exception as e:
             logger.error(f"[GC Engine] Failed to fetch OHLCV for {symbol}: {e}")
             return None
