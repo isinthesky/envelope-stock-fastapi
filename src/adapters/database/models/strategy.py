@@ -25,11 +25,7 @@ class StrategyStatus(str, Enum):
 class StrategyType(str, Enum):
     """전략 유형"""
 
-    MOMENTUM = "momentum"  # 모멘텀
-    BREAKOUT = "breakout"  # 돌파
-    GRID = "grid"  # 그리드
-    GOLDEN_CROSS = "golden_cross"  # 골든크로스
-    CUSTOM = "custom"  # 커스텀
+    GOLDEN_CROSS = "golden_cross"  # 골든크로스 (유일한 구현 전략)
 
 
 class StrategyModel(Base, BaseModel, SoftDeleteMixin):

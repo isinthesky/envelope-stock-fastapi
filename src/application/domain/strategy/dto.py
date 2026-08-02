@@ -277,8 +277,8 @@ class StrategyCreateRequestDTO(BaseDTO):
     description: str | None = Field(default=None, description="전략 설명")
     strategy_type: str = Field(
         default="golden_cross",
-        description="전략 유형",
-        pattern="^(momentum|breakout|grid|golden_cross|custom)$",
+        description="전략 유형 (현재 golden_cross만 구현됨)",
+        pattern="^golden_cross$",
     )
     account_no: str | None = Field(default=None, description="계좌번호")
     symbols: list[str] = Field(description="대상 종목 리스트", min_length=1)
