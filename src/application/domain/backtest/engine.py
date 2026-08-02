@@ -121,8 +121,7 @@ class BacktestEngine:
             case unreachable:
                 assert_never(unreachable)
 
-        volume = float(row.get("volume", 0)) if "volume" in row else None
-        signal = self._generate_signal(current_price, volume=volume)
+        signal = self._generate_signal(current_price)
 
         match execution_timing:
             case "same_close":
@@ -178,7 +177,7 @@ class BacktestEngine:
             self.high_history, self.low_history, self.close_history, period=atr_period
         )
 
-    def _generate_signal(self, current_price: Decimal, volume: float | None = None) -> str:
+    def _generate_signal(self, current_price: Decimal) -> str:
         if self.strategy_type == "golden_cross":
             return self.signal_generator.generate_signal(
                 price_history=self.price_history,
