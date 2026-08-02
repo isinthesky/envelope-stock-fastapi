@@ -20,7 +20,7 @@ from src.application.domain.backtest.dto import (
 from src.application.domain.backtest.order_manager import BacktestOrderManager
 from src.application.domain.backtest.position_manager import Position, PositionManager
 from src.application.domain.backtest.result_builder import build_backtest_result
-from src.application.domain.backtest.signal_generators import (
+from src.application.domain.backtest.generators import (
     BaseSignalGenerator,
     create_signal_generator,
 )
@@ -38,7 +38,7 @@ class BacktestEngine:
         symbol: str,
         strategy_config: StrategyConfigDTO,
         backtest_config: BacktestConfigDTO,
-        strategy_type: str = "mean_reversion",
+        strategy_type: str = "golden_cross",
         strategy_params: dict | None = None,
     ):
         self.symbol = symbol
@@ -79,13 +79,8 @@ class BacktestEngine:
                 use_volume_filter=params.get("use_volume_filter", True),
             )
         else:
-            self.signal_generator = create_signal_generator(
-                strategy_type="mean_reversion",
-                bb_period=strategy_config.bollinger_band.period,
-                bb_std_multiplier=strategy_config.bollinger_band.std_multiplier,
-                env_period=strategy_config.envelope.period,
-                env_percentage=strategy_config.envelope.percentage,
-            )
+            # 레거시 볼린저 평균회귀 생성기는 제거됨. 미지원 타입은 명시적으로 실패한다.
+            self.signal_generator = create_signal_generator(strategy_type=strategy_type, **params)
 
         self.order_manager = BacktestOrderManager(backtest_config)
         self.position_manager = PositionManager()

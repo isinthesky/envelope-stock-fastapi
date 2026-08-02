@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from src.adapters.database.models.strategy_symbol_state import SymbolState
-from src.application.domain.backtest.signal_generators import GoldenCrossSignalGenerator
+from src.application.domain.backtest.generators import GoldenCrossSignalGenerator
 from src.application.domain.strategy.dto import GoldenCrossConfigDTO, StochasticConfig
 from src.application.domain.strategy.signal_evaluator import (
     GoldenCrossScanContext,

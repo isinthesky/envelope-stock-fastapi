@@ -14,7 +14,7 @@ import asyncio
 import pandas as pd
 
 from src.adapters.database.connection import get_async_session
-from scripts.fear_buy_acceptance import _top_symbols, _load_symbol
+from scripts.research.fear_buy_acceptance import _top_symbols, _load_symbol
 
 SHORT, LONG = 50, 120
 

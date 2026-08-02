@@ -1,78 +1,14 @@
 # -*- coding: utf-8 -*-
-"""
-Signal Generators - 백테스트용 시그널 생성기
+"""GoldenCrossSignalGenerator - 스윙형 골든크로스 백테스트 시그널 생성기."""
 
-전략별 매수/매도 시그널 생성 로직
-"""
-
-from abc import ABC, abstractmethod
 from decimal import Decimal
 
 from src.application.common.indicators import TechnicalIndicators
+from src.application.domain.backtest.generators.base import BaseSignalGenerator
 from src.application.domain.strategy.strategy_contract import (
     DEFAULT_GOLDEN_CROSS_PULLBACK,
     GoldenCrossTradeSignal,
 )
-
-
-class BaseSignalGenerator(ABC):
-    @abstractmethod
-    def generate_signal(
-        self,
-        price_history: list[float],
-        current_price: Decimal,
-        **kwargs: object,
-    ) -> str:
-        pass
-
-    @property
-    @abstractmethod
-    def min_period(self) -> int:
-        pass
-
-    def reset(self) -> None:
-        pass
-
-
-class BollingerEnvelopeSignalGenerator(BaseSignalGenerator):
-    def __init__(
-        self,
-        bb_period: int = 20,
-        bb_std_multiplier: float = 2.0,
-        env_period: int = 20,
-        env_percentage: float = 2.0,
-        use_strict_mode: bool = True,
-    ):
-        self.bb_period = bb_period
-        self.bb_std_multiplier = bb_std_multiplier
-        self.env_period = env_period
-        self.env_percentage = env_percentage
-        self.use_strict_mode = use_strict_mode
-
-    @property
-    def min_period(self) -> int:
-        return max(self.bb_period, self.env_period)
-
-    def generate_signal(
-        self,
-        price_history: list[float],
-        current_price: Decimal,
-        **kwargs: object,
-    ) -> str:
-        if len(price_history) < self.min_period:
-            return "hold"
-        bb_bands = TechnicalIndicators.calculate_bollinger_bands(
-            price_history, period=self.bb_period, std_multiplier=self.bb_std_multiplier
-        )
-        env_bands = TechnicalIndicators.calculate_envelope(
-            price_history, period=self.env_period, percentage=self.env_percentage
-        )
-        return TechnicalIndicators.generate_combined_signal(
-            current_price=float(current_price),
-            bb_bands=bb_bands,
-            envelope_bands=env_bands,
-            use_strict_mode=self.use_strict_mode,
-        )
 
 
 class GoldenCrossSignalGenerator(BaseSignalGenerator):
@@ -86,7 +22,7 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
 
     라이브와 동일한 시그널로 검증하려면
     `backtest.golden_cross_parity.GoldenCrossParityReplay` 를 사용하라.
-    이 생성기는 기존 진단/호환 용도로만 유지한다.
+    이 생성기는 온디맨드 백테스트(단일런)의 진단/호환 용도로만 유지한다.
     """
 
     def __init__(
@@ -243,94 +179,3 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
         self._oversold_seen = False
         self._pullback_bars = 0
         self._bars_since_exit = 999999
-
-
-class MA5BreakoutSignalGenerator(BaseSignalGenerator):
-    def __init__(
-        self,
-        short_ma_period: int = 5,
-        long_ma_period: int = 300,
-        envelope_percentage: float = 0.7,
-        secondary_ma_period: int = 400,
-        secondary_envelope_percentage: float = 0.7,
-        volume_ma_period: int = 20,
-        volume_ratio_threshold: float = 1.0,
-        use_volume_filter: bool = True,
-    ):
-        self.short_ma_period = short_ma_period
-        self.long_ma_period = long_ma_period
-        self.envelope_percentage = envelope_percentage
-        self.secondary_ma_period = secondary_ma_period
-        self.secondary_envelope_percentage = secondary_envelope_percentage
-        self.volume_ma_period = volume_ma_period
-        self.volume_ratio_threshold = volume_ratio_threshold
-        self.use_volume_filter = use_volume_filter
-        self._prev_ma5_above_upper = False
-        self._entry_triggered = False
-        self._volume_history: list[float] = []
-
-    @property
-    def min_period(self) -> int:
-        return max(self.long_ma_period, self.secondary_ma_period, self.volume_ma_period)
-
-    def generate_signal(
-        self,
-        price_history: list[float],
-        current_price: Decimal,
-        volume: float | None = None,
-        **kwargs: object,
-    ) -> str:
-        if len(price_history) < self.min_period:
-            return "hold"
-        if volume is not None:
-            self._volume_history.append(volume)
-        ma5 = self._calculate_sma(price_history, self.short_ma_period)
-        ma300 = self._calculate_sma(price_history, self.long_ma_period)
-        upper_300 = ma300 * (1 + self.envelope_percentage / 100)
-        ma5_above_upper_300 = ma5 > upper_300
-        price_above_upper_300 = float(current_price) > upper_300
-        if self._entry_triggered and not ma5_above_upper_300:
-            self._entry_triggered = False
-            self._prev_ma5_above_upper = False
-            return "sell"
-        if not self._prev_ma5_above_upper and ma5_above_upper_300:
-            if self.use_volume_filter and not self._check_volume_condition():
-                self._prev_ma5_above_upper = ma5_above_upper_300
-                return "hold"
-            if price_above_upper_300:
-                self._prev_ma5_above_upper = ma5_above_upper_300
-                self._entry_triggered = True
-                return "buy"
-        self._prev_ma5_above_upper = ma5_above_upper_300
-        return "hold"
-
-    def _calculate_sma(self, prices: list[float], period: int) -> float:
-        if len(prices) < period:
-            return 0.0
-        return sum(prices[-period:]) / period
-
-    def _check_volume_condition(self) -> bool:
-        if len(self._volume_history) < self.volume_ma_period:
-            return True
-        avg_volume = sum(self._volume_history[-self.volume_ma_period :]) / self.volume_ma_period
-        current_volume = self._volume_history[-1] if self._volume_history else 0
-        return current_volume >= avg_volume * self.volume_ratio_threshold
-
-    def reset(self) -> None:
-        self._prev_ma5_above_upper = False
-        self._entry_triggered = False
-        self._volume_history.clear()
-
-
-def create_signal_generator(strategy_type: str, **kwargs) -> BaseSignalGenerator:
-    if strategy_type == "golden_cross":
-        return GoldenCrossSignalGenerator(**kwargs)
-    if strategy_type == "ma5_breakout":
-        return MA5BreakoutSignalGenerator(**kwargs)
-    return BollingerEnvelopeSignalGenerator(
-        bb_period=kwargs.get("bb_period", 20),
-        bb_std_multiplier=kwargs.get("bb_std_multiplier", 2.0),
-        env_period=kwargs.get("env_period", 20),
-        env_percentage=kwargs.get("env_percentage", 2.0),
-        use_strict_mode=kwargs.get("use_strict_mode", True),
-    )

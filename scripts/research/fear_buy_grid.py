@@ -16,7 +16,7 @@ from src.adapters.database.connection import get_async_session
 from src.application.common.indicators import TechnicalIndicators as TI
 from src.application.domain.strategy.ohlcv_data_loader import get_kospi_or_proxy_closes
 from src.application.domain.strategy.sell_strategy_service import SellStrategyService
-from scripts.fear_buy_acceptance import (
+from scripts.research.fear_buy_acceptance import (
     _top_symbols,
     _load_symbol,
     _market_fear_window_by_date,

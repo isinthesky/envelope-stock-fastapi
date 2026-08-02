@@ -81,7 +81,7 @@ class BacktestRequestDTO(BaseDTO):
         symbol: 종목코드
         start_date: 시작일
         end_date: 종료일
-        strategy_type: 전략 유형 (golden_cross, mean_reversion 등)
+        strategy_type: 전략 유형 (golden_cross, ma5_breakout)
         strategy_params: 전략별 추가 파라미터
         strategy_config: 전략 설정 (볼린저/엔벨로프 전략용)
         backtest_config: 백테스팅 설정
@@ -91,7 +91,7 @@ class BacktestRequestDTO(BaseDTO):
     start_date: datetime = Field(description="시작일")
     end_date: datetime = Field(description="종료일")
     strategy_type: str = Field(
-        default="mean_reversion", description="전략 유형 (golden_cross, mean_reversion)"
+        default="golden_cross", description="전략 유형 (golden_cross, ma5_breakout)"
     )
     strategy_params: dict | None = Field(
         default=None,
@@ -122,7 +122,7 @@ class MultiSymbolBacktestRequestDTO(BaseDTO):
         symbols: 종목코드 리스트
         start_date: 시작일
         end_date: 종료일
-        strategy_type: 전략 유형 (golden_cross, mean_reversion 등)
+        strategy_type: 전략 유형 (golden_cross, ma5_breakout)
         strategy_params: 전략별 추가 파라미터
         strategy_config: 전략 설정 (볼린저/엔벨로프 전략용)
         backtest_config: 백테스팅 설정
@@ -132,7 +132,7 @@ class MultiSymbolBacktestRequestDTO(BaseDTO):
     start_date: datetime = Field(description="시작일")
     end_date: datetime = Field(description="종료일")
     strategy_type: str = Field(
-        default="mean_reversion", description="전략 유형 (golden_cross, mean_reversion)"
+        default="golden_cross", description="전략 유형 (golden_cross, ma5_breakout)"
     )
     strategy_params: dict | None = Field(default=None, description="전략별 추가 파라미터")
     strategy_config: StrategyConfigDTO = Field(

@@ -14,7 +14,7 @@ import asyncio
 import pandas as pd
 
 from src.adapters.database.connection import get_async_session
-from scripts.fear_buy_acceptance import _top_symbols, _load_symbol
+from scripts.research.fear_buy_acceptance import _top_symbols, _load_symbol
 from src.application.domain.strategy.ohlcv_data_loader import get_kospi_or_proxy_closes
 
 REGIME_MA = 200

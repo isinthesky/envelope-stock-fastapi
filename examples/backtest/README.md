@@ -2,35 +2,29 @@
 
 이 디렉토리에는 백테스팅 시스템의 사용 예제가 포함되어 있습니다.
 
+> 레거시 볼린저+엔벨로프 평균회귀 예제(`simple_backtest.py`, `multi_symbol_backtest.py`,
+> `compare_strategies.py`, `optimize_strategy.py`, `optimized_backtest.py`,
+> `analyze_strategy.py`)는 생성기 폐기와 함께 제거되었습니다. 남은 예제는 골든크로스 계열입니다.
+> 라이브와 동일한 시그널로 검증하려면 온디맨드 예제가 아닌
+> `scripts/research/run_walk_forward.py`(`GoldenCrossParityReplay`)를 사용하세요.
+
 ## 예제 목록
 
-### 1. simple_backtest.py
-단일 종목(삼성전자)에 대한 간단한 백테스팅 예제
+### 1. golden_cross_backtest.py
+단일 종목 골든크로스 백테스트 예제 (`prepare_golden_cross_indicators` 기반).
 
 **실행 방법:**
 ```bash
-python examples/backtest/simple_backtest.py
+python examples/backtest/golden_cross_backtest.py
 ```
 
-**주요 기능:**
-- 볼린저 밴드 + 엔벨로프 전략 적용
-- 손절/익절 설정
-- 상세한 결과 출력
-- 거래 내역 확인
-
-### 2. multi_symbol_backtest.py
-여러 종목에 대한 백테스팅 및 성과 비교 예제
+### 2. golden_cross_ma_optimizer.py
+장기 MA 파라미터(150/155/160/165/170) 스윕 최적화 예제. `short=55` 고정.
 
 **실행 방법:**
 ```bash
-python examples/backtest/multi_symbol_backtest.py
+python examples/backtest/golden_cross_ma_optimizer.py
 ```
-
-**주요 기능:**
-- 다중 종목 동시 백테스팅
-- 종목별 성과 비교
-- 최고/최저 성과 종목 선정
-- 통계 요약
 
 ## 사전 준비
 
@@ -44,7 +38,7 @@ KIS_BASE_URL=https://openapi.koreainvestment.com:9443
 
 ### 2. 의존성 설치
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 3. Redis 실행
@@ -54,33 +48,19 @@ docker run -d -p 6379:6379 redis
 
 ## 전략 파라미터 조정
 
-백테스팅 성과를 개선하기 위해 다음 파라미터를 조정할 수 있습니다:
+골든크로스 파라미터는 `GoldenCrossConfigDTO`로 조정합니다
+(`scripts/common/strategy_presets.py`의 `default/fast/slow` 프리셋 참고):
 
-### 볼린저 밴드
 ```python
-BollingerBandConfig(
-    period=20,          # 이동평균 기간 (10, 20, 30 등)
-    std_multiplier=2.0  # 표준편차 배수 (1.5, 2.0, 2.5 등)
-)
-```
-
-### 엔벨로프
-```python
-EnvelopeConfig(
-    period=20,        # 이동평균 기간
-    percentage=2.0    # 채널 폭 비율 (1%, 2%, 3% 등)
-)
-```
-
-### 리스크 관리
-```python
-RiskManagementConfig(
-    use_stop_loss=True,
-    stop_loss_ratio=-0.03,     # -3% 손절
-    use_take_profit=True,
-    take_profit_ratio=0.05,    # +5% 익절
-    use_trailing_stop=False,
-    trailing_stop_ratio=0.02,  # 2% Trailing Stop
+GoldenCrossConfigDTO(
+    short_ma_period=55,   # 단기 MA
+    long_ma_period=165,   # 장기 MA
+    stochastic_k=14,
+    stochastic_d=3,
+    stochastic_smooth=3,
+    stop_loss_ratio=-0.05,
+    take_profit_ratio=0.10,
+    allocation_ratio=0.1,
 )
 ```
 
@@ -103,25 +83,11 @@ RiskManagementConfig(
 - **Profit Factor**: 총 이익 / 총 손실 (2.0 이상 우수)
 - **평균 보유 기간**: 포지션 평균 보유 일수
 
-## 성과 등급
-
-백테스팅 결과는 다음과 같이 등급이 부여됩니다:
-
-| 등급 | 점수 | 기준 |
-|------|------|------|
-| A+ | 90+ | 매우 우수 |
-| A | 80-89 | 우수 |
-| B+ | 70-79 | 양호 |
-| B | 60-69 | 보통 |
-| C+ | 50-59 | 개선 필요 |
-| C | 40-49 | 부족 |
-| D | 0-39 | 매우 부족 |
-
 ## 주의사항
 
 ### 1. 과최적화 (Overfitting) 방지
 - 너무 많은 파라미터 조정은 과거 데이터에만 최적화될 위험
-- Out-of-sample 테스트 권장
+- Out-of-sample(walk-forward) 테스트 권장
 
 ### 2. 거래 비용 고려
 - 수수료, 세금, 슬리피지가 수익률에 큰 영향
@@ -134,5 +100,4 @@ RiskManagementConfig(
 ## 추가 리소스
 
 - [백테스팅 시스템 문서](../../docs/backtesting/README.md)
-- [성과 지표 가이드](../../docs/backtesting/PERFORMANCE_METRICS.md)
-- [데이터 검증 가이드](../../docs/backtesting/DATA_VALIDATION.md)
+- 워크포워드 검증: `scripts/research/run_walk_forward.py`

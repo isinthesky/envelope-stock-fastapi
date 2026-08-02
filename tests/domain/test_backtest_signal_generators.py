@@ -5,7 +5,7 @@ import pandas as pd
 
 from src.application.domain.backtest.dto import BacktestConfigDTO
 from src.application.domain.backtest.engine import BacktestEngine
-from src.application.domain.backtest.signal_generators import GoldenCrossSignalGenerator
+from src.application.domain.backtest.generators import GoldenCrossSignalGenerator
 from src.application.domain.strategy.dto import (
     BollingerBandConfig,
     EnvelopeConfig,

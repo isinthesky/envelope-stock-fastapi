@@ -14,7 +14,7 @@ import asyncio
 import pandas as pd
 
 from src.adapters.database.connection import get_async_session
-from scripts.fear_buy_acceptance import _top_symbols, _load_symbol
+from scripts.research.fear_buy_acceptance import _top_symbols, _load_symbol
 
 TYPES = [(s, l) for s in (10, 20, 50) for l in (60, 120, 200)]  # 9
 
