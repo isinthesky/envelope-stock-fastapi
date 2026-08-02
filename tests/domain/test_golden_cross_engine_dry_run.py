@@ -251,3 +251,80 @@ async def test_handle_signal_skips_when_same_transition_already_executed():
     assert result is not None
     assert result.signal_status == SignalStatus.SKIPPED.value
     engine._execute_buy.assert_not_called()
+
+
+class _SignalRepoOrderPlacedNotExecuted:
+    """order_no는 기록됐지만 status는 EXECUTED로 못 넘어간 durable proof 시나리오."""
+
+    def __init__(self, existing) -> None:
+        self.existing = existing
+
+    async def get_by_symbol(self, strategy_id: int, symbol: str, limit: int = 50):
+        _ = strategy_id, symbol, limit
+        return [self.existing]
+
+    async def create_signal(self, **kwargs):
+        _ = kwargs
+        raise AssertionError("order_no durable proof 가드는 새 시그널을 만들면 안 됨")
+
+
+@pytest.mark.asyncio
+async def test_handle_signal_blocks_reorder_when_order_no_recorded_but_not_executed():
+    """create_order 성공 후 마킹 실패(FAILED/PENDING이지만 order_no 존재)여도 재주문 금지."""
+    existing = SimpleNamespace(
+        id=99,
+        signal_type=SignalType.BUY.value,
+        signal_status=SignalStatus.FAILED.value,  # PENDING이어도 결과 동일해야 함
+        prev_state=SymbolState.READY_TO_BUY.value,
+        new_state=SymbolState.IN_POSITION.value,
+        order_no="0000012345",  # 주문 접수 durable proof
+    )
+    engine = GoldenCrossEngine(session=SimpleNamespace(), kis_client=SimpleNamespace())
+    engine.signal_repo = _SignalRepoOrderPlacedNotExecuted(existing)
+    engine._execute_buy = AsyncMock(side_effect=AssertionError("이미 주문됨: 재주문 금지"))
+
+    result = await engine._handle_signal(
+        strategy=SimpleNamespace(id=1, account_no="dummy"),
+        symbol="005930",
+        transition=StateTransition(
+            new_state=SymbolState.IN_POSITION, signal=Signal.BUY, reason="재평가"
+        ),
+        current_snapshot=SimpleNamespace(
+            close=Decimal("101"),
+            ma_short=Decimal("110"),
+            ma_long=Decimal("100"),
+            stoch_k=35.0,
+            stoch_d=25.0,
+        ),
+        state=SimpleNamespace(state=SymbolState.READY_TO_BUY.value),
+        config=SimpleNamespace(),
+        safety_guard=SimpleNamespace(),
+        dry_run=False,
+    )
+
+    assert result.signal_status == SignalStatus.SKIPPED.value
+    engine._execute_buy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_guard_allows_retry_when_never_placed():
+    """order_no가 없으면(진짜 미주문) FAILED여도 재시도를 허용한다."""
+    existing = SimpleNamespace(
+        id=100,
+        signal_type=SignalType.BUY.value,
+        signal_status=SignalStatus.FAILED.value,
+        prev_state=SymbolState.READY_TO_BUY.value,
+        new_state=SymbolState.IN_POSITION.value,
+        order_no=None,
+    )
+    engine = GoldenCrossEngine(session=SimpleNamespace(), kis_client=SimpleNamespace())
+    engine.signal_repo = SimpleNamespace(get_by_symbol=AsyncMock(return_value=[existing]))
+
+    duplicate = await engine._find_duplicate_executed_signal(
+        strategy_id=1,
+        symbol="005930",
+        signal_type=SignalType.BUY,
+        prev_state=SymbolState.READY_TO_BUY.value,
+        new_state=SymbolState.IN_POSITION.value,
+    )
+    assert duplicate is None

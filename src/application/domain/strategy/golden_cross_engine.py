@@ -516,15 +516,41 @@ class GoldenCrossEngine:
         )
 
         order_result = await order_service.create_order(self.session, order_request)
+        order_no = getattr(order_result, "order_no", None)
 
-        # 시그널 업데이트
-        await self.signal_repo.update_execution(
-            signal_model.id,
-            status=SignalStatus.EXECUTED,
-            executed_price=price,
-            executed_quantity=quantity,
-            order_no=getattr(order_result, "order_no", None),
-        )
+        # 주문은 이미 브로커에 접수됨(order placed). 이후 durable 마킹이 실패해도
+        # 예외를 전파해 FAILED로 오기록하면 안 된다(가드가 EXECUTED만 보면 이중주문).
+        # 1단계: order_no를 우선 durable 커밋 — proof-of-placement 확보(상태는 PENDING 유지).
+        try:
+            await self.signal_repo.update_execution(
+                signal_model.id, status=SignalStatus.PENDING, order_no=order_no
+            )
+            await self.session.commit()
+        except Exception as e:
+            await self.session.rollback()
+            logger.critical(
+                f"[GC Engine] ORDER PLACED BUT order_no NOT DURABLY RECORDED — 수동 대사 필요: "
+                f"symbol={symbol} signal_id={signal_model.id} order_no={order_no}: {e}"
+            )
+            logger.info(f"[GC Engine] BUY {symbol} x {quantity} @ {price}")
+            return
+
+        # 2단계: 체결 상세 반영(EXECUTED). 실패해도 order_no가 durable하므로 가드가 재주문 차단.
+        try:
+            await self.signal_repo.update_execution(
+                signal_model.id,
+                status=SignalStatus.EXECUTED,
+                executed_price=price,
+                executed_quantity=quantity,
+                order_no=order_no,
+            )
+            await self.session.commit()
+        except Exception as e:
+            await self.session.rollback()
+            logger.critical(
+                f"[GC Engine] ORDER PLACED (order_no={order_no}) BUT SIGNAL NOT MARKED EXECUTED "
+                f"— 수동 대사 필요: symbol={symbol} signal_id={signal_model.id}: {e}"
+            )
 
         logger.info(f"[GC Engine] BUY {symbol} x {quantity} @ {price}")
 
@@ -568,17 +594,41 @@ class GoldenCrossEngine:
         )
 
         order_result = await order_service.create_order(self.session, order_request)
+        order_no = getattr(order_result, "order_no", None)
 
-        # 시그널 업데이트
-        await self.signal_repo.update_execution(
-            signal_model.id,
-            status=SignalStatus.EXECUTED,
-            executed_price=price,
-            executed_quantity=target_position.quantity,
-            order_no=getattr(order_result, "order_no", None),
-            realized_pnl=realized_pnl,
-            realized_pnl_ratio=realized_pnl_ratio,
-        )
+        # 주문 접수 후 durable 마킹(2단계). 실패해도 예외를 전파하지 않는다(이중주문 방지).
+        # 1단계: order_no 우선 durable 커밋(상태 PENDING 유지).
+        try:
+            await self.signal_repo.update_execution(
+                signal_model.id, status=SignalStatus.PENDING, order_no=order_no
+            )
+            await self.session.commit()
+        except Exception as e:
+            await self.session.rollback()
+            logger.critical(
+                f"[GC Engine] SELL ORDER PLACED BUT order_no NOT DURABLY RECORDED — 수동 대사 필요: "
+                f"symbol={symbol} signal_id={signal_model.id} order_no={order_no}: {e}"
+            )
+            return
+
+        # 2단계: 체결 상세 반영(EXECUTED + 실현손익).
+        try:
+            await self.signal_repo.update_execution(
+                signal_model.id,
+                status=SignalStatus.EXECUTED,
+                executed_price=price,
+                executed_quantity=target_position.quantity,
+                order_no=order_no,
+                realized_pnl=realized_pnl,
+                realized_pnl_ratio=realized_pnl_ratio,
+            )
+            await self.session.commit()
+        except Exception as e:
+            await self.session.rollback()
+            logger.critical(
+                f"[GC Engine] SELL ORDER PLACED (order_no={order_no}) BUT SIGNAL NOT MARKED EXECUTED "
+                f"— 수동 대사 필요: symbol={symbol} signal_id={signal_model.id}: {e}"
+            )
 
         pnl_text = f"{realized_pnl_ratio:.2%}" if realized_pnl_ratio is not None else "n/a"
         logger.info(
@@ -723,12 +773,26 @@ class GoldenCrossEngine:
         if not recent:
             return None
         latest = recent[0]
-        if (
-            latest.signal_status == SignalStatus.EXECUTED.value
-            and latest.signal_type == signal_type.value
+        same_transition = (
+            latest.signal_type == signal_type.value
             and latest.prev_state == prev_state
             and latest.new_state == new_state
-        ):
+        )
+        if not same_transition:
+            return None
+
+        # EXECUTED면 명백한 중복.
+        if latest.signal_status == SignalStatus.EXECUTED.value:
+            return latest
+
+        # status가 EXECUTED로 못 넘어갔어도(2단계 마킹 실패) order_no가 있으면 주문은 이미
+        # 브로커에 접수된 것이 durable하게 증명된다 → 재주문 차단. order_no가 없으면(진짜
+        # 미주문) 정상 재시도를 허용한다.
+        if getattr(latest, "order_no", None):
+            logger.critical(
+                f"[GC Engine] {symbol} signal_id={latest.id} order_no={latest.order_no} but "
+                f"status={latest.signal_status}(≠EXECUTED) — 주문 접수됨·마킹 실패 → 재주문 차단, 수동 대사 필요"
+            )
             return latest
         return None
 
