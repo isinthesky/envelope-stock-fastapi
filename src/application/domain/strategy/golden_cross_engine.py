@@ -396,6 +396,18 @@ class GoldenCrossEngine:
                 f"{state.state}->{transition.new_state.value} already EXECUTED as "
                 f"signal_id={duplicate.id}; skipping order (state sync likely failed previously)"
             )
+            # stale symbol_state 복구(best-effort): 이미 체결된 전이를 상태에 반영해
+            # 다음 실행에서 무한 skip/잘못된 라이프사이클 진행을 방지한다. 여기서 또
+            # 실패해도 주문은 나가지 않으므로(가드가 상단에서 차단) 안전하다.
+            try:
+                await self._update_state_after_signal(
+                    strategy.id, symbol, transition, current_snapshot
+                )
+            except Exception as e:
+                logger.error(
+                    f"[GC Engine] Duplicate-guard state repair failed for {symbol} "
+                    f"(signal_id={duplicate.id}): {e}"
+                )
             return self._create_dry_run_signal_dto(
                 strategy_id=strategy.id,
                 symbol=symbol,

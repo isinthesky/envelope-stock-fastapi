@@ -916,10 +916,10 @@ class SellStrategyService:
             ):
                 final_stage = SellStageEnum.REDUCE_2
                 stage_reasons.append(f"[MODE:{sell_mode}] 기계적 보호 규칙 → REDUCE_2")
-            if _rsi_decline and final_stage != SellStageEnum.HOLD:
-                if final_stage == SellStageEnum.REDUCE_1:
-                    final_stage = SellStageEnum.REDUCE_2
-                stage_reasons.append(f"[MODE:{sell_mode}] RSI+하락 확인 → 가속")
+            if _rsi_decline and final_stage == SellStageEnum.REDUCE_1:
+                # 실제 상승(REDUCE_1→REDUCE_2)이 일어날 때만 '가속'으로 기재한다.
+                final_stage = SellStageEnum.REDUCE_2
+                stage_reasons.append(f"[MODE:{sell_mode}] RSI+하락 확인 → 가속(REDUCE_2)")
 
         ctx.final_stage = final_stage
 
