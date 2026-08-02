@@ -34,6 +34,11 @@ from src.application.domain.backtest.portfolio_parity_engine import (
     PortfolioConstraints,
     PortfolioParityEngine,
 )
+from src.application.domain.backtest.regime import (
+    classify_regimes,
+    decompose_by_regime,
+    regime_summary_dict,
+)
 from src.application.domain.backtest.statistics import (
     bootstrap_sharpe_ci,
     deflated_sharpe_ratio,
@@ -92,6 +97,8 @@ class WalkForwardRunner:
         selection_metric: str = "sharpe_ratio",
         lookback_trading_days: int | None = None,
         min_fold_coverage: float = 0.9,
+        benchmark: pd.DataFrame | None = None,
+        regime_long_ma: int = 200,
     ) -> None:
         if not candidates:
             raise ValueError("at least one candidate config required")
@@ -100,6 +107,9 @@ class WalkForwardRunner:
         self.backtest_config = backtest_config or BacktestConfigDTO()
         self.selection_metric = selection_metric
         self.min_fold_coverage = min_fold_coverage
+        # 국면 분해용 벤치마크(예: KODEX 200). 없으면 regime 섹션 생략.
+        self.benchmark = benchmark
+        self.regime_long_ma = regime_long_ma
         if lookback_trading_days is None:
             long = max(c.config.ma_config.long_period for c in candidates)
             lookback_trading_days = long + 30
@@ -187,8 +197,14 @@ class WalkForwardRunner:
             )
             oos_segments.append(test_res.result.daily_stats)
 
-        oos, oos_returns = self._stitch_oos(oos_segments, self.backtest_config.initial_capital)
+        oos, oos_dated = self._stitch_oos(oos_segments, self.backtest_config.initial_capital)
+        oos_returns = [r for _, r in oos_dated]
         stats = self._overfitting_stats(oos_returns, trial_sharpes, cand_fold_matrix)
+        # 국면 분해(벤치마크 제공 시): 2022 약세장 OOS 성과 격리
+        if self.benchmark is not None and oos_dated:
+            regimes = classify_regimes(self.benchmark, long_ma=self.regime_long_ma)
+            decomp = decompose_by_regime(oos_dated, regimes)
+            stats["regime"] = regime_summary_dict(decomp)
         markdown = self._report_md(folds, oos, trials, stats)
         return WalkForwardReport(
             folds=folds,
@@ -299,8 +315,8 @@ class WalkForwardRunner:
 
     def _stitch_oos(
         self, segments: list[list[DailyStatsDTO]], initial_capital: Decimal
-    ) -> tuple[dict, list[float]]:
-        """(집계지표 dict, 연속 OOS 일별수익 배열)을 반환한다."""
+    ) -> tuple[dict, list[tuple[datetime, float]]]:
+        """(집계지표 dict, 날짜가 붙은 연속 OOS 일별수익)을 반환한다."""
         segments = [s for s in segments if s]
         empty = {
             "total_return": 0.0,
@@ -334,7 +350,7 @@ class WalkForwardRunner:
         seen: set[date] = set()
         equities = [c0]
         dates = []
-        oos_returns: list[float] = []
+        oos_dated: list[tuple[datetime, float]] = []
         for dt, r in sorted(per_day, key=lambda x: x[0]):
             d = dt.date() if hasattr(dt, "date") else dt
             if d in seen:
@@ -342,7 +358,7 @@ class WalkForwardRunner:
             seen.add(d)
             equities.append(equities[-1] * (1.0 + r))
             dates.append(dt)
-            oos_returns.append(r)
+            oos_dated.append((dt, r))
 
         if len(equities) < 2:
             return {**empty, "folds": len(segments)}, []
@@ -369,8 +385,34 @@ class WalkForwardRunner:
                 "trading_days": len(seen),
                 "folds": len(segments),
             },
-            oos_returns,
+            oos_dated,
         )
+
+    @staticmethod
+    def _regime_lines(regime: dict | None) -> list[str]:
+        if not regime:
+            return []
+        lines = [
+            "### 국면별 OOS 분해 (강세장 수익은 무의미 — 약세장 성과가 핵심)",
+            "",
+            "| Regime | Days | Return% | Daily Sharpe | MDD% |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+        for name in ("bull", "bear", "chop"):
+            m = regime.get(name)
+            if not m:
+                continue
+            lines.append(
+                f"| {name} | {m['n_days']} | {m['total_return']} "
+                f"| {m['daily_sharpe']} | {m['mdd']} |"
+            )
+        lines.append("")
+        lines.append(
+            "> ⚠️ **bear 구간의 Return/MDD가 실질 합격 판정의 중심.** "
+            "bull 구간 고수익만으로 판단 금지."
+        )
+        lines.append("")
+        return lines
 
     def _report_md(self, folds: list[FoldOutcome], oos: dict, trials: int, stats: dict) -> str:
         pbo = stats.get("pbo")
@@ -400,6 +442,7 @@ class WalkForwardRunner:
             f"- OOS 일별 Sharpe 95% CI: "
             f"[{stats.get('oos_sharpe_ci_low')}, {stats.get('oos_sharpe_ci_high')}]",
             "",
+            *self._regime_lines(stats.get("regime")),
             "## Per-fold (train 선택 → test OOS)",
             "",
             "| Fold | Train | Test(OOS) | Eligible | Excluded | Selected | Hash | "

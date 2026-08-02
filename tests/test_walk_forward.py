@@ -138,6 +138,28 @@ def test_runner_produces_real_oos_metrics_and_frozen_hashes():
     assert "과적합 정량화" in report.markdown
 
 
+def test_runner_regime_decomposition_with_benchmark():
+    panels = _panels(["A", "B", "C"])
+    days = _trading_days(panels)
+    windows = generate_rolling_windows(days, train_size=140, test_size=40, step=40, embargo=5)
+    benchmark = _walk_panel(seed=42)  # 벤치마크 시계열
+
+    runner = WalkForwardRunner(
+        candidates=[WalkForwardCandidate("os25", _cfg(25.0))],
+        constraints=PortfolioConstraints(max_positions=3),
+        backtest_config=CAPITAL,
+        benchmark=benchmark,
+        regime_long_ma=60,
+    )
+    report = runner.run(panels, days, windows)
+
+    assert "regime" in report.stats
+    for name in ("bull", "bear", "chop"):
+        assert name in report.stats["regime"]
+        assert "mdd" in report.stats["regime"][name]
+    assert "국면별 OOS 분해" in report.markdown
+
+
 def test_runner_asof_universe_excludes_short_history_symbol():
     # A,B,C 전기간 / SHORT는 후반부만 존재 → 초기 fold에서 제외되어야 함
     panels = _panels(["A", "B", "C"])
