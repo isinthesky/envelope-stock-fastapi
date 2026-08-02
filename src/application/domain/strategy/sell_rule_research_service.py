@@ -34,6 +34,7 @@ from src.adapters.database.repositories.personal_flow_snapshot_repository import
 from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.strategy.strategy_contract import market_credit_label
 from src.application.domain.strategy.symbol_validation import filter_tradable_items
+from src.settings.config import settings
 from src.settings.sell_score_settings import DEFAULT_PEAK_RULE_THRESHOLDS
 
 DEFAULT_PREREGISTERED_SYMBOL_LIMIT: Final = 50

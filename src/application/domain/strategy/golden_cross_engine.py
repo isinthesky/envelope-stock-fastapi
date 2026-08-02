@@ -229,7 +229,12 @@ class GoldenCrossEngine:
             StrategySignalDTO | None: 시그널 (발생 시)
         """
         # 1. OHLCV 데이터 조회
-        df = await self._fetch_ohlcv(symbol, config.lookback_days)
+        # 장기 MA(long_period+10) 캔들을 확보하도록 조회 창을 산출(스캐너와 동일 공식).
+        # config.lookback_days(달력일)만으로는 거래일 환산 시 부족할 수 있음(예: MA200 → 210 거래일).
+        fetch_days = max(
+            config.lookback_days, int((config.ma_config.long_period + 20) * 1.6)
+        )
+        df = await self._fetch_ohlcv(symbol, fetch_days)
         if df is None or len(df) < config.ma_config.long_period + 10:
             logger.warning(f"[GC Engine] Insufficient data for {symbol}")
             return None
