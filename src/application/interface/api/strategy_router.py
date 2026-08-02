@@ -41,7 +41,6 @@ from src.application.domain.strategy.dto import (
     GoldenCrossConfigDTO,
     GoldenCrossScanListDTO,
     GoldenCrossRecommendationDTO,
-    MA5BreakoutScanListDTO,
     PortfolioCashPlanDTO,
     PresetActivateRequestDTO,
     SellSignalAnalysisDTO,
@@ -346,88 +345,6 @@ async def scan_golden_cross_symbols(
         gc_only=gc_only,
     )
     return ResponseDTO.success_response(result, "Golden cross scan completed")
-
-
-@router.get(
-    "/universe/ma5-breakout-scan",
-    response_model=ResponseDTO[MA5BreakoutScanListDTO],
-    status_code=status.HTTP_200_OK,
-    summary="MA5 돌파 종목 스캔",
-    description="MA5가 MA300의 0.7% 상단을 돌파한 종목 필터링",
-)
-async def scan_ma5_breakout(
-    buy_service: BuyStrategyServiceDep,
-    market: str | None = Query(default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF)"),
-    short_period: int = Query(default=5, ge=3, le=20, description="단기 MA 기간"),
-    long_period: int = Query(default=300, ge=100, le=500, description="장기 MA 기간"),
-    envelope_pct: float = Query(default=0.7, ge=0.1, le=3.0, description="엔벨로프 %"),
-    use_volume_filter: bool = Query(default=True, description="거래량 필터 사용"),
-    include_etf: bool = Query(default=True, description="ETF 종목 포함 여부"),
-    limit: int = Query(default=1000, ge=1, le=5000, description="스캔 대상 최대 종목 수"),
-    max_concurrent: int | None = Query(
-        default=None, ge=1, le=50, description="동시 처리 수 (미지정 시 설정값 사용)"
-    ),
-) -> ResponseDTO[MA5BreakoutScanListDTO]:
-    """
-    MA5 돌파 종목 스캔 - @transaction이 세션을 관리
-
-    매수 조건:
-    - MA5 > MA300 × (1 + envelope_pct/100)
-    - 현재가 > MA300 상단
-    - 거래량 ≥ 20일 평균 (선택)
-
-    상태:
-    - BREAKOUT: 오늘 돌파 (이전에 상단 아래 → 현재 상단 위)
-    - ABOVE: 이미 상단 위에서 거래 중
-    - BELOW: 상단 아래
-    """
-    result = await buy_service.scan_ma5_breakout_candidates(
-        market=market,
-        short_period=short_period,
-        long_period=long_period,
-        envelope_pct=envelope_pct,
-        use_volume_filter=use_volume_filter,
-        include_etf=include_etf,
-        limit=limit,
-        max_concurrent=max_concurrent,
-    )
-    return ResponseDTO.success_response(result, "MA5 breakout scan completed")
-
-
-@router.post(
-    "/universe/ma5-breakout-scan-symbols",
-    response_model=ResponseDTO[MA5BreakoutScanListDTO],
-    status_code=status.HTTP_200_OK,
-    summary="특정 종목 MA5 돌파 스캔",
-    description="지정한 종목 목록에 대해 MA5 돌파 스캔",
-)
-async def scan_ma5_breakout_symbols(
-    symbols: list[dict],
-    buy_service: BuyStrategyServiceDep,
-    short_period: int = Query(default=5, ge=3, le=20, description="단기 MA 기간"),
-    long_period: int = Query(default=300, ge=100, le=500, description="장기 MA 기간"),
-    envelope_pct: float = Query(default=0.7, ge=0.1, le=3.0, description="엔벨로프 %"),
-    use_volume_filter: bool = Query(default=True, description="거래량 필터 사용"),
-) -> ResponseDTO[MA5BreakoutScanListDTO]:
-    """
-    특정 종목 목록에 대해 MA5 돌파 스캔 - @transaction이 세션을 관리
-
-    Request Body:
-    ```json
-    [
-        {"symbol": "005930", "name": "삼성전자", "market": "KOSPI"},
-        {"symbol": "000660", "name": "SK하이닉스", "market": "KOSPI"}
-    ]
-    ```
-    """
-    result = await buy_service.scan_ma5_breakout_symbols(
-        symbols=symbols,
-        short_period=short_period,
-        long_period=long_period,
-        envelope_pct=envelope_pct,
-        use_volume_filter=use_volume_filter,
-    )
-    return ResponseDTO.success_response(result, "MA5 breakout scan completed")
 
 
 @router.post(

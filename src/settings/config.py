@@ -140,7 +140,7 @@ class Settings(BaseSettings):
         description="KIS REST 연속 호출 간 최소 간격 (ms). 0이면 window/capacity로 자동 산출",
     )
     scan_concurrency_limit: int = Field(
-        default=5, ge=1, description="스캔 동시 처리 수 (골든크로스/MA5)"
+        default=5, ge=1, description="스캔 동시 처리 수 (골든크로스)"
     )
 
     # ==================== Universe Refresh (Ops Safety) ====================

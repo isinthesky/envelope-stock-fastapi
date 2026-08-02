@@ -62,26 +62,8 @@
 .active-toggle.inactive { color: #9ca3af; }
 .loading { opacity: 0.6; pointer-events: none; }
 
-/* 전략 선택 탭 */
-.strategy-tabs { display: flex; gap: 8px; margin-bottom: 20px; }
-.strategy-tab { padding: 12px 24px; background: #e2e8f0; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s; }
-.strategy-tab:hover { background: #cbd5e1; }
-.strategy-tab.active { background: #3b82f6; color: white; }
-.strategy-tab.ma5 { border-left: 4px solid #ec4899; }
-.strategy-tab.ma5.active { background: #ec4899; }
 .strategy-content { display: none; }
 .strategy-content.active { display: block; }
-
-/* MA5 전략 스타일 */
-.strategy-info-ma5 { background: linear-gradient(135deg, #831843 0%, #be185d 100%); color: white; border: none; }
-.strategy-info-ma5 h2 { color: #fbcfe8; margin-bottom: 16px; }
-.strategy-info-ma5 p { color: #fce7f3; line-height: 1.6; }
-.strategy-info-ma5 .strategy-flow .arrow { color: #f9a8d4; }
-.strategy-info-ma5 .config-item .label { color: #f9a8d4; }
-
-.state-ma5-breakout { background: #fce7f3; color: #9d174d; border: 2px solid #ec4899; font-weight: 700; }
-.state-ma5-above { background: #fbcfe8; color: #be185d; }
-.state-ma5-below { background: #fdf2f8; color: #9d174d; }
 
 .last-search {
   font-size: 13px;

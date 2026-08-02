@@ -8,7 +8,7 @@
 
 {% block content %}
 <h1>매수 전략</h1>
-<p>골든크로스 / MA5 돌파 전략</p>
+<p>골든크로스 전략</p>
 {% if etf_universe_enabled %}
 <p style="font-size:12px; color:#0369a1; background:#e0f2fe; display:inline-block; padding:4px 10px; border-radius:8px; margin:2px 0;">
   📊 유니버스: <strong>ETF {{ etf_universe_count }}종</strong> (개별종목 중단 · 장수 ETF 추세추종)
@@ -17,12 +17,6 @@
 
 <div class="row embed-hide" style="margin: 12px 0; flex-wrap: wrap;">
   <button class="secondary" onclick="location.href='/mypage/strategy/dashboard'">My Strategies</button>
-</div>
-
-<!-- 전략 선택 탭 -->
-<div class="strategy-tabs">
-  <button class="strategy-tab active" onclick="showStrategy('golden_cross')">골든크로스 (MA{{ gc_short_ma }}/{{ gc_long_ma }})</button>
-  <button class="strategy-tab ma5" onclick="showStrategy('ma5_breakout')">MA5 돌파 (MA5/300)</button>
 </div>
 
 <!-- 골든크로스 전략 -->
@@ -240,134 +234,6 @@
   </table>
 </section>
 </div><!-- end strategy_golden_cross -->
-
-<!-- MA5 돌파 전략 -->
-<div id="strategy_ma5_breakout" class="strategy-content">
-<section class="strategy-info strategy-info-ma5">
-  <h2>전략 개요</h2>
-  <p><strong>MA5가 MA300의 0.7% 상단을 돌파</strong>할 때 매수하는 단기 모멘텀 전략</p>
-
-  <div class="strategy-flow">
-    <span class="step">MA300<br><small>장기 추세</small></span>
-    <span class="arrow">→</span>
-    <span class="step">+0.7% 상단<br><small>엔벨로프</small></span>
-    <span class="arrow">→</span>
-    <span class="step" style="background: rgba(236,72,153,0.3); border: 1px solid #ec4899;">MA5 돌파<br><small>매수 신호</small></span>
-    <span class="arrow">→</span>
-    <span class="step" style="background: rgba(236,72,153,0.4); border: 2px solid #ec4899;">거래량↑<br><small>확인</small></span>
-  </div>
-
-  <p style="margin-top: 16px; font-size: 13px; color: #fce7f3;">
-    <strong>매수 조건:</strong>
-    ① MA5 > MA300×1.007 (상단 돌파)&nbsp;&nbsp;
-    ② 현재가 > MA300×1.007&nbsp;&nbsp;
-    ③ 거래량 ≥ 20일 평균 (선택)
-  </p>
-
-  <div class="config-grid">
-    <div class="config-item">
-      <div class="label">단기 이평선</div>
-      <div class="value">MA5</div>
-    </div>
-    <div class="config-item">
-      <div class="label">장기 이평선</div>
-      <div class="value">MA300 (분홍)</div>
-    </div>
-    <div class="config-item">
-      <div class="label">엔벨로프</div>
-      <div class="value">0.7%</div>
-    </div>
-    <div class="config-item">
-      <div class="label">보조 이평선</div>
-      <div class="value">MA400 (검정)</div>
-    </div>
-    <div class="config-item">
-      <div class="label">거래량 필터</div>
-      <div class="value">20일 평균↑</div>
-    </div>
-    <div class="config-item">
-      <div class="label">매도 조건</div>
-      <div class="value">MA5 < 상단</div>
-    </div>
-  </div>
-</section>
-
-<section>
-  <h2>MA5 돌파 스크리닝</h2>
-  <div class="row">
-    <button onclick="scanMA5Breakout()" style="background: #ec4899; color: white;">MA5 돌파 스캔</button>
-    <button onclick="scanMA5Symbols()" class="secondary">직접 입력 스캔</button>
-  </div>
-  <div class="last-search" id="ma5_last_search">마지막 검색: -</div>
-  <div class="row" style="margin-top: 8px;">
-    <label style="font-size: 12px;">MA 기간:</label>
-    <input id="ma5_short_period" type="number" value="5" min="3" max="20" style="width: 50px;" />
-    <input id="ma5_long_period" type="number" value="300" min="100" max="500" style="width: 60px;" />
-    <label style="font-size: 12px; margin-left: 12px;">엔벨로프 %:</label>
-    <input id="ma5_envelope_pct" type="number" value="0.7" min="0.1" max="3" step="0.1" style="width: 50px;" />
-    <label style="font-size: 12px; margin-left: 12px;">
-      <input type="checkbox" id="ma5_use_volume" checked /> 거래량 필터
-    </label>
-  </div>
-
-  <div style="margin-top: 16px; padding: 16px; background: #fdf2f8; border: 1px solid #fbcfe8; border-radius: 8px;">
-    <h4 style="margin: 0 0 8px 0; color: #9d174d;">종목 직접 입력</h4>
-    <p style="font-size: 12px; color: #64748b; margin-bottom: 8px;">한 줄에 하나의 종목코드를 입력하세요.</p>
-    <textarea id="ma5_symbols" rows="3" placeholder="069500&#10;102110&#10;229200" style="width: 100%; margin-bottom: 8px; font-family: monospace;"></textarea>
-  </div>
-
-  <div class="stats-row" id="ma5_stats_row" style="display:none; margin-top: 16px;">
-    <div class="stat-card">
-      <div class="number" id="ma5_stat_total">-</div>
-      <div class="label">전체 종목</div>
-    </div>
-    <div class="stat-card" style="border: 2px solid #ec4899;">
-      <div class="number" id="ma5_stat_breakout" style="color: #9d174d;">-</div>
-      <div class="label">돌파 종목</div>
-    </div>
-    <div class="stat-card">
-      <div class="number" id="ma5_stat_above">-</div>
-      <div class="label">상단 위</div>
-    </div>
-    <div class="stat-card">
-      <div class="number" id="ma5_stat_below">-</div>
-      <div class="label">상단 아래</div>
-    </div>
-  </div>
-
-  <div id="ma5_scan_container" style="margin-top: 16px;">
-    <div class="tabs">
-      <button class="tab active" onclick="showMA5Tab('BREAKOUT')" style="background: #fce7f3; color: #9d174d;">돌파 종목</button>
-      <button class="tab" onclick="showMA5Tab('ABOVE')">상단 위</button>
-      <button class="tab" onclick="showMA5Tab('all')">전체</button>
-    </div>
-
-    <table class="stock-table">
-      <thead>
-        <tr>
-          <th>종목코드</th>
-          <th>종목명</th>
-          <th>상태</th>
-          <th>현재가</th>
-          <th>MA5</th>
-          <th>MA300</th>
-          <th>상단가</th>
-          <th>괴리율</th>
-          <th>거래량비</th>
-        </tr>
-      </thead>
-      <tbody id="ma5_scan_table_body">
-        <tr><td colspan="9" class="placeholder-message" style="border: none;">
-          결과를 불러오는 중...
-        </td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <pre id="ma5_scan_output" style="margin-top: 12px;">MA5 돌파 스캔 버튼을 클릭하세요</pre>
-</section>
-</div><!-- end strategy_ma5_breakout -->
-
 {% endblock %}
 
 {% block extra_script_tags %}

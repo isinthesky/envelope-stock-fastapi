@@ -66,20 +66,8 @@ class BacktestEngine:
                 min_reentry_cooldown_bars=params.get("min_reentry_cooldown_bars", 5),
                 disable_stoch_overbought_sell=params.get("disable_stoch_overbought_sell", True),
             )
-        elif strategy_type == "ma5_breakout":
-            self.signal_generator = create_signal_generator(
-                strategy_type="ma5_breakout",
-                short_ma_period=params.get("short_ma_period", 5),
-                long_ma_period=params.get("long_ma_period", 300),
-                envelope_percentage=params.get("envelope_percentage", 0.7),
-                secondary_ma_period=params.get("secondary_ma_period", 400),
-                secondary_envelope_percentage=params.get("secondary_envelope_percentage", 0.7),
-                volume_ma_period=params.get("volume_ma_period", 20),
-                volume_ratio_threshold=params.get("volume_ratio_threshold", 1.0),
-                use_volume_filter=params.get("use_volume_filter", True),
-            )
         else:
-            # 레거시 볼린저 평균회귀 생성기는 제거됨. 미지원 타입은 명시적으로 실패한다.
+            # golden_cross 외 타입은 지원하지 않는다. 미지원 타입은 명시적으로 실패한다.
             self.signal_generator = create_signal_generator(strategy_type=strategy_type, **params)
 
         self.order_manager = BacktestOrderManager(backtest_config)
@@ -191,10 +179,6 @@ class BacktestEngine:
         )
 
     def _generate_signal(self, current_price: Decimal, volume: float | None = None) -> str:
-        if self.strategy_type == "ma5_breakout" and volume is not None:
-            return self.signal_generator.generate_signal(
-                price_history=self.price_history, current_price=current_price, volume=volume
-            )
         if self.strategy_type == "golden_cross":
             return self.signal_generator.generate_signal(
                 price_history=self.price_history,

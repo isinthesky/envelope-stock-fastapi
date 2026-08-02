@@ -8,40 +8,20 @@ let currentFilter = 'all';
 let universeFilter = 'all';
 let gcFilter = 'all';
 
-// MA5 전략 관련 변수
-let ma5ScanStocks = [];
-let ma5Filter = 'BREAKOUT';
-
 // 스캔 진행 상태
-let scanInProgress = { gc: false, ma5: false };
+let scanInProgress = { gc: false };
 
 // 캐시 설정
 const CACHE_SCHEMA_VERSION = 1;
 const CACHE_TTL_MS = 3600000;  // 1시간
 const SCAN_COOLDOWNS = {
-  gc: 300000,   // 5분
-  ma5: 180000   // 3분
+  gc: 300000   // 5분
 };
 const REFRESH_COOLDOWN_MS = 60000;  // 1분
 
 const BUY_STORAGE_KEYS = {
   gc: 'buyStrategy.gcScan',
-  ma5: 'buyStrategy.ma5Scan',
   refresh: 'buyStrategy.lastRefresh'
-};
-
-// 전략 탭 전환
-const showStrategy = (strategy) => {
-  document.querySelectorAll('.strategy-tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.strategy-content').forEach(c => c.classList.remove('active'));
-
-  if (strategy === 'golden_cross') {
-    document.querySelector('.strategy-tab:not(.ma5)').classList.add('active');
-    document.getElementById('strategy_golden_cross').classList.add('active');
-  } else {
-    document.querySelector('.strategy-tab.ma5').classList.add('active');
-    document.getElementById('strategy_ma5_breakout').classList.add('active');
-  }
 };
 
 const formatDateTime = (dateStr) => {
@@ -223,205 +203,6 @@ const escapeHtml = (value) => String(value ?? '')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#39;');
-
-// MA5 돌파 스캔 (유니버스 전체)
-const scanMA5Breakout = async (forceRefresh = false) => {
-  // 중복 클릭 방지
-  if (!forceRefresh) {
-    const check = canScan('ma5');
-    if (!check.allowed) {
-      if (check.forceAllowed) {
-        if (!confirm(`${check.reason}\n강제로 다시 스캔하시겠습니까?`)) {
-          return;
-        }
-      } else {
-        alert(check.reason);
-        return;
-      }
-    }
-  }
-
-  scanInProgress.ma5 = true;
-  document.getElementById("ma5_scan_output").textContent = "MA5 돌파 스캔 중...";
-
-  const shortPeriod = parseInt(document.getElementById("ma5_short_period").value) || 5;
-  const longPeriod = parseInt(document.getElementById("ma5_long_period").value) || 300;
-  const envelopePct = parseFloat(document.getElementById("ma5_envelope_pct").value) || 0.7;
-  const useVolume = document.getElementById("ma5_use_volume").checked;
-
-  const url = `/api/v1/strategies/universe/ma5-breakout-scan?short_period=${shortPeriod}&long_period=${longPeriod}&envelope_pct=${envelopePct}&use_volume_filter=${useVolume}`;
-
-  try {
-    const response = await fetch(url);
-    const result = await response.json();
-
-    if (result.success && result.data) {
-      displayMA5ScanResults(result.data);
-      document.getElementById("ma5_scan_output").textContent =
-        `스캔 완료: ${result.data.stocks?.length || 0}개 종목 발견 (총 ${result.data.total_scanned}개 스캔)`;
-    } else {
-      document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${result.message || 'Unknown error'}`;
-    }
-  } catch (e) {
-    console.error('MA5 scan failed:', e);
-    document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${e.message}`;
-  } finally {
-    scanInProgress.ma5 = false;
-  }
-};
-
-// MA5 돌파 직접 입력 스캔
-const scanMA5Symbols = async (forceRefresh = false) => {
-  // 중복 클릭 방지
-  if (!forceRefresh && scanInProgress.ma5) {
-    alert('스캔 진행 중...');
-    return;
-  }
-
-  const symbolsText = document.getElementById("ma5_symbols").value.trim();
-  if (!symbolsText) {
-    alert("종목코드를 입력하세요.");
-    return;
-  }
-
-  const symbolList = symbolsText.split(/[\n,]/)
-    .map(s => s.trim())
-    .filter(s => s.length > 0)
-    .map(symbol => ({ symbol, name: null, market: "UNKNOWN" }));
-
-  if (symbolList.length === 0) {
-    alert("유효한 종목코드가 없습니다.");
-    return;
-  }
-
-  scanInProgress.ma5 = true;
-  document.getElementById("ma5_scan_output").textContent = `${symbolList.length}개 종목 MA5 스캔 중...`;
-
-  const shortPeriod = parseInt(document.getElementById("ma5_short_period").value) || 5;
-  const longPeriod = parseInt(document.getElementById("ma5_long_period").value) || 300;
-  const envelopePct = parseFloat(document.getElementById("ma5_envelope_pct").value) || 0.7;
-  const useVolume = document.getElementById("ma5_use_volume").checked;
-
-  try {
-    const response = await fetch(
-      `/api/v1/strategies/universe/ma5-breakout-scan-symbols?short_period=${shortPeriod}&long_period=${longPeriod}&envelope_pct=${envelopePct}&use_volume_filter=${useVolume}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(symbolList)
-      }
-    );
-
-    const result = await response.json();
-    if (result.success && result.data) {
-      displayMA5ScanResults(result.data);
-      document.getElementById("ma5_scan_output").textContent =
-        `스캔 완료: ${result.data.stocks?.length || 0}개 종목 발견`;
-    } else {
-      document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${result.message || 'Unknown error'}`;
-    }
-  } catch (e) {
-    console.error('MA5 symbol scan failed:', e);
-    document.getElementById("ma5_scan_output").textContent = `스캔 실패: ${e.message}`;
-  } finally {
-    scanInProgress.ma5 = false;
-  }
-};
-
-// MA5 스캔 결과 표시
-const displayMA5ScanResults = (data, options = { persist: true }) => {
-  ma5ScanStocks = data.stocks || [];
-
-  document.getElementById("ma5_scan_container").style.display = "block";
-  document.getElementById("ma5_stats_row").style.display = "flex";
-
-  // 통계 계산
-  const breakoutCount = ma5ScanStocks.filter(s => s.ma5_state === 'BREAKOUT').length;
-  const aboveCount = ma5ScanStocks.filter(s => s.ma5_state === 'ABOVE').length;
-  const belowCount = ma5ScanStocks.filter(s => s.ma5_state === 'BELOW').length;
-
-  document.getElementById("ma5_stat_total").textContent = data.total_scanned || ma5ScanStocks.length;
-  document.getElementById("ma5_stat_breakout").textContent = breakoutCount;
-  document.getElementById("ma5_stat_above").textContent = aboveCount;
-  document.getElementById("ma5_stat_below").textContent = belowCount;
-
-  ma5Filter = 'BREAKOUT';
-  renderMA5ScanTable(ma5ScanStocks);
-
-  const scanTime = data.scan_time || new Date().toISOString();
-  if (options.persist) {
-    saveLastScan(BUY_STORAGE_KEYS.ma5, data, scanTime);
-  }
-  updateLastSearchLabel("ma5_last_search", scanTime, data.stocks?.length, !options.persist);
-};
-
-// MA5 테이블 렌더링
-const renderMA5ScanTable = (stocks) => {
-  let filtered;
-  if (ma5Filter === 'all') {
-    filtered = stocks;
-  } else if (ma5Filter === 'BREAKOUT') {
-    filtered = stocks.filter(s => s.ma5_state === 'BREAKOUT');
-  } else if (ma5Filter === 'ABOVE') {
-    filtered = stocks.filter(s => s.ma5_state === 'ABOVE' || s.ma5_state === 'BREAKOUT');
-  } else {
-    filtered = stocks.filter(s => s.ma5_state === ma5Filter);
-  }
-
-  const tbody = document.getElementById("ma5_scan_table_body");
-
-  // 필터 결과가 없으면 안내 메시지 표시
-  if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" class="placeholder-message" style="border: none;">
-      해당 조건에 맞는 종목이 없습니다.
-    </td></tr>`;
-    return;
-  }
-
-  tbody.innerHTML = filtered.map(stock => {
-    const stateClass = getMA5StateClass(stock.ma5_state);
-    const stateLabel = escapeHtml(getMA5StateLabel(stock.ma5_state));
-    const gapClass = stock.gap_ratio > 0 ? 'bullish' : 'bearish';
-    const volRatioClass = stock.volume_ratio >= 1 ? 'bullish' : '';
-
-    return `<tr>
-      <td><strong>${escapeHtml(stock.symbol || '-')}</strong></td>
-      <td>${escapeHtml(stock.name || '-')}</td>
-      <td><span class="state-badge ${stateClass}">${stateLabel}</span></td>
-      <td class="indicator">${formatNumber(stock.current_price)}</td>
-      <td class="indicator">${formatNumber(stock.ma5)}</td>
-      <td class="indicator">${formatNumber(stock.ma300)}</td>
-      <td class="indicator">${formatNumber(stock.upper_band)}</td>
-      <td class="indicator ${gapClass}">${stock.gap_ratio?.toFixed(2) || '-'}%</td>
-      <td class="indicator ${volRatioClass}">${stock.volume_ratio?.toFixed(2) || '-'}x</td>
-    </tr>`;
-  }).join('');
-};
-
-const showMA5Tab = (filter) => {
-  ma5Filter = filter;
-  document.querySelectorAll('#ma5_scan_container .tab').forEach(t => t.classList.remove('active'));
-  event.target.classList.add('active');
-  renderMA5ScanTable(ma5ScanStocks);
-};
-
-const getMA5StateClass = (state) => {
-  const map = {
-    'BREAKOUT': 'state-ma5-breakout',
-    'ABOVE': 'state-ma5-above',
-    'BELOW': 'state-ma5-below'
-  };
-  return map[state] || '';
-};
-
-const getMA5StateLabel = (state) => {
-  const map = {
-    'BREAKOUT': '돌파',
-    'ABOVE': '상단 위',
-    'BELOW': '상단 아래'
-  };
-  return map[state] || state;
-};
 
 // 페이지 로드 시 히스토리 조회
 const loadBuyHistory = async () => {
@@ -1157,26 +938,6 @@ const loadSavedScans = () => {
       <tr><td colspan="${window.ETF_MODE ? 7 : 11}" class="placeholder-message" style="border: none;">
         저장된 스캔 결과가 없습니다.<br>
         <small style="color: #94a3b8;">골든크로스 스캔 버튼을 클릭하세요.</small>
-      </td></tr>
-    `;
-  }
-
-  const ma5Saved = loadLastScan(BUY_STORAGE_KEYS.ma5);
-  if (ma5Saved?.data) {
-    // persist: false로 캐시 데이터 표시 (savedAt 갱신 방지)
-    displayMA5ScanResults(ma5Saved.data, { persist: false });
-    updateLastSearchLabel("ma5_last_search", ma5Saved.timestamp, ma5Saved.data.stocks?.length, ma5Saved.isStale);
-    const staleText = ma5Saved.isStale ? ' (캐시됨)' : '';
-    document.getElementById("ma5_scan_output").textContent =
-      `마지막 스캔${staleText} (${formatDateTime(ma5Saved.timestamp)}): ` +
-      `${ma5Saved.data.stocks?.length || 0}개 종목`;
-  } else {
-    // 저장된 결과 없음 - 안내 메시지 표시
-    document.getElementById("ma5_scan_container").style.display = "block";
-    document.getElementById("ma5_scan_table_body").innerHTML = `
-      <tr><td colspan="9" class="placeholder-message" style="border: none;">
-        저장된 스캔 결과가 없습니다.<br>
-        <small style="color: #94a3b8;">MA5 돌파 스캔 버튼을 클릭하세요.</small>
       </td></tr>
     `;
   }

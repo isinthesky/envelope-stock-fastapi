@@ -628,44 +628,6 @@ class GoldenCrossRecommendationDTO(BaseDTO):
     selection_criteria: list[str] = Field(default_factory=list, description="추천 선정 기준")
 
 
-# ==================== MA5 Breakout Strategy DTOs ====================
-
-
-class MA5BreakoutScanItemDTO(BaseDTO):
-    """MA5 돌파 스캔 결과 항목 DTO"""
-
-    symbol: str = Field(description="종목코드")
-    name: str | None = Field(default=None, description="종목명")
-    market: str | None = Field(default=None, description="시장 구분")
-    current_price: float = Field(description="현재가")
-
-    # 이동평균
-    ma5: float = Field(description="5일 이동평균")
-    ma300: float = Field(description="300일 이동평균")
-    upper_band: float = Field(description="300일선 0.7% 상단")
-
-    # 상태
-    ma5_state: str = Field(
-        description="MA5 상태 (BREAKOUT: 돌파, ABOVE: 상단 위, BELOW: 상단 아래)"
-    )
-    gap_ratio: float = Field(description="MA5와 상단 괴리율 ((MA5-상단)/상단*100)")
-
-    # 거래량
-    volume_ratio: float | None = Field(default=None, description="거래량 비율 (현재/20일평균)")
-
-
-class MA5BreakoutScanListDTO(BaseDTO):
-    """MA5 돌파 스캔 결과 목록 DTO"""
-
-    stocks: list[MA5BreakoutScanItemDTO] = Field(description="스캔 결과 목록")
-    total_scanned: int = Field(description="스캔한 전체 종목 수")
-    breakout_count: int = Field(default=0, description="돌파 종목 수")
-    above_count: int = Field(default=0, description="상단 위 종목 수")
-    below_count: int = Field(default=0, description="상단 아래 종목 수")
-    scan_time: datetime = Field(description="스캔 시각")
-    errors: list[str] = Field(default_factory=list, description="오류 메시지")
-
-
 # ==================== Execute Request/Response DTOs ====================
 
 

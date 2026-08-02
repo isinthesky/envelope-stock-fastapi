@@ -214,8 +214,6 @@ const pickSymbolsFromScan = (items, scanType, limit, topOnly) => {
   if (topOnly) {
     if (scanType === 'gc') {
       filtered = items.filter((x) => x && x.gc_state === 'OPTIMAL_BUY');
-    } else if (scanType === 'ma5') {
-      filtered = items.filter((x) => x && x.ma5_state === 'BREAKOUT');
     }
   }
 
@@ -286,15 +284,13 @@ const runMultiFromSavedScan = (scanType) => {
   const normalizedBase = applyFormOverrides(base);
   syncTextareaPayload(normalizedBase);
 
-  const key = scanType === 'gc' ? 'buyStrategy.gcScan' : 'buyStrategy.ma5Scan';
+  const key = 'buyStrategy.gcScan';
   const items = loadSavedScanItems(key);
 
   const symbols = pickSymbolsFromScan(items, scanType, limit, topOnly);
   if (!symbols.length) {
     const reason = topOnly
-      ? (scanType === 'gc'
-          ? '조건(gc_state=OPTIMAL_BUY)을 만족하는 종목이 0개입니다.'
-          : '조건(ma5_state=BREAKOUT)을 만족하는 종목이 0개입니다.')
+      ? '조건(gc_state=OPTIMAL_BUY)을 만족하는 종목이 0개입니다.'
       : '저장된 스캔 결과가 없습니다.';
 
     const hint = topOnly
