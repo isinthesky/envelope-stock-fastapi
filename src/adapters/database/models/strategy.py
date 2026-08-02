@@ -26,7 +26,6 @@ class StrategyType(str, Enum):
     """전략 유형"""
 
     MOMENTUM = "momentum"  # 모멘텀
-    MEAN_REVERSION = "mean_reversion"  # 평균 회귀
     BREAKOUT = "breakout"  # 돌파
     GRID = "grid"  # 그리드
     GOLDEN_CROSS = "golden_cross"  # 골든크로스

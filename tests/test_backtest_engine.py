@@ -12,8 +12,6 @@ import pytest
 from src.application.domain.backtest.dto import BacktestConfigDTO
 from src.application.domain.backtest.engine import BacktestEngine
 from src.application.domain.strategy.dto import (
-    BollingerBandConfig,
-    EnvelopeConfig,
     PositionConfig,
     RiskManagementConfig,
     StrategyConfigDTO,
@@ -27,8 +25,6 @@ class TestBacktestEngine:
         """테스트 초기화"""
         # 전략 설정
         self.strategy_config = StrategyConfigDTO(
-            bollinger_band=BollingerBandConfig(period=20, std_multiplier=2.0),
-            envelope=EnvelopeConfig(period=20, percentage=2.0),
             position=PositionConfig(allocation_ratio=0.1, max_position_count=1),
             risk_management=RiskManagementConfig(
                 use_stop_loss=True,

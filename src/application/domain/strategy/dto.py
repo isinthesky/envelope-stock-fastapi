@@ -6,7 +6,7 @@ Strategy Domain DTO - 전략 관련 데이터 전송 객체
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Literal, Union
+from typing import Literal
 
 from pydantic import ConfigDict, Field, field_validator
 
@@ -17,20 +17,6 @@ from src.application.common.dto import BaseDTO
 
 
 # ==================== Request DTOs ====================
-
-
-class BollingerBandConfig(BaseDTO):
-    """볼린저 밴드 설정"""
-
-    period: int = Field(default=20, description="이동평균 기간", ge=5, le=200)
-    std_multiplier: float = Field(default=2.0, description="표준편차 배수", ge=1.0, le=4.0)
-
-
-class EnvelopeConfig(BaseDTO):
-    """Envelope 설정"""
-
-    period: int = Field(default=20, description="이동평균 기간", ge=5, le=200)
-    percentage: float = Field(default=2.0, description="채널 폭 비율 (%)", ge=0.5, le=10.0)
 
 
 class PositionConfig(BaseDTO):
@@ -80,14 +66,14 @@ class BaseStrategyConfig(BaseDTO):
 
 
 
-class BollingerStrategyConfigDTO(BaseStrategyConfig):
-    """볼린저 밴드/엔벨로프 전략 설정 (기존 StrategyConfigDTO)"""
+class StrategyConfigDTO(BaseStrategyConfig):
+    """백테스트 엔진 공용 전략 설정 (포지션/리스크 관리 + 실행 주기).
 
-    strategy_type: Literal["mean_reversion"] = Field(
-        default="mean_reversion", description="전략 유형"
-    )
-    bollinger_band: BollingerBandConfig = Field(default_factory=BollingerBandConfig)
-    envelope: EnvelopeConfig = Field(default_factory=EnvelopeConfig)
+    레거시 볼린저+엔벨로프 전략 필드는 제거됨. golden_cross 백테스트의 포지션/리스크
+    설정 및 비-golden_cross 전략의 fallback 설정으로 사용된다.
+    """
+
+    strategy_type: str = Field(default="golden_cross", description="전략 유형")
     position: PositionConfig = Field(default_factory=PositionConfig)
     risk_management: RiskManagementConfig = Field(default_factory=RiskManagementConfig)
     check_interval: int = Field(default=60, description="체크 주기 (초)", ge=10, le=3600)
@@ -257,15 +243,6 @@ class GoldenCrossConfigDTO(BaseStrategyConfig):
     lookback_days: int = Field(default=250, description="데이터 조회 기간 (일)", ge=200, le=500)
 
 
-# 다형성을 위한 Union 타입
-StrategyConfigUnion = Annotated[
-    Union[BollingerStrategyConfigDTO, GoldenCrossConfigDTO], Field(discriminator="strategy_type")
-]
-
-# 구버전 호환성을 위한 별칭
-StrategyConfigDTO = BollingerStrategyConfigDTO
-
-
 class StrategyPresetDTO(BaseDTO):
     """전략 프리셋 응답 DTO (config는 유저에게 노출하지 않음)"""
 
@@ -299,15 +276,15 @@ class StrategyCreateRequestDTO(BaseDTO):
     name: str = Field(description="전략명", min_length=1, max_length=100)
     description: str | None = Field(default=None, description="전략 설명")
     strategy_type: str = Field(
-        default="mean_reversion",
+        default="golden_cross",
         description="전략 유형",
-        pattern="^(momentum|mean_reversion|breakout|grid|golden_cross|custom)$",
+        pattern="^(momentum|breakout|grid|golden_cross|custom)$",
     )
     account_no: str | None = Field(default=None, description="계좌번호")
     symbols: list[str] = Field(description="대상 종목 리스트", min_length=1)
 
     # 통합 설정 필드 (다형성 지원)
-    config: StrategyConfigUnion | None = Field(
+    config: StrategyConfigDTO | None = Field(
         default=None, description="전략 설정 (유형에 따라 자동 매핑)"
     )
 
@@ -333,7 +310,7 @@ class StrategyUpdateRequestDTO(BaseDTO):
     symbols: list[str] | None = Field(default=None, description="대상 종목 리스트")
 
     # 통합 설정 필드
-    config: StrategyConfigUnion | None = Field(
+    config: StrategyConfigDTO | None = Field(
         default=None, description="전략 설정 (유형에 따라 자동 매핑)"
     )
 
@@ -361,7 +338,7 @@ class StrategyDetailResponseDTO(BaseDTO):
     status: str = Field(description="전략 상태")
 
     # 통합 설정 필드
-    config: StrategyConfigUnion | None = Field(default=None, description="전략 설정")
+    config: StrategyConfigDTO | None = Field(default=None, description="전략 설정")
 
     # 하위 호환성 유지
     golden_cross_config: GoldenCrossConfigDTO | None = Field(

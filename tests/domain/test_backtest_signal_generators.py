@@ -7,8 +7,6 @@ from src.application.domain.backtest.dto import BacktestConfigDTO
 from src.application.domain.backtest.engine import BacktestEngine
 from src.application.domain.backtest.generators import GoldenCrossSignalGenerator
 from src.application.domain.strategy.dto import (
-    BollingerBandConfig,
-    EnvelopeConfig,
     PositionConfig,
     RiskManagementConfig,
     StrategyConfigDTO,
@@ -36,8 +34,6 @@ def test_golden_cross_stochastic_uses_ohlc_when_available() -> None:
 
 def test_golden_cross_backtest_engine_passes_ohlc_history_to_signal_generator() -> None:
     strategy_config = StrategyConfigDTO(
-        bollinger_band=BollingerBandConfig(period=20, std_multiplier=2.0),
-        envelope=EnvelopeConfig(period=20, percentage=2.0),
         position=PositionConfig(allocation_ratio=0.1, max_position_count=1),
         risk_management=RiskManagementConfig(),
     )
@@ -69,8 +65,6 @@ def test_golden_cross_backtest_engine_passes_ohlc_history_to_signal_generator() 
 
 async def test_golden_cross_backtest_run_uses_ohlc_stochastic_for_trades() -> None:
     strategy_config = StrategyConfigDTO(
-        bollinger_band=BollingerBandConfig(period=20, std_multiplier=2.0),
-        envelope=EnvelopeConfig(period=20, percentage=2.0),
         position=PositionConfig(allocation_ratio=0.1, max_position_count=1),
         risk_management=RiskManagementConfig(),
     )

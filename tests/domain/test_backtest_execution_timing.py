@@ -6,8 +6,6 @@ import pandas as pd
 from src.application.domain.backtest.dto import BacktestConfigDTO, ExecutionTiming
 from src.application.domain.backtest.engine import BacktestEngine
 from src.application.domain.strategy.dto import (
-    BollingerBandConfig,
-    EnvelopeConfig,
     PositionConfig,
     RiskManagementConfig,
     StrategyConfigDTO,
@@ -28,8 +26,6 @@ class BuyOnFirstBarSignalGenerator:
 
 def _strategy_config() -> StrategyConfigDTO:
     return StrategyConfigDTO(
-        bollinger_band=BollingerBandConfig(period=20, std_multiplier=2.0),
-        envelope=EnvelopeConfig(period=20, percentage=2.0),
         position=PositionConfig(allocation_ratio=0.5, max_position_count=1),
         risk_management=RiskManagementConfig(
             use_stop_loss=False,

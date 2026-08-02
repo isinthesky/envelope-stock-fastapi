@@ -18,8 +18,6 @@ from src.application.domain.backtest.engine import BacktestEngine
 from src.application.domain.backtest.dto import BacktestConfigDTO, ExecutionTiming
 from src.application.domain.strategy.dto import (
     StrategyConfigDTO,
-    BollingerBandConfig,
-    EnvelopeConfig,
     PositionConfig,
     RiskManagementConfig,
 )
