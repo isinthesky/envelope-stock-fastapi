@@ -272,3 +272,28 @@ async def test_analyze_sell_signal_reflects_trailing_stop_in_final_stage(
     assert result.final_ratio_min == 1.0
     assert result.final_ratio_max == 1.0
     assert any("트레일링 스탑 발동" in reason for reason in result.sell_stage_reasons)
+
+
+async def test_overlay_stage_upgrade_applied_at_most_once_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """회귀 방지: analyze_sell_signal 전 구간에서 오버레이 단계강화는 최대 1회만 적용.
+
+    과거 rule stage(828)와 final stage(897) 양쪽에서 호출해 오버레이 1개가 매도단계를
+    2단계 올리던 버그(문서/테스트 '최대 1회' 불변식 위반)를 고정한다.
+    """
+    service = SellStrategyService(session=None)
+    _stub_neutral_sell_dependencies(service, monkeypatch)
+
+    calls: list[int] = []
+    original = service._apply_overlay_stage_upgrade
+
+    def _counting(*args: object, **kwargs: object):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_apply_overlay_stage_upgrade", _counting)
+
+    await service.analyze_sell_signal(symbol="005930", use_scoring=True)
+
+    assert len(calls) == 1

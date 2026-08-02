@@ -825,12 +825,10 @@ class SellStrategyService:
             name=name,
             market=market,
         )
-        ctx.sell_stage, overlay_stage_reasons = self._apply_overlay_stage_upgrade(
-            ctx.sell_stage,
-            is_personal_buying_overheated=ctx.is_personal_buying_overheated,
-            overlay_signals=ctx.overlay_signals,
-        )
-        stage_reasons.extend(overlay_stage_reasons)
+        # 오버레이 단계강화는 아래 최종 단계(final_stage)에 '최대 1회'만 적용한다.
+        # 여기(rule stage)서 중복 적용하면 end-to-end 2단계 상승이 되어 문서/테스트
+        # 불변식('실전 overlay는 최대 1회만 강화')을 위반하므로 rule stage에는 적용하지 않는다.
+        # ctx.sell_stage는 순수 rule 결과로 유지되어 merge(rule vs score) 입력으로 쓰인다.
 
         ctx.sell_score_result = self.calculate_sell_score(
             stoch_k=ctx.stoch_k_raw,
@@ -2081,8 +2079,8 @@ class SellStrategyService:
 
             if rsi_decline:
                 # RSI + 하락은 Legacy가 이미 매도 기운일 때만 업그레이드
-                if final_stage not in (SellStageEnum.HOLD, SellStageEnum.REDUCE_1):
-                    # 이미 매도 쪽이면 한 단계 더 강하게
+                if final_stage != SellStageEnum.HOLD:
+                    # 이미 약한 매도 신호(REDUCE_1 이상)면 한 단계 더 강하게
                     if final_stage == SellStageEnum.REDUCE_1:
                         final_stage = SellStageEnum.REDUCE_2
                     added_reasons.append("[HYBRID] RSI+하락 확인 → 가속")

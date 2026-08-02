@@ -413,7 +413,7 @@ class GoldenCrossEngine:
                 )
             return self._model_to_dto(signal_model)
 
-        # 실제 주문 실행
+        # 실제 주문 실행 (주문 미체결 시에만 FAILED로 마킹)
         try:
             if signal_type == SignalType.BUY:
                 await self._execute_buy(
@@ -423,14 +423,23 @@ class GoldenCrossEngine:
                 await self._execute_sell(
                     strategy, symbol, current_snapshot.close, state, signal_model
                 )
-
-            await self._update_state_after_signal(strategy.id, symbol, transition, current_snapshot)
-
         except Exception as e:
             logger.error(f"[GC Engine] Order execution failed: {e}")
             await self.signal_repo.update_execution(
                 signal_model.id,
                 status=SignalStatus.FAILED,
+            )
+            updated_signal = await self.signal_repo.get_by_id(signal_model.id)
+            return self._model_to_dto(updated_signal)
+
+        # 주문은 이미 체결됨(_execute_*가 EXECUTED로 마킹). 이후 상태 동기화 실패는
+        # 시그널 상태를 되돌리지 않고(이중 주문 방지) 별도로 로깅만 한다.
+        try:
+            await self._update_state_after_signal(strategy.id, symbol, transition, current_snapshot)
+        except Exception as e:
+            logger.error(
+                f"[GC Engine] State sync after executed order failed for {symbol} "
+                f"(signal_id={signal_model.id}, 주문 체결됨·시그널 EXECUTED 유지): {e}"
             )
 
         # 갱신된 시그널 다시 조회
