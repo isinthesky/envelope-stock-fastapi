@@ -4,9 +4,10 @@ const buildMultiPayload = (symbols, basePayload) => ({
   symbols,
   start_date: basePayload.start_date,
   end_date: basePayload.end_date,
-  strategy_type: basePayload.strategy_type || 'mean_reversion',
+  strategy_type: basePayload.strategy_type || 'golden_cross',
   strategy_params: basePayload.strategy_params || null,
-  strategy_config: basePayload.strategy_config || { type: 'mean_reversion' },
+  // 생략 시 서버가 StrategyConfigDTO 기본값(golden_cross 포지션/리스크)을 적용
+  strategy_config: basePayload.strategy_config || undefined,
   backtest_config: buildBacktestConfig(basePayload),
 });
 
