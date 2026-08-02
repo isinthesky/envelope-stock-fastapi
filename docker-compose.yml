@@ -63,6 +63,7 @@ services:
       - "${API_PORT:-10131}:8000"
     volumes:
       - kis_token_cache:/root/KIS/config  # KIS API 토큰 캐시 (1일 1회 발급 원칙 유지)
+      - ./reports:/app/reports  # walk-forward 검증 리포트 공유 (CLI 생성 ↔ API read-only 노출)
     networks:
       - kis-network
     depends_on:
