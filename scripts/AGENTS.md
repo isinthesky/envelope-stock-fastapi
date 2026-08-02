@@ -19,12 +19,10 @@ scripts/
 |   |-- strategy_presets.py              # golden_cross + backtest-config presets
 |   `-- print_backtest_cost_schedule.py
 |-- research/                            # offline strategy research (not live)
-|   |-- run_walk_forward.py              # GoldenCrossParity walk-forward entrypoint
+|   |-- run_walk_forward.py              # GoldenCrossParity walk-forward + regime A/B entrypoint
 |   |-- validate_strategy_walk_forward.py
-|   |-- simulate_golden_cross_strategy.py
 |   |-- research_sell_peak_rules.py
 |   |-- verify_simple_vs_hybrid_sell.py
-|   |-- etf_trend_*.py                   # SMA trend-following experiments
 |   |-- fear_buy_*.py                    # counter-trend dip-buy experiments
 |   |-- compare_market_fear_filters.py
 |   |-- relaxed_fear_buy_medium.py
