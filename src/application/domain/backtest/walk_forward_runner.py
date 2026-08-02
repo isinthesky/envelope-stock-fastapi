@@ -90,6 +90,9 @@ def _metrics(result: BacktestResultDTO) -> dict:
         "sharpe": result.sharpe_ratio,
         "mdd": result.mdd,
         "total_trades": result.total_trades,
+        "winning_trades": result.winning_trades,
+        "losing_trades": result.losing_trades,
+        "win_rate": result.win_rate,
     }
 
 

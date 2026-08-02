@@ -412,11 +412,23 @@ async def run_regime_ab(args) -> None:
         gate = evaluate_gates(gate_inputs)
         o, st = report.oos, report.stats
         regime = st.get("regime") or {}
+        # OOS 승률: 폴드별 test 완료거래(이익/손실) 합산 → 거래가중 승률
+        w_tr = sum(int(f.test.get("winning_trades", 0)) for f in report.folds if f.test)
+        l_tr = sum(int(f.test.get("losing_trades", 0)) for f in report.folds if f.test)
+        completed = w_tr + l_tr
+        win_rate = round(100.0 * w_tr / completed, 1) if completed else 0.0
+        trades = {
+            "winning": w_tr,
+            "losing": l_tr,
+            "completed": completed,
+            "win_rate": win_rate,
+        }
         results.append(
             {
                 "variant": name,
                 "filter": filt.describe() if filt else "no-filter",
                 "oos": o,
+                "trades": trades,
                 "stats": {
                     k: st.get(k)
                     for k in ("deflated_sharpe", "pbo", "oos_sharpe_ci_low", "oos_sharpe_ci_high")
@@ -436,8 +448,9 @@ async def run_regime_ab(args) -> None:
             }
         )
         print(
-            f"[wf-ab]   → verdict={gate.verdict} Sharpe={o['sharpe']} CAGR={o['cagr']}% "
-            f"MDD={o['mdd']}% bear={regime.get('bear', {}).get('total_return')}% "
+            f"[wf-ab]   → verdict={gate.verdict} return={o['total_return']}% CAGR={o['cagr']}% "
+            f"WinRate={win_rate}%({completed}건) Sharpe={o['sharpe']} MDD={o['mdd']}% "
+            f"bear={regime.get('bear', {}).get('total_return')}% "
             f"chop={regime.get('chop', {}).get('total_return')}%",
             flush=True,
         )
@@ -456,14 +469,15 @@ async def run_regime_ab(args) -> None:
             else "- 벤치 OOS: n/a"
         ),
         "",
-        "| Variant | Filter | Verdict | PASS | Sharpe | CAGR% | MDD% | DSR | bear% | chop% |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Variant | Filter | Verdict | Return% | WinRate%(건) | CAGR% | Sharpe | MDD% | DSR | bear% | chop% |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for r in results:
-        o, rg = r["oos"], r["regime"]
+        o, rg, tr = r["oos"], r["regime"], r["trades"]
         md.append(
-            f"| {r['variant']} | {r['filter']} | {r['gate']['verdict']} | {r['gate']['passed']} "
-            f"| {o['sharpe']} | {o['cagr']} | {o['mdd']} | {r['stats'].get('deflated_sharpe')} "
+            f"| {r['variant']} | {r['filter']} | {r['gate']['verdict']} "
+            f"| {o['total_return']} | {tr['win_rate']}({tr['completed']}) | {o['cagr']} "
+            f"| {o['sharpe']} | {o['mdd']} | {r['stats'].get('deflated_sharpe')} "
             f"| {rg.get('bear', {}).get('total_return')} | {rg.get('chop', {}).get('total_return')} |"
         )
     md += [
