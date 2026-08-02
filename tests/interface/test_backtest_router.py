@@ -54,3 +54,42 @@ async def test_get_universe_golden_cross_forwards_backtest_config(
     assert request.backtest_config.commission_rate == 0.0
     assert request.backtest_config.tax_rate == 0.0018
     assert request.backtest_config.slippage_rate == 0.0005
+
+
+@pytest.mark.asyncio
+async def test_walk_forward_latest_returns_reader_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.application.domain.backtest.dto import WalkForwardReportDTO
+
+    sentinel = WalkForwardReportDTO(available=True, verdict="NO_GO", symbols=98)
+
+    class _FakeReader:
+        def load_latest(self):
+            return sentinel
+
+    monkeypatch.setattr(backtest_router, "WalkForwardReportReader", lambda: _FakeReader())
+
+    result = await backtest_router.get_latest_walk_forward_report(admin_access="127.0.0.1")
+
+    assert result is sentinel
+    assert result.available is True
+    assert result.verdict == "NO_GO"
+
+
+@pytest.mark.asyncio
+async def test_walk_forward_latest_unavailable_when_no_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.application.domain.backtest.dto import WalkForwardReportDTO
+
+    class _FakeReader:
+        def load_latest(self):
+            return WalkForwardReportDTO(available=False)
+
+    monkeypatch.setattr(backtest_router, "WalkForwardReportReader", lambda: _FakeReader())
+
+    result = await backtest_router.get_latest_walk_forward_report(admin_access=None)
+
+    assert result.available is False
+    assert result.verdict is None

@@ -1196,6 +1196,122 @@ const runUniverseBacktest = async () => {
   }
 };
 
+// ===== Walk-Forward 검증 리포트 (read-only) =====
+const WF_VERDICT_META = {
+  GO:         { icon: '🟢', label: 'GO',         cls: 'wf-go',         note: '실자산 집행 가능' },
+  NO_GO:      { icon: '🔴', label: 'NO-GO',      cls: 'wf-nogo',       note: '실자산 금지 · paper-trade 회부' },
+  INCOMPLETE: { icon: '🟡', label: 'INCOMPLETE', cls: 'wf-incomplete', note: '판정 불가 — 데이터/측정 보완 필요' },
+};
+const WF_STATUS_ICON = { PASS: '✅', FAIL: '❌', NA: '⚪' };
+const WF_RERUN_CMD = 'uv run python scripts/run_walk_forward.py';
+
+const wfNum = (v, digits, suffix = '') =>
+  (v === null || v === undefined || Number.isNaN(Number(v)))
+    ? '-'
+    : `${Number(v).toFixed(digits)}${suffix}`;
+
+const renderWalkForward = (data) => {
+  const container = document.getElementById("walk_forward_container");
+  if (!container) return;
+
+  if (!data || !data.available) {
+    container.innerHTML = `
+      <div class="placeholder-message">
+        저장된 walk-forward 리포트가 없습니다.<br>
+        <small style="color:#94a3b8; margin-top:8px; display:block;">컨테이너에서 <code>${WF_RERUN_CMD}</code> 실행 후 생성됩니다.</small>
+      </div>`;
+    return;
+  }
+
+  const meta = WF_VERDICT_META[data.verdict] || WF_VERDICT_META.INCOMPLETE;
+  const gate = data.gate || {};
+  const oos = data.oos || {};
+  const stats = data.stats || {};
+  const regime = data.regime || {};
+  const w = data.window || {};
+
+  const staleBanner = data.is_stale ? `
+    <div class="wf-stale">⚠️ 리포트가 오래되었습니다(7일 초과). 컨테이너에서 <code>${WF_RERUN_CMD}</code> 로 재생성하세요.</div>` : '';
+
+  const checks = (gate.checks || []).map(c => `
+    <li class="wf-check wf-check-${sanitizeCssClass((c.status || '').toLowerCase())}">
+      <span class="wf-check-icon">${WF_STATUS_ICON[c.status] || '•'}</span>
+      <span class="wf-check-name">${escapeHtml(c.key)} · ${escapeHtml(c.name)}</span>
+      <span class="wf-check-detail">${escapeHtml(c.detail)}</span>
+    </li>`).join('') || '<li class="wf-check">게이트 체크 없음</li>';
+
+  const regimeCard = (key, label) => {
+    const r = regime[key];
+    if (!r) return '';
+    const cls = Number(r.total_return) >= 0 ? 'universe-positive' : 'universe-negative';
+    return `
+      <div class="universe-summary-card">
+        <div class="label">${label} (${r.n_days}일)</div>
+        <div class="value ${cls}">${wfNum(r.total_return, 2, '%')}</div>
+        <div class="label" style="margin-top:2px;">Sharpe ${wfNum(r.daily_sharpe, 3)} · MDD ${wfNum(r.mdd, 2, '%')}</div>
+      </div>`;
+  };
+
+  const genAt = (data.generated_at || '').slice(0, 19).replace('T', ' ');
+
+  container.innerHTML = `
+    ${staleBanner}
+    <div class="wf-verdict ${meta.cls}">
+      <span class="wf-verdict-badge">${meta.icon} ${meta.label}</span>
+      <div class="wf-verdict-body">
+        <div class="wf-verdict-note">${meta.note}</div>
+        <div class="wf-verdict-reason">${escapeHtml(gate.reason || '')}</div>
+      </div>
+    </div>
+    <div class="wf-meta">
+      생성 ${escapeHtml(genAt || '-')}
+      · ${data.symbols ?? '-'}종목
+      · 창 ${w.train ?? '-'}/${w.test ?? '-'}/${w.step ?? '-'}(embargo ${w.embargo ?? '-'})
+      · ${escapeHtml(w.start || '')} ~ ${escapeHtml(w.end || '')}
+      ${data.source_file ? `· <code>${escapeHtml(data.source_file)}</code>` : ''}
+    </div>
+    <div class="wf-gate-summary">
+      게이트 통과 <strong class="universe-positive">${gate.passed ?? 0}</strong>
+      · 미달 <strong class="universe-negative">${gate.failed ?? 0}</strong>
+      · 판정불가 <strong>${gate.na ?? 0}</strong>
+    </div>
+    <ul class="wf-checks">${checks}</ul>
+    <h4 style="margin:16px 0 8px;">OOS 성과</h4>
+    <div class="universe-summary-grid">
+      <div class="universe-summary-card"><div class="label">총 수익률</div><div class="value ${Number(oos.total_return) >= 0 ? 'universe-positive' : 'universe-negative'}">${wfNum(oos.total_return, 2, '%')}</div></div>
+      <div class="universe-summary-card"><div class="label">CAGR</div><div class="value">${wfNum(oos.cagr, 2, '%')}</div></div>
+      <div class="universe-summary-card"><div class="label">Sharpe</div><div class="value ${Number(oos.sharpe) >= 0 ? 'universe-positive' : 'universe-negative'}">${wfNum(oos.sharpe, 3)}</div></div>
+      <div class="universe-summary-card"><div class="label">MDD</div><div class="value universe-negative">${wfNum(oos.mdd, 2, '%')}</div></div>
+      <div class="universe-summary-card"><div class="label">DSR</div><div class="value">${wfNum(stats.deflated_sharpe, 3)}</div></div>
+      <div class="universe-summary-card"><div class="label">PBO</div><div class="value">${wfNum(stats.pbo, 3)}</div></div>
+    </div>
+    <div class="wf-meta" style="margin-top:8px;">
+      OOS Sharpe 95% CI: ${wfNum(stats.oos_sharpe_ci_low, 3)} ~ ${wfNum(stats.oos_sharpe_ci_high, 3)}
+      · ${oos.folds ?? '-'}폴드 · ${oos.trading_days ?? '-'}거래일
+    </div>
+    <h4 style="margin:16px 0 8px;">레짐 분해</h4>
+    <div class="universe-summary-grid">
+      ${regimeCard('bull', '상승장')}
+      ${regimeCard('bear', '하락장')}
+      ${regimeCard('chop', '횡보장')}
+    </div>
+  `;
+};
+
+const loadWalkForwardReport = async () => {
+  const container = document.getElementById("walk_forward_container");
+  if (!container) return;
+  container.innerHTML = `<div class="placeholder-message">검증 리포트 불러오는 중...</div>`;
+  try {
+    const response = await fetch('/api/v1/backtest/walk-forward/latest');
+    const data = await response.json();
+    renderWalkForward(data);
+  } catch (e) {
+    console.error('Failed to load walk-forward report:', e);
+    container.innerHTML = `<div class="placeholder-message" style="color:#dc2626;">검증 리포트 불러오기 실패</div>`;
+  }
+};
+
 const renderHistoryTable = () => {
   const tbody = document.getElementById("history_body");
   if (!tbody) return;
@@ -1277,6 +1393,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   loadHistory();
   loadPortfolioCashPlan();
+
+  // Walk-Forward 리포트: 백테스트/룰셋 탭 최초 진입 시 지연 로드
+  try {
+    const researchTab = document.querySelector('.sell-tab[data-panel="panel-research"]');
+    if (researchTab) {
+      let wfLoaded = false;
+      researchTab.addEventListener('click', () => {
+        if (wfLoaded) return;
+        wfLoaded = true;
+        loadWalkForwardReport();
+      });
+    }
+    const wfRefreshBtn = document.getElementById("walk_forward_refresh_btn");
+    if (wfRefreshBtn) wfRefreshBtn.addEventListener('click', loadWalkForwardReport);
+  } catch (e) {
+    console.error('walk-forward lazy-load wiring failed:', e);
+  }
 });
 
 document.getElementById("symbol_input").addEventListener("keypress", (e) => {

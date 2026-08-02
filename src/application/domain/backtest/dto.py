@@ -468,5 +468,97 @@ class UniverseBacktestResultDTO(BaseDTO):
         description="공유 자본 포트폴리오 시뮬레이션 요약",
     )
     summary: UniverseBacktestSummaryDTO = Field(description="비포트폴리오 종목별 진단 요약")
-    diagnostic_summary: UniverseBacktestSummaryDTO = Field(description="비포트폴리오 종목별 진단 요약")
+    diagnostic_summary: UniverseBacktestSummaryDTO = Field(
+        description="비포트폴리오 종목별 진단 요약"
+    )
     results: dict[str, BacktestResultDTO] = Field(description="종목별 상세 결과")
+
+
+# ==================== Walk-Forward Report DTOs (read-only 노출) ====================
+
+
+class WalkForwardWindowDTO(BaseDTO):
+    """롤링 창 설정 요약"""
+
+    start: str = Field(description="로드 구간 시작일")
+    end: str = Field(description="로드 구간 종료일")
+    train: int = Field(description="train 창 거래일 수")
+    test: int = Field(description="test 창 거래일 수")
+    step: int = Field(description="롤 스텝 거래일 수")
+    embargo: int = Field(description="train/test 사이 embargo 거래일 수")
+
+
+class WalkForwardGateCheckDTO(BaseDTO):
+    """개별 Go/No-Go 게이트 체크"""
+
+    key: str = Field(description="게이트 키 (G1~G7)")
+    name: str = Field(description="게이트 기준명")
+    status: str = Field(description="판정 (PASS/FAIL/NA)")
+    detail: str = Field(description="판정 근거")
+
+
+class WalkForwardGateDTO(BaseDTO):
+    """Go/No-Go 게이트 종합"""
+
+    verdict: str = Field(description="최종 판정 (GO/NO_GO/INCOMPLETE)")
+    reason: str = Field(description="판정 사유")
+    passed: int = Field(description="통과 게이트 수")
+    failed: int = Field(description="미달 게이트 수")
+    na: int = Field(description="판정 불가 게이트 수")
+    checks: list[WalkForwardGateCheckDTO] = Field(
+        default_factory=list, description="게이트별 체크 목록"
+    )
+
+
+class WalkForwardOosDTO(BaseDTO):
+    """OOS(표본외) 성과 요약"""
+
+    total_return: float = Field(description="OOS 총 수익률 (%)")
+    cagr: float = Field(description="OOS CAGR (%)")
+    sharpe: float = Field(description="OOS Sharpe")
+    mdd: float = Field(description="OOS MDD (%)")
+    trading_days: int = Field(description="OOS 거래일 수")
+    folds: int = Field(description="OOS 폴드 수")
+
+
+class WalkForwardStatsDTO(BaseDTO):
+    """과적합 정량화 통계"""
+
+    deflated_sharpe: float | None = Field(default=None, description="Deflated Sharpe Ratio")
+    pbo: float | None = Field(default=None, description="Probability of Backtest Overfitting")
+    oos_sharpe_ci_low: float | None = Field(default=None, description="OOS Sharpe 95% CI 하한")
+    oos_sharpe_ci_high: float | None = Field(default=None, description="OOS Sharpe 95% CI 상한")
+    n_trials: int | None = Field(default=None, description="시도 후보 수")
+    n_obs: int | None = Field(default=None, description="관측치 수")
+
+
+class WalkForwardRegimeLegDTO(BaseDTO):
+    """국면별 성과"""
+
+    n_days: int = Field(description="국면 거래일 수")
+    total_return: float = Field(description="국면 총 수익률 (%)")
+    daily_sharpe: float = Field(description="국면 일간 Sharpe")
+    mdd: float = Field(description="국면 MDD (%)")
+
+
+class WalkForwardReportDTO(BaseDTO):
+    """
+    최신 walk-forward 검증 리포트(read-only)
+
+    `scripts/run_walk_forward.py`가 컨테이너에서 생성해 `reports/`에 저장한
+    JSON을 파싱한 결과. 실행은 하지 않고 저장물만 표시한다.
+    """
+
+    available: bool = Field(description="표시할 리포트 존재 여부")
+    generated_at: datetime | None = Field(default=None, description="리포트 생성 시각")
+    is_stale: bool = Field(default=False, description="7일 초과 오래된 리포트 여부")
+    source_file: str | None = Field(default=None, description="원본 리포트 파일명")
+    symbols: int | None = Field(default=None, description="대상 종목 수")
+    verdict: str | None = Field(default=None, description="최종 판정 (GO/NO_GO/INCOMPLETE)")
+    window: WalkForwardWindowDTO | None = Field(default=None, description="롤링 창 설정")
+    gate: WalkForwardGateDTO | None = Field(default=None, description="Go/No-Go 게이트 종합")
+    oos: WalkForwardOosDTO | None = Field(default=None, description="OOS 성과 요약")
+    stats: WalkForwardStatsDTO | None = Field(default=None, description="과적합 정량화 통계")
+    regime: dict[str, WalkForwardRegimeLegDTO] | None = Field(
+        default=None, description="국면별 분해 (bull/bear/chop)"
+    )

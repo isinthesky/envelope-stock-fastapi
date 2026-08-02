@@ -22,7 +22,9 @@ from src.application.domain.backtest.dto import (
     MultiSymbolBacktestResultDTO,
     UniverseBacktestRequestDTO,
     UniverseBacktestResultDTO,
+    WalkForwardReportDTO,
 )
+from src.application.domain.backtest.report_reader import WalkForwardReportReader
 from src.application.domain.backtest.service import BacktestService
 from src.application.domain.market_data.service import MarketDataService
 from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
@@ -114,9 +116,7 @@ async def run_universe_golden_cross_backtest(
 
     # include_etf: 명시값 우선, 미지정(None)이면 운영 유니버스 모드를 기본 적용
     include_etf = (
-        request.include_etf
-        if request.include_etf is not None
-        else settings.etf_universe_enabled
+        request.include_etf if request.include_etf is not None else settings.etf_universe_enabled
     )
     buy_service = BuyStrategyService(session=session)
     scan = await buy_service.scan_golden_cross_candidates(
@@ -319,6 +319,19 @@ async def validate_data_quality(
     start_dt = datetime.combine(start_date, time.min)
     end_dt = datetime.combine(end_date, time.min)
     return await service.validate_data_quality(symbol, start_dt, end_dt)
+
+
+@router.get("/walk-forward/latest", response_model=WalkForwardReportDTO)
+async def get_latest_walk_forward_report(
+    admin_access: AdminAccessDep = None,
+) -> WalkForwardReportDTO:
+    """저장된 최신 walk-forward 검증 리포트를 read-only로 반환한다.
+
+    실행은 컨테이너 CLI(`scripts/run_walk_forward.py`)에서만 이뤄지며, 이 엔드포인트는
+    `reports/walk_forward_*.json` 최신 산출물만 읽어 노출한다. 리포트가 없으면
+    `available=False`로 200 응답한다.
+    """
+    return WalkForwardReportReader().load_latest()
 
 
 @router.get("/health")
