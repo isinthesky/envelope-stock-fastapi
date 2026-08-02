@@ -33,6 +33,20 @@ def test_get_latest_backtest_cost_schedule_returns_latest_declared_regime() -> N
     assert schedule.sell_tax_rate == Decimal("0.0018")
 
 
+def test_get_backtest_cost_schedule_supports_2022_bear_regime() -> None:
+    schedule = get_backtest_cost_schedule(date(2022, 6, 15))
+
+    assert schedule.sell_tax_rate == Decimal("0.0023")
+    assert schedule.source_label == "krx-securities-transaction-tax:regime-2021-01-01"
+
+
+def test_get_backtest_cost_schedule_supports_2020_regime() -> None:
+    schedule = get_backtest_cost_schedule(date(2020, 3, 20))  # 코로나 급락 구간
+
+    assert schedule.sell_tax_rate == Decimal("0.0025")
+    assert schedule.source_label == "krx-securities-transaction-tax:regime-2020-01-01"
+
+
 def test_get_backtest_cost_schedule_rejects_unsupported_date() -> None:
     with pytest.raises(UnsupportedBacktestCostDateError, match="1900-01-01"):
         get_backtest_cost_schedule(date(1900, 1, 1))

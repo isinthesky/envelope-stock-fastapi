@@ -120,3 +120,6 @@ _attic/cleanup_*/
 .claude/skills/
 .auto-pipe/
 .venv/
+
+# 백테스트/커버리지 런타임 산출물
+reports/

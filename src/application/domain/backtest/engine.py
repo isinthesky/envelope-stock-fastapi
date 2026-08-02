@@ -11,7 +11,6 @@ from typing import Literal, assert_never
 
 import pandas as pd
 
-from src.application.common.performance_metrics import PerformanceMetrics
 from src.application.domain.backtest.dto import (
     BacktestConfigDTO,
     BacktestResultDTO,
@@ -20,6 +19,7 @@ from src.application.domain.backtest.dto import (
 )
 from src.application.domain.backtest.order_manager import BacktestOrderManager
 from src.application.domain.backtest.position_manager import Position, PositionManager
+from src.application.domain.backtest.result_builder import build_backtest_result
 from src.application.domain.backtest.signal_generators import (
     BaseSignalGenerator,
     create_signal_generator,
@@ -418,60 +418,16 @@ class BacktestEngine:
         )
 
     def _generate_result(self, start_date: datetime, end_date: datetime) -> BacktestResultDTO:
-        final_capital = self.equity_curve[-1] if self.equity_curve else self.initial_capital
-        total_return = PerformanceMetrics.calculate_total_return(
-            self.initial_capital, final_capital
-        )
-        annualized_return = PerformanceMetrics.calculate_annualized_return(
-            self.initial_capital, final_capital, start_date, end_date
-        )
-        years = (end_date - start_date).days / 365
-        cagr = PerformanceMetrics.calculate_cagr(self.initial_capital, final_capital, years)
-        mdd_info = PerformanceMetrics.calculate_mdd(self.equity_curve)
-        equity_df = pd.DataFrame(
-            {
-                "timestamp": [s.date for s in self.daily_stats],
-                "equity": [float(s.equity) for s in self.daily_stats],
-            }
-        )
-        volatility = PerformanceMetrics.calculate_volatility(equity_df)
-        sharpe = PerformanceMetrics.calculate_sharpe_ratio(annualized_return, volatility)
-        sortino = PerformanceMetrics.calculate_sortino_ratio(equity_df, annualized_return)
-        calmar = PerformanceMetrics.calculate_calmar_ratio(annualized_return, mdd_info["mdd"])
-        var_95 = PerformanceMetrics.calculate_var(equity_df)
-        trade_stats = PerformanceMetrics.calculate_trade_count(self.completed_trades)
-        win_rate = PerformanceMetrics.calculate_win_rate(self.completed_trades)
-        profit_factor = PerformanceMetrics.calculate_profit_factor(self.completed_trades)
-        avg_stats = PerformanceMetrics.calculate_avg_profit_loss(self.completed_trades)
-        holding_stats = PerformanceMetrics.calculate_avg_holding_period(self.completed_trades)
-        streak_stats = PerformanceMetrics.calculate_consecutive_wins_losses(self.completed_trades)
-        return BacktestResultDTO(
+        # 성과 집계는 result_builder(단일 출처)에 위임한다. 패리티 백테스트와
+        # 동일한 계산 경로를 공유하기 위함이며, 행위는 기존과 동일하다.
+        return build_backtest_result(
             symbol=self.symbol,
             start_date=start_date,
             end_date=end_date,
             initial_capital=self.initial_capital,
-            final_capital=final_capital,
             execution_timing=self.backtest_config.execution_timing,
-            total_return=total_return,
-            annualized_return=annualized_return,
-            cagr=cagr,
-            mdd=mdd_info["mdd"],
-            volatility=volatility,
-            sharpe_ratio=sharpe,
-            sortino_ratio=sortino,
-            calmar_ratio=calmar,
-            var_95=var_95,
-            total_trades=trade_stats["total"],
-            winning_trades=trade_stats["wins"],
-            losing_trades=trade_stats["losses"],
-            win_rate=win_rate,
-            profit_factor=profit_factor,
-            avg_win=avg_stats["avg_win"],
-            avg_loss=avg_stats["avg_loss"],
-            avg_win_loss_ratio=avg_stats["avg_win_loss_ratio"],
-            avg_holding_days=holding_stats["avg_days"],
-            max_consecutive_wins=streak_stats["max_consecutive_wins"],
-            max_consecutive_losses=streak_stats["max_consecutive_losses"],
-            trades=self.trades,
+            equity_curve=self.equity_curve,
             daily_stats=self.daily_stats,
+            trades=self.trades,
+            completed_trades=self.completed_trades,
         )

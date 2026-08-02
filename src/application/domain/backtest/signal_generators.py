@@ -76,7 +76,18 @@ class BollingerEnvelopeSignalGenerator(BaseSignalGenerator):
 
 
 class GoldenCrossSignalGenerator(BaseSignalGenerator):
-    """스윙형 골든크로스 시그널 생성기"""
+    """스윙형 골든크로스 시그널 생성기.
+
+    ⚠️ 검증(walk-forward) 부적합: 이 생성기의 매수 판정(`_should_buy`)은 실주문
+    경로(`state_machine` + canonical `GoldenCrossStrategyContract`)와 **다르게**
+    독자 재구현되어 있다(예: level-GC vs crossover, recovery 30 vs 25 config,
+    pullback_bars/cooldown, `<50`·MA gap 게이트 부재). 따라서 이 경로로 얻은
+    백테스트 결과는 "실제 매매되는 로직"을 대표하지 않는다.
+
+    라이브와 동일한 시그널로 검증하려면
+    `backtest.golden_cross_parity.GoldenCrossParityReplay` 를 사용하라.
+    이 생성기는 기존 진단/호환 용도로만 유지한다.
+    """
 
     def __init__(
         self,
