@@ -898,6 +898,29 @@ class SellStrategyService:
             overlay_signals=ctx.overlay_signals,
         )
         stage_reasons.extend(final_overlay_stage_reasons)
+
+        # sell_mode 기계적 보호 반영(simple/hybrid): compute_simple_sell_signal의 기계적 규칙을
+        # final_stage에 실제 반영한다. 특히 '85% 피크수익 보호'는 메인 파이프라인의
+        # take-profit(현재수익 ≥20%)/트레일링(활성화 임계 필요)으로 커버되지 않는 저수익 피크
+        # 감쇠를 잡는데, 기존에는 reason 텍스트로만 남고 final_stage/비율에 미반영되어
+        # 알림 심각도와 근거가 불일치했다. 단계는 '올리기만' 하며 legacy 모드는 영향 없음.
+        if sell_mode in ("simple", "hybrid") and ctx.simple_sell_info:
+            _simple_reasons = ctx.simple_sell_info.get("reasons", [])
+            _mechanical = ctx.simple_sell_info.get("should_sell") and any(
+                ("하드 손절" in r) or ("추세 이탈" in r) or ("85% 수익 보호" in r)
+                for r in _simple_reasons
+            )
+            _rsi_decline = any("RSI 과매수 + 하락 시작" in r for r in _simple_reasons)
+            if _mechanical and SELL_STAGE_ORDER.index(final_stage) < SELL_STAGE_ORDER.index(
+                SellStageEnum.REDUCE_2
+            ):
+                final_stage = SellStageEnum.REDUCE_2
+                stage_reasons.append(f"[MODE:{sell_mode}] 기계적 보호 규칙 → REDUCE_2")
+            if _rsi_decline and final_stage != SellStageEnum.HOLD:
+                if final_stage == SellStageEnum.REDUCE_1:
+                    final_stage = SellStageEnum.REDUCE_2
+                stage_reasons.append(f"[MODE:{sell_mode}] RSI+하락 확인 → 가속")
+
         ctx.final_stage = final_stage
 
         ctx.final_ratio_min, ctx.final_ratio_max = SELL_STAGE_RATIOS.get(final_stage, (0.0, 0.0))

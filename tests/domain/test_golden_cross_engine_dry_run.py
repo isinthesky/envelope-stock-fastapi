@@ -194,3 +194,60 @@ async def test_dry_run_signal_returns_skipped_dto_without_persisting(
     assert result.prev_state == SymbolState.READY_TO_BUY.value
     assert result.new_state == SymbolState.IN_POSITION.value
     assert state_repo.write_count == 0
+
+
+class _SignalRepoWithHistory:
+    """직전 EXECUTED 시그널을 반환하되, create_signal이 호출되면 실패시킨다."""
+
+    def __init__(self, existing) -> None:
+        self.existing = existing
+
+    async def get_by_symbol(self, strategy_id: int, symbol: str, limit: int = 50):
+        _ = strategy_id, symbol, limit
+        return [self.existing]
+
+    async def create_signal(self, **kwargs):
+        _ = kwargs
+        raise AssertionError("중복 가드는 새 시그널 행을 만들면 안 됨")
+
+
+@pytest.mark.asyncio
+async def test_handle_signal_skips_when_same_transition_already_executed():
+    """중복 주문 가드: 직전 실행에서 동일 전이가 이미 EXECUTED면 재주문/재기록하지 않는다."""
+    existing = SimpleNamespace(
+        id=42,
+        strategy_id=1,
+        symbol="005930",
+        signal_type=SignalType.BUY.value,
+        signal_status=SignalStatus.EXECUTED.value,
+        prev_state=SymbolState.READY_TO_BUY.value,
+        new_state=SymbolState.IN_POSITION.value,
+    )
+    engine = GoldenCrossEngine(session=SimpleNamespace(), kis_client=SimpleNamespace())
+    engine.signal_repo = _SignalRepoWithHistory(existing)
+    engine._execute_buy = AsyncMock(side_effect=AssertionError("중복인데 주문하면 안 됨"))
+
+    result = await engine._handle_signal(
+        strategy=SimpleNamespace(id=1, account_no="dummy"),
+        symbol="005930",
+        transition=StateTransition(
+            new_state=SymbolState.IN_POSITION,
+            signal=Signal.BUY,
+            reason="stale 상태에서 동일 전이 재도출",
+        ),
+        current_snapshot=SimpleNamespace(
+            close=Decimal("101"),
+            ma_short=Decimal("110"),
+            ma_long=Decimal("100"),
+            stoch_k=35.0,
+            stoch_d=25.0,
+        ),
+        state=SimpleNamespace(state=SymbolState.READY_TO_BUY.value),
+        config=SimpleNamespace(),
+        safety_guard=SimpleNamespace(),
+        dry_run=False,
+    )
+
+    assert result is not None
+    assert result.signal_status == SignalStatus.SKIPPED.value
+    engine._execute_buy.assert_not_called()

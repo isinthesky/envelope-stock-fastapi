@@ -380,6 +380,32 @@ class GoldenCrossEngine:
                 prev_state=state.state,
             )
 
+        # 중복 주문 가드: 직전 실행에서 동일 전이가 이미 EXECUTED로 기록됐다면
+        # (symbol_state 동기화 실패로 상태가 stale한 채 재평가된 경우) 새 시그널/주문을
+        # 만들지 않고 SKIPPED DTO만 반환해 이중 주문을 방지한다.
+        duplicate = await self._find_duplicate_executed_signal(
+            strategy_id=strategy.id,
+            symbol=symbol,
+            signal_type=signal_type,
+            prev_state=state.state,
+            new_state=transition.new_state.value,
+        )
+        if duplicate is not None:
+            logger.warning(
+                f"[GC Engine] Duplicate-submit guard: {symbol} {signal_type.value} "
+                f"{state.state}->{transition.new_state.value} already EXECUTED as "
+                f"signal_id={duplicate.id}; skipping order (state sync likely failed previously)"
+            )
+            return self._create_dry_run_signal_dto(
+                strategy_id=strategy.id,
+                symbol=symbol,
+                signal_type=signal_type,
+                transition=transition,
+                current_snapshot=current_snapshot,
+                prev_state=state.state,
+                note=f"duplicate-guard: original signal_id={duplicate.id} already EXECUTED",
+            )
+
         # 시그널 저장
         signal_model = await self.signal_repo.create_signal(
             strategy_id=strategy.id,
@@ -636,8 +662,9 @@ class GoldenCrossEngine:
         transition,
         current_snapshot: IndicatorSnapshot,
         prev_state: str,
+        note: str | None = None,
     ) -> StrategySignalDTO:
-        """Dry-run 시그널을 DB 저장 없이 DTO로 생성"""
+        """Dry-run/스킵 시그널을 DB 저장 없이 DTO로 생성(note로 사유 지정 가능)"""
         now = datetime.now()
         return StrategySignalDTO(
             id=0,
@@ -658,11 +685,40 @@ class GoldenCrossEngine:
             stoch_d=Decimal(str(current_snapshot.stoch_d)),
             prev_state=prev_state,
             new_state=transition.new_state.value,
-            note=transition.reason,
+            note=note if note is not None else transition.reason,
             signal_at=now,
             executed_at=None,
             created_at=now,
         )
+
+    async def _find_duplicate_executed_signal(
+        self,
+        strategy_id: int,
+        symbol: str,
+        signal_type: SignalType,
+        prev_state: str,
+        new_state: str,
+    ):
+        """직전(가장 최근) 시그널이 이번에 도출된 것과 동일 전이
+        (signal_type, prev_state, new_state)로 이미 EXECUTED인지 확인한다.
+
+        symbol_state 동기화 실패로 상태가 stale하면 상태머신이 다음 실행에서 동일
+        전이를 재도출하므로, 기간 제한 없이 '가장 최근 시그널'만 비교해도 정확히
+        중복(재주문)을 잡아낸다. 정상적인 BUY→SELL→BUY 사이클은 signal_type이나
+        prev/new_state가 달라지므로 절대 차단되지 않는다.
+        """
+        recent = await self.signal_repo.get_by_symbol(strategy_id, symbol, limit=1)
+        if not recent:
+            return None
+        latest = recent[0]
+        if (
+            latest.signal_status == SignalStatus.EXECUTED.value
+            and latest.signal_type == signal_type.value
+            and latest.prev_state == prev_state
+            and latest.new_state == new_state
+        ):
+            return latest
+        return None
 
     def _model_to_dto(self, model) -> StrategySignalDTO:
         """모델을 DTO로 변환"""

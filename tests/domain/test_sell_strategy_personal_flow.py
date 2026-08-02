@@ -297,3 +297,55 @@ async def test_overlay_stage_upgrade_applied_at_most_once_end_to_end(
     await service.analyze_sell_signal(symbol="005930", use_scoring=True)
 
     assert len(calls) == 1
+
+
+async def test_hybrid_mode_applies_mechanical_floor_to_final_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sell_mode='hybrid'에서 85% 피크수익 보호 등 기계적 규칙이 final_stage에 반영된다.
+
+    과거엔 reason 텍스트로만 남고 final_stage/비율이 HOLD로 남아 알림 심각도와
+    근거가 불일치하던 갭을 고정한다.
+    """
+    service = SellStrategyService(session=None)
+    _stub_neutral_sell_dependencies(service, monkeypatch)
+    # 기계적 보호(85% 수익 보호)가 켜진 simple 신호를 주입
+    monkeypatch.setattr(
+        service,
+        "compute_simple_sell_signal",
+        lambda *args, **kwargs: {
+            "should_sell": True,
+            "reasons": ["85% 수익 보호 트리거 (peak=8.0%, 현재=-2.0%)"],
+        },
+    )
+
+    result = await service.analyze_sell_signal(
+        symbol="005930", use_scoring=True, sell_mode="hybrid"
+    )
+
+    assert result.final_stage == SellStageEnum.REDUCE_2
+    assert result.final_ratio_min == 0.3
+    assert result.final_ratio_max == 0.4
+    assert any("기계적 보호" in r for r in result.sell_stage_reasons)
+
+
+async def test_legacy_mode_ignores_mechanical_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sell_mode='legacy'는 기계적 floor 영향 없이 HOLD 유지(모드 게이팅 확인)."""
+    service = SellStrategyService(session=None)
+    _stub_neutral_sell_dependencies(service, monkeypatch)
+    monkeypatch.setattr(
+        service,
+        "compute_simple_sell_signal",
+        lambda *args, **kwargs: {
+            "should_sell": True,
+            "reasons": ["85% 수익 보호 트리거 (peak=8.0%, 현재=-2.0%)"],
+        },
+    )
+
+    result = await service.analyze_sell_signal(
+        symbol="005930", use_scoring=True, sell_mode="legacy"
+    )
+
+    assert result.final_stage == SellStageEnum.HOLD
