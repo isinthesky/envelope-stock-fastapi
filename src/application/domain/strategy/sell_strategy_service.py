@@ -615,6 +615,15 @@ class SellStrategyService:
         except ValueError as e:
             raise StrategyError(str(e))
 
+        # 방어: 로더 계약(ascending 정렬·필수 컬럼)을 신뢰하되 무결성 재확인.
+        if (
+            df is None
+            or df.empty
+            or not {"high", "low", "close", "timestamp"}.issubset(df.columns)
+        ):
+            raise StrategyError(f"{symbol}: OHLCV 데이터 부족/무결성 오류")
+        df = df.sort_values("timestamp").reset_index(drop=True)
+
         ctx = _SellAnalysisContext(df=df)
         ctx.candle_count = len(df)
 
@@ -863,8 +872,8 @@ class SellStrategyService:
             market_credit_recent_high_ratio=(
                 ctx.market_credit_data.recent_5d_high_ratio if ctx.market_credit_data else None
             ),
-            risk_combo_peak=bool(ctx.overlay_signals["risk_combo_peak"]),
-            risk_combo_extreme=bool(ctx.overlay_signals["risk_combo_extreme"]),
+            risk_combo_peak=bool(ctx.overlay_signals.get("risk_combo_peak", False)),
+            risk_combo_extreme=bool(ctx.overlay_signals.get("risk_combo_extreme", False)),
         )
 
         ctx.drawdown_from_high = None
@@ -931,7 +940,7 @@ class SellStrategyService:
         sell_reasons.extend(phase_reasons)
         sell_reasons.extend(ctx.personal_flow_reasons)
         sell_reasons.extend(ctx.market_credit_reasons)
-        sell_reasons.extend(ctx.overlay_signals["combo_reasons"])
+        sell_reasons.extend(ctx.overlay_signals.get("combo_reasons", []))
 
         if not sell_reasons:
             sell_reasons.append("현재 매도 시그널 없음 - 보유 유지")

@@ -533,9 +533,10 @@ class GoldenCrossEngine:
             realized_pnl_ratio=realized_pnl_ratio,
         )
 
+        pnl_text = f"{realized_pnl_ratio:.2%}" if realized_pnl_ratio is not None else "n/a"
         logger.info(
             f"[GC Engine] SELL {symbol} x {target_position.quantity} @ {price} "
-            f"(PnL: {realized_pnl_ratio:.2%})"
+            f"(PnL: {pnl_text})"
         )
 
     async def _update_state_after_signal(
@@ -566,20 +567,23 @@ class GoldenCrossEngine:
         KIS 일봉 API는 1콜당 최대 100행이므로, 단일 호출 경로로는 장기 MA(예: MA200→210캔들)
         데이터를 확보할 수 없다. 로더는 max_days 청크로 분할 조회한다.
         """
+        data_loader = self._get_data_loader()
         try:
-            data_loader = self._get_data_loader()
             df = await data_loader.load_ohlcv_dataframe(
                 symbol=symbol,
                 days=days,
                 interval="1d",
                 min_candles=min_candles,
             )
-            if df is None or df.empty:
-                return None
-            return df.sort_values("timestamp").reset_index(drop=True)
-        except Exception as e:
-            logger.error(f"[GC Engine] Failed to fetch OHLCV for {symbol}: {e}")
+        except ValueError as e:
+            # 데이터 부족 등 예상된 실패만 스킵(None). 그 외 예외(네트워크/스키마 등)는
+            # 은폐하지 않고 상위 per-symbol 핸들러로 전파해 실제 오류로 관측되게 한다.
+            logger.warning(f"[GC Engine] Insufficient/invalid OHLCV for {symbol}: {e}")
             return None
+
+        if df is None or df.empty:
+            return None
+        return df.sort_values("timestamp").reset_index(drop=True)
 
     def _create_snapshot(self, row: pd.Series) -> IndicatorSnapshot:
         """데이터프레임 행을 IndicatorSnapshot으로 변환"""
