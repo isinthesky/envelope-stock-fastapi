@@ -8,9 +8,13 @@ import pytest
 
 from src.adapters.database.models.strategy_signal import SignalStatus, SignalType
 from src.adapters.database.models.strategy_symbol_state import SymbolState
-from src.application.domain.strategy.dto import GoldenCrossConfigDTO
+from src.application.domain.strategy.dto import GoldenCrossConfigDTO, GoldenCrossMAConfig
 from src.application.domain.strategy.golden_cross_engine import GoldenCrossEngine
 from src.application.domain.strategy.state_machine import Signal, StateTransition
+
+# 합성데이터(180행)에 맞춘 소형 MA로 고정 — 엔진의 데이터 충분성 가드
+# (len(df) < long_period+10)를 settings 기본값(라이브 200)과 무관하게 통과시킨다.
+_TEST_CONFIG = GoldenCrossConfigDTO(ma_config=GoldenCrossMAConfig(short_period=5, long_period=60))
 
 
 class _RecordingSymbolStateRepo:
@@ -126,7 +130,7 @@ async def test_dry_run_does_not_create_or_update_symbol_state(monkeypatch: pytes
     result = await engine._process_symbol(
         strategy=SimpleNamespace(id=1),
         symbol="005930",
-        config=GoldenCrossConfigDTO(),
+        config=_TEST_CONFIG,
         state_machine=_FakeStateMachine(
             StateTransition(
                 new_state=SymbolState.WAITING_FOR_PULLBACK,
@@ -169,7 +173,7 @@ async def test_dry_run_signal_returns_skipped_dto_without_persisting(
     result = await engine._process_symbol(
         strategy=SimpleNamespace(id=1),
         symbol="005930",
-        config=GoldenCrossConfigDTO(),
+        config=_TEST_CONFIG,
         state_machine=_FakeStateMachine(
             StateTransition(
                 new_state=SymbolState.IN_POSITION,

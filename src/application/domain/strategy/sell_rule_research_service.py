@@ -294,8 +294,8 @@ class SellPeakRuleResearchService:
         ohlcv_df["biz_date"] = ohlcv_df["timestamp"].dt.strftime("%Y%m%d")
         ohlcv_df = TechnicalIndicators.prepare_golden_cross_indicators(
             ohlcv_df,
-            short_ma_period=55,
-            long_ma_period=165,
+            short_ma_period=settings.gc_short_ma_period,
+            long_ma_period=settings.gc_long_ma_period,
             stoch_k_period=14,
             stoch_d_period=3,
         )

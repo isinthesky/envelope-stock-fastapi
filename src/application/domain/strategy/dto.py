@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field, field_validator
 
 from src.application.common.dto import BaseDTO
+from src.settings.config import settings
 
 
 # ==================== Strategy Type Enum ====================
@@ -83,10 +84,26 @@ class StrategyConfigDTO(BaseStrategyConfig):
 
 
 class GoldenCrossMAConfig(BaseDTO):
-    """골든크로스 이동평균 설정"""
+    """골든크로스 이동평균 설정.
 
-    short_period: int = Field(default=55, description="단기 MA 기간", ge=5, le=120)
-    long_period: int = Field(default=165, description="장기 MA 기간", ge=60, le=400)
+    기본값은 운영 스캔 설정(settings.gc_short/long_ma_period)을 따른다 —
+    매수 스캔과 실행 엔진이 동일한 크로스오버를 판정하도록 정합. 명시적으로
+    ma_config를 넘기면(백테스트/영속 config) 그 값이 우선한다.
+    범위는 settings와 동일(short ge=3, long ge=20).
+    """
+
+    short_period: int = Field(
+        default_factory=lambda: settings.gc_short_ma_period,
+        description="단기 MA 기간 (기본=settings.gc_short_ma_period)",
+        ge=3,
+        le=120,
+    )
+    long_period: int = Field(
+        default_factory=lambda: settings.gc_long_ma_period,
+        description="장기 MA 기간 (기본=settings.gc_long_ma_period)",
+        ge=20,
+        le=400,
+    )
 
 
 class StochasticConfig(BaseDTO):
