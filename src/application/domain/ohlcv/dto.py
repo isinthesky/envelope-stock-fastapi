@@ -119,7 +119,9 @@ class WarmupRequestDTO(BaseDTO):
     """
 
     symbols: list[str] = Field(description="워밍업 대상 종목 목록")
-    days: int = Field(default=240, ge=1, le=500, description="조회 기간 (일)")
+    # 상한 800: 최대 지원 장기 MA(gc_long_ma_period le=400)의 워밍업 창
+    # max(300, (400+20)*1.6)=672 를 여유 있게 수용(매도 워밍업 경로).
+    days: int = Field(default=240, ge=1, le=800, description="조회 기간 (일)")
     interval: str = Field(default="1d", description="캔들 간격")
     priority: str = Field(default="normal", pattern="^(high|normal|low)$", description="우선순위")
     force_refresh: bool = Field(default=False, description="기존 캐시 무시 여부")
