@@ -92,6 +92,18 @@ class GoldenCrossEngine:
             self._data_loader = OHLCVDataLoader(self.session)
         return self._data_loader
 
+    async def _safe_rollback(self) -> None:
+        """rollback 자체 실패가 상위로 전파되지 않도록 방어한다.
+
+        주문 접수 후 마킹/커밋 실패의 except 경로에서 rollback이 다시 raise하면
+        예외가 _execute_*를 탈출해 FAILED로 오기록될 수 있으므로(이중주문 위험),
+        여기서 삼켜 로깅만 한다.
+        """
+        try:
+            await self.session.rollback()
+        except Exception as e:
+            logger.error(f"[GC Engine] session.rollback() failed (무시): {e}")
+
     async def _get_account_service(self) -> AccountService:
         if self._account_service is None:
             if self.redis_client is None:
@@ -190,7 +202,7 @@ class GoldenCrossEngine:
             error_msg = f"Strategy execution failed: {str(e)}"
             logger.exception(f"[GC Engine] {error_msg}")
             errors.append(error_msg)
-            await self.session.rollback()
+            await self._safe_rollback()
 
         return self._create_result(
             strategy_id,
@@ -527,7 +539,7 @@ class GoldenCrossEngine:
             )
             await self.session.commit()
         except Exception as e:
-            await self.session.rollback()
+            await self._safe_rollback()
             logger.critical(
                 f"[GC Engine] ORDER PLACED BUT order_no NOT DURABLY RECORDED — 수동 대사 필요: "
                 f"symbol={symbol} signal_id={signal_model.id} order_no={order_no}: {e}"
@@ -546,7 +558,7 @@ class GoldenCrossEngine:
             )
             await self.session.commit()
         except Exception as e:
-            await self.session.rollback()
+            await self._safe_rollback()
             logger.critical(
                 f"[GC Engine] ORDER PLACED (order_no={order_no}) BUT SIGNAL NOT MARKED EXECUTED "
                 f"— 수동 대사 필요: symbol={symbol} signal_id={signal_model.id}: {e}"
@@ -604,7 +616,7 @@ class GoldenCrossEngine:
             )
             await self.session.commit()
         except Exception as e:
-            await self.session.rollback()
+            await self._safe_rollback()
             logger.critical(
                 f"[GC Engine] SELL ORDER PLACED BUT order_no NOT DURABLY RECORDED — 수동 대사 필요: "
                 f"symbol={symbol} signal_id={signal_model.id} order_no={order_no}: {e}"
@@ -624,7 +636,7 @@ class GoldenCrossEngine:
             )
             await self.session.commit()
         except Exception as e:
-            await self.session.rollback()
+            await self._safe_rollback()
             logger.critical(
                 f"[GC Engine] SELL ORDER PLACED (order_no={order_no}) BUT SIGNAL NOT MARKED EXECUTED "
                 f"— 수동 대사 필요: symbol={symbol} signal_id={signal_model.id}: {e}"
