@@ -28,5 +28,7 @@ async def sell_strategy_page(request: Request) -> HTMLResponse:
             "static_version": settings.app_version,
             "etf_universe_enabled": settings.etf_universe_enabled,
             "etf_universe_count": len(settings.etf_universe_symbols),
+            "gc_short_ma": settings.gc_short_ma_period,
+            "gc_long_ma": settings.gc_long_ma_period,
         },
     )

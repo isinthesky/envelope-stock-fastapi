@@ -70,14 +70,14 @@
 
 {% block content %}
 <h1>매수 전략 (골든크로스)</h1>
-<p>MA55/MA165 골든크로스 + Stochastic 눌림목 매수 전략</p>
+<p>MA{{ gc_short_ma }}/MA{{ gc_long_ma }} 골든크로스 + Stochastic 눌림목 매수 전략</p>
 
 <section class="strategy-info">
   <h2>전략 개요</h2>
-  <p><strong>MA55/MA165 골든크로스</strong> 발생 후 Stochastic 과매도 구간에서 매수하는 중기 추세추종 전략</p>
+  <p><strong>MA{{ gc_short_ma }}/MA{{ gc_long_ma }} 골든크로스</strong> 발생 후 Stochastic 과매도 구간에서 매수하는 중기 추세추종 전략</p>
 
   <div class="strategy-flow">
-    <span class="step">MA55 > MA165<br><small>골든크로스</small></span>
+    <span class="step">MA{{ gc_short_ma }} > MA{{ gc_long_ma }}<br><small>골든크로스</small></span>
     <span class="arrow">→</span>
     <span class="step">K ≥ 50<br><small>GC 활성</small></span>
     <span class="arrow">→</span>
@@ -100,7 +100,7 @@
   <div class="config-grid">
     <div class="config-item">
       <div class="label">이평선</div>
-      <div class="value">MA55 / MA165</div>
+      <div class="value">MA{{ gc_short_ma }} / MA{{ gc_long_ma }}</div>
     </div>
     <div class="config-item">
       <div class="label">Stochastic</div>
@@ -262,8 +262,8 @@
           <th>종목명</th>
           <th>상태</th>
           <th>현재가</th>
-          <th>MA55</th>
-          <th>MA165</th>
+          <th>MA{{ gc_short_ma }}</th>
+          <th>MA{{ gc_long_ma }}</th>
           <th>Stoch K</th>
           <th>수익률</th>
         </tr>
