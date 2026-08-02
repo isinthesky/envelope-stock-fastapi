@@ -39,6 +39,10 @@ from src.application.domain.backtest.regime import (
     decompose_by_regime,
     regime_summary_dict,
 )
+from src.application.domain.backtest.regime_filter import (
+    RegimeEntryFilter,
+    compute_allowed_entry_dates,
+)
 from src.application.domain.backtest.statistics import (
     bootstrap_sharpe_ci,
     deflated_sharpe_ratio,
@@ -52,6 +56,8 @@ from src.application.domain.strategy.dto import GoldenCrossConfigDTO
 class WalkForwardCandidate:
     label: str
     config: GoldenCrossConfigDTO
+    # 진입 국면 필터(하락/횡보장 회피). None이면 게이트 미적용(기존 동작).
+    regime_filter: RegimeEntryFilter | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +120,16 @@ class WalkForwardRunner:
             long = max(c.config.ma_config.long_period for c in candidates)
             lookback_trading_days = long + 30
         self.lookback_trading_days = lookback_trading_days
+        # 진입 국면 필터별 허용일 캐시(동일 필터 재계산 방지)
+        self._allowed_cache: dict[RegimeEntryFilter, set[date] | None] = {}
+
+    def _allowed_dates_for(self, filt: RegimeEntryFilter | None) -> set[date] | None:
+        """후보 필터에 대한 진입 허용일 집합(벤치마크 기준). 필터/벤치 없으면 None."""
+        if filt is None or self.benchmark is None:
+            return None
+        if filt not in self._allowed_cache:
+            self._allowed_cache[filt] = compute_allowed_entry_dates(self.benchmark, filt)
+        return self._allowed_cache[filt]
 
     # ==================== public ====================
 
@@ -161,7 +177,12 @@ class WalkForwardRunner:
             for cand in self.candidates:
                 trials += 1
                 engine = PortfolioParityEngine(cand.config, self.constraints)
-                res = engine.run(train_slice, self.backtest_config, active_from=w.train_start)
+                res = engine.run(
+                    train_slice,
+                    self.backtest_config,
+                    active_from=w.train_start,
+                    entry_allowed_dates=self._allowed_dates_for(cand.regime_filter),
+                )
                 value = self._metric_value(res.result)
                 sp = self._daily_sharpe(res.result.daily_stats)
                 fold_row.append(sp)
@@ -181,7 +202,12 @@ class WalkForwardRunner:
                 sym: self._slice(panels[sym], test_lb_start, w.test_end) for sym in eligible
             }
             test_engine = PortfolioParityEngine(best_candidate.config, self.constraints)
-            test_res = test_engine.run(test_slice, self.backtest_config, active_from=w.test_start)
+            test_res = test_engine.run(
+                test_slice,
+                self.backtest_config,
+                active_from=w.test_start,
+                entry_allowed_dates=self._allowed_dates_for(best_candidate.regime_filter),
+            )
 
             folds.append(
                 FoldOutcome(

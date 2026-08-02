@@ -43,6 +43,7 @@ from src.application.domain.backtest.regime import (
     decompose_by_regime,
     regime_summary_dict,
 )
+from src.application.domain.backtest.regime_filter import RegimeEntryFilter
 from src.application.domain.backtest.walk_forward_runner import (
     WalkForwardCandidate,
     WalkForwardRunner,
@@ -62,7 +63,12 @@ REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
 # 라이브 config를 중심으로 소규모 그리드(PBO 정의 위해 ≥2). 과도한 그리드는
 # 데이터 스누핑을 키우므로 핵심 축(진입 민감도/추세 여유)만 변주한다.
 def _candidate(
-    label: str, *, oversold: float, recovery: float, max_gap: float
+    label: str,
+    *,
+    oversold: float,
+    recovery: float,
+    max_gap: float,
+    regime_filter: RegimeEntryFilter | None = None,
 ) -> WalkForwardCandidate:
     return WalkForwardCandidate(
         label=label,
@@ -76,16 +82,38 @@ def _candidate(
             # ma_gap 단위는 퍼센트(%): min ge=-5..10, max ge=5..20
             ma_gap_config=MAGapConfig(min_gap_ratio=0.0, max_gap_ratio=max_gap),
         ),
+        regime_filter=regime_filter,
     )
 
 
-def build_candidates() -> list[WalkForwardCandidate]:
+def build_candidates(
+    regime_filter: RegimeEntryFilter | None = None,
+) -> list[WalkForwardCandidate]:
+    """후보 그리드. regime_filter 지정 시 전 후보에 동일 진입 국면 필터를 적용한다
+    (A/B 변형 실행용). 미지정이면 기존 무필터 그리드."""
     return [
-        _candidate("live", oversold=25.0, recovery=20.0, max_gap=8.0),
-        _candidate("tight_entry", oversold=20.0, recovery=18.0, max_gap=8.0),
-        _candidate("wide_trend", oversold=25.0, recovery=20.0, max_gap=12.0),
-        _candidate("loose_entry", oversold=30.0, recovery=25.0, max_gap=8.0),
+        _candidate("live", oversold=25.0, recovery=20.0, max_gap=8.0, regime_filter=regime_filter),
+        _candidate(
+            "tight_entry", oversold=20.0, recovery=18.0, max_gap=8.0, regime_filter=regime_filter
+        ),
+        _candidate(
+            "wide_trend", oversold=25.0, recovery=20.0, max_gap=12.0, regime_filter=regime_filter
+        ),
+        _candidate(
+            "loose_entry", oversold=30.0, recovery=25.0, max_gap=8.0, regime_filter=regime_filter
+        ),
     ]
+
+
+# A/B 진입 국면 필터 변형: 무필터 vs MA200 vs ADX vs MA200+ADX
+REGIME_VARIANTS: dict[str, RegimeEntryFilter | None] = {
+    "none": None,
+    "ma200": RegimeEntryFilter(use_ma=True, ma_period=200, use_adx=False),
+    "adx": RegimeEntryFilter(use_ma=False, use_adx=True, adx_period=14, adx_min=20.0),
+    "ma200_adx": RegimeEntryFilter(
+        use_ma=True, ma_period=200, use_adx=True, adx_period=14, adx_min=20.0
+    ),
+}
 
 
 # ==================== 데이터 로드(DB 전용) ====================
@@ -331,6 +359,157 @@ async def run(args) -> None:
     print(f"[wf] json:   {json_path}", flush=True)
 
 
+async def run_regime_ab(args) -> None:
+    """진입 국면 필터 A/B 검증: 동일 후보 그리드를 4개 필터 변형으로 돌려
+    OOS/게이트를 비교한다. 표준 walk_forward_*.json은 건드리지 않고
+    walk_forward_regime_ab_*.{json,md} 로 비교 결과만 저장한다."""
+    start = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc)
+    end = datetime.fromisoformat(args.end).replace(tzinfo=timezone.utc)
+    symbols = _resolve_symbols(args)
+    print(f"[wf-ab] symbols={len(symbols)} benchmark={args.benchmark}", flush=True)
+
+    panels, bench_df = await _load_panels(symbols, args.benchmark, start, end)
+    if not panels or bench_df.empty:
+        raise SystemExit("패널/벤치마크 데이터가 비었습니다(P1 backfill 확인).")
+
+    trading_days = sorted({ts.date() for ts in bench_df["timestamp"]})
+    windows = generate_rolling_windows(
+        trading_days,
+        train_size=args.train,
+        test_size=args.test,
+        step=args.step,
+        embargo=args.embargo,
+    )
+    if not windows:
+        raise SystemExit("윈도우 생성 실패(거래일 부족).")
+    print(f"[wf-ab] trading_days={len(trading_days)} folds={len(windows)}", flush=True)
+
+    constraints = PortfolioConstraints(
+        max_positions=args.max_positions, allocation_ratio=args.alloc
+    )
+    backtest_config = BacktestConfigDTO(execution_timing="same_close", use_tax=not args.no_tax)
+    bench_oos_ret, bench_bear_mdd = _benchmark_oos_metrics(bench_df, trading_days, windows)
+
+    results: list[dict] = []
+    for name, filt in REGIME_VARIANTS.items():
+        candidates = build_candidates(regime_filter=filt)
+        runner = WalkForwardRunner(
+            candidates=candidates,
+            constraints=constraints,
+            backtest_config=backtest_config,
+            selection_metric="sharpe_ratio",
+            benchmark=bench_df,
+            regime_long_ma=200,
+        )
+        print(f"[wf-ab] variant={name} ({filt.describe() if filt else 'no-filter'}) …", flush=True)
+        report = runner.run(panels, trading_days, windows)
+        gate_inputs = gate_inputs_from_report(
+            report,
+            benchmark_oos_return_pct=bench_oos_ret,
+            benchmark_bear_mdd=bench_bear_mdd,
+            slippage_2x_positive=None,
+        )
+        gate = evaluate_gates(gate_inputs)
+        o, st = report.oos, report.stats
+        regime = st.get("regime") or {}
+        results.append(
+            {
+                "variant": name,
+                "filter": filt.describe() if filt else "no-filter",
+                "oos": o,
+                "stats": {
+                    k: st.get(k)
+                    for k in ("deflated_sharpe", "pbo", "oos_sharpe_ci_low", "oos_sharpe_ci_high")
+                },
+                "regime": regime,
+                "gate": {
+                    "verdict": gate.verdict,
+                    "passed": gate.passed,
+                    "failed": gate.failed,
+                    "na": gate.na,
+                    "reason": gate.reason,
+                    "checks": [
+                        {"key": c.key, "name": c.name, "status": c.status, "detail": c.detail}
+                        for c in gate.checks
+                    ],
+                },
+            }
+        )
+        print(
+            f"[wf-ab]   → verdict={gate.verdict} Sharpe={o['sharpe']} CAGR={o['cagr']}% "
+            f"MDD={o['mdd']}% bear={regime.get('bear', {}).get('total_return')}% "
+            f"chop={regime.get('chop', {}).get('total_return')}%",
+            flush=True,
+        )
+
+    # 최선 변형: 게이트 통과 수 → OOS Sharpe 순
+    best = max(results, key=lambda r: (r["gate"]["passed"], r["oos"]["sharpe"]))
+
+    # 비교 마크다운
+    md = [
+        "# Walk-Forward 진입 국면 필터 A/B 비교",
+        "",
+        f"- 기간: {start.date()}~{end.date()} | folds: {len(windows)} | 종목: {len(panels)}",
+        (
+            f"- 벤치 OOS buy&hold: {bench_oos_ret:.2f}%"
+            if bench_oos_ret is not None
+            else "- 벤치 OOS: n/a"
+        ),
+        "",
+        "| Variant | Filter | Verdict | PASS | Sharpe | CAGR% | MDD% | DSR | bear% | chop% |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for r in results:
+        o, rg = r["oos"], r["regime"]
+        md.append(
+            f"| {r['variant']} | {r['filter']} | {r['gate']['verdict']} | {r['gate']['passed']} "
+            f"| {o['sharpe']} | {o['cagr']} | {o['mdd']} | {r['stats'].get('deflated_sharpe')} "
+            f"| {rg.get('bear', {}).get('total_return')} | {rg.get('chop', {}).get('total_return')} |"
+        )
+    md += [
+        "",
+        f"> **최선 변형: `{best['variant']}` ({best['filter']})** — "
+        f"verdict={best['gate']['verdict']}, OOS Sharpe={best['oos']['sharpe']}.",
+        "> 무필터(none) 대비 개선 여부로 필터 효용을 판단하라. 개선 시에만 라이브 적용 검토.",
+    ]
+
+    REPORTS_DIR.mkdir(exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    md_path = REPORTS_DIR / f"walk_forward_regime_ab_{stamp}.md"
+    json_path = REPORTS_DIR / f"walk_forward_regime_ab_{stamp}.json"
+    md_path.write_text("\n".join(md) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(
+            {
+                "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "window": {
+                    "start": start.date().isoformat(),
+                    "end": end.date().isoformat(),
+                    "train": args.train,
+                    "test": args.test,
+                    "step": args.step,
+                    "embargo": args.embargo,
+                },
+                "symbols": len(panels),
+                "benchmark_oos_return_pct": bench_oos_ret,
+                "benchmark_bear_mdd": bench_bear_mdd,
+                "best_variant": best["variant"],
+                "variants": results,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print("=" * 64, flush=True)
+    print(
+        f"[wf-ab] BEST variant={best['variant']} ({best['filter']}) verdict={best['gate']['verdict']}",
+        flush=True,
+    )
+    print(f"[wf-ab] md:   {md_path}", flush=True)
+    print(f"[wf-ab] json: {json_path}", flush=True)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--coverage", type=str, default=None)
@@ -345,7 +524,14 @@ def main() -> None:
     ap.add_argument("--max-positions", type=int, default=5)
     ap.add_argument("--alloc", type=float, default=None)
     ap.add_argument("--no-tax", action="store_true")
-    asyncio.run(run(ap.parse_args()))
+    ap.add_argument(
+        "--regime-ab",
+        action="store_true",
+        help="진입 국면 필터 A/B 비교(none/ma200/adx/ma200_adx) 실행 — "
+        "표준 리포트 대신 walk_forward_regime_ab_*.{json,md} 생성",
+    )
+    args = ap.parse_args()
+    asyncio.run(run_regime_ab(args) if args.regime_ab else run(args))
 
 
 if __name__ == "__main__":

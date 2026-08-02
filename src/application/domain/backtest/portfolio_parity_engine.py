@@ -129,6 +129,7 @@ class PortfolioParityEngine:
         panels: dict[str, pd.DataFrame],
         backtest_config: BacktestConfigDTO | None = None,
         active_from: date | None = None,
+        entry_allowed_dates: set[date] | None = None,
     ) -> PortfolioRunResult:
         """포트폴리오 백테스트 실행.
 
@@ -137,6 +138,9 @@ class PortfolioParityEngine:
                 포지션 진입·성과 집계는 이 날짜부터 시작한다(walk-forward fold의
                 독립 OOS 측정용). 시그널 스케줄은 전체 슬라이스로 계산되므로
                 active_from 시점 FSM 상태가 올바르게 반영된다.
+            entry_allowed_dates: 지정 시 이 집합에 없는 거래일에는 **신규 진입을
+                차단**한다(시장 국면 필터, regime_block). 청산은 막지 않는다.
+                None이면 게이트 미적용(전량 허용, 기존 동작).
         """
         backtest_config = backtest_config or BacktestConfigDTO()
         if not panels:
@@ -292,7 +296,10 @@ class PortfolioParityEngine:
                 price = current.close
                 qty = 0
                 reject_reason: str | None = None
-                if len(positions) >= max_pos:
+                if entry_allowed_dates is not None and d not in entry_allowed_dates:
+                    # 시장 국면 필터: 하락/횡보장 신규 진입 차단(라이브 regime 게이트 정합)
+                    reject_reason = "regime_block"
+                elif len(positions) >= max_pos:
                     reject_reason = "max_positions"
                 elif price <= 0:  # current.close는 Decimal — 불량 데이터(<=0)만 방어
                     reject_reason = "invalid_price"
