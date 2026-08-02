@@ -2101,15 +2101,16 @@ class SellStrategyService:
                 added_reasons.append("[HYBRID] 기계적 보호 규칙 트리거")
 
             if rsi_decline:
-                # RSI + 하락은 Legacy가 이미 매도 기운일 때만 업그레이드
-                if final_stage != SellStageEnum.HOLD:
-                    # 이미 약한 매도 신호(REDUCE_1 이상)면 한 단계 더 강하게
-                    if final_stage == SellStageEnum.REDUCE_1:
-                        final_stage = SellStageEnum.REDUCE_2
-                    added_reasons.append("[HYBRID] RSI+하락 확인 → 가속")
-                else:
+                # RSI + 하락은 Legacy가 이미 약한 매도 신호(REDUCE_1)일 때만 한 단계 가속.
+                if final_stage == SellStageEnum.REDUCE_1:
+                    final_stage = SellStageEnum.REDUCE_2
+                    added_reasons.append("[HYBRID] RSI+하락 확인 → 가속(REDUCE_2)")
+                elif final_stage == SellStageEnum.HOLD:
                     # Legacy가 HOLD면 그냥 이유만 추가 (강제 업그레이드 안 함)
                     added_reasons.append("[HYBRID] RSI+하락 감지 (Legacy HOLD 유지)")
+                else:
+                    # 이미 REDUCE_2/EXIT_ALL이면 추가 상승 없음 — 감지 사실만 기재
+                    added_reasons.append("[HYBRID] RSI+하락 감지 (이미 강한 매도 단계)")
 
             if added_reasons:
                 legacy_result.sell_reasons = (
