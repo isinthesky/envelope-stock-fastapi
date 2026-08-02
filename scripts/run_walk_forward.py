@@ -19,6 +19,7 @@ P1에서 DB에 적재된 실 OHLCV(98종목)를 backfill 없이 읽어, 검증�
   --alloc           신규 포지션당 현금비율(기본: config 값)
   --no-tax          매도세 미적용(국내 주식형 ETF 실제 면제 반영)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -32,7 +33,16 @@ import pandas as pd
 from src.adapters.database.connection import AsyncSessionLocal
 from src.adapters.database.repositories.ohlcv_repository import OHLCVRepository
 from src.application.domain.backtest.dto import BacktestConfigDTO
+from src.application.domain.backtest.gates import (
+    evaluate_gates,
+    gate_inputs_from_report,
+)
 from src.application.domain.backtest.portfolio_parity_engine import PortfolioConstraints
+from src.application.domain.backtest.regime import (
+    classify_regimes,
+    decompose_by_regime,
+    regime_summary_dict,
+)
 from src.application.domain.backtest.walk_forward_runner import (
     WalkForwardCandidate,
     WalkForwardRunner,
@@ -51,7 +61,9 @@ REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
 # ==================== 후보 그리드 ====================
 # 라이브 config를 중심으로 소규모 그리드(PBO 정의 위해 ≥2). 과도한 그리드는
 # 데이터 스누핑을 키우므로 핵심 축(진입 민감도/추세 여유)만 변주한다.
-def _candidate(label: str, *, oversold: float, recovery: float, max_gap: float) -> WalkForwardCandidate:
+def _candidate(
+    label: str, *, oversold: float, recovery: float, max_gap: float
+) -> WalkForwardCandidate:
     return WalkForwardCandidate(
         label=label,
         config=GoldenCrossConfigDTO(
@@ -100,6 +112,46 @@ async def _load_panels(
     return panels, bench_df
 
 
+def _benchmark_oos_metrics(bench_df, trading_days, windows) -> tuple[float | None, float | None]:
+    """OOS 창(union)에서 벤치 buy&hold 수익%와 약세장 MDD%를 산출한다(G3/G4 근거).
+
+    - buy&hold 수익: OOS 첫 거래일 종가 → 마지막 거래일 종가.
+    - 약세장 MDD: 벤치 자체 국면 라벨로 OOS 일별수익을 분해한 bear MDD.
+    두 값 모두 전략 OOS와 동일 날짜집합·동일 국면라벨을 써 apples-to-apples 비교.
+    """
+    # OOS 날짜집합(fold test 창 union ∩ 거래일)
+    oos_dates = sorted(
+        {d for d in trading_days if any(w.test_start <= d <= w.test_end for w in windows)}
+    )
+    if len(oos_dates) < 2:
+        return None, None
+    close_by_date = {
+        ts.date(): (ts, float(c)) for ts, c in zip(bench_df["timestamp"], bench_df["close"])
+    }
+    oos_dates = [d for d in oos_dates if d in close_by_date]
+    if len(oos_dates) < 2:
+        return None, None
+
+    first_c = close_by_date[oos_dates[0]][1]
+    last_c = close_by_date[oos_dates[-1]][1]
+    oos_return_pct = (last_c / first_c - 1.0) * 100.0 if first_c > 0 else None
+
+    # 벤치 일별수익(연속 OOS 거래일 기준) → 국면 분해 → bear MDD
+    pairs: list[tuple] = []
+    for i in range(1, len(oos_dates)):
+        prev_c = close_by_date[oos_dates[i - 1]][1]
+        cur_ts, cur_c = close_by_date[oos_dates[i]]
+        if prev_c > 0:
+            pairs.append((cur_ts, cur_c / prev_c - 1.0))
+    bear_mdd = None
+    if pairs:
+        regimes = classify_regimes(bench_df, long_ma=200)
+        decomp = regime_summary_dict(decompose_by_regime(pairs, regimes))
+        bear = decomp.get("bear") or {}
+        bear_mdd = bear.get("mdd")
+    return oos_return_pct, bear_mdd
+
+
 def _resolve_symbols(args) -> list[str]:
     if args.codes:
         return [c.strip() for c in args.codes.split(",") if c.strip()]
@@ -120,7 +172,10 @@ async def run(args) -> None:
     start = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc)
     end = datetime.fromisoformat(args.end).replace(tzinfo=timezone.utc)
     symbols = _resolve_symbols(args)
-    print(f"[wf] symbols={len(symbols)} benchmark={args.benchmark} {start.date()}~{end.date()}", flush=True)
+    print(
+        f"[wf] symbols={len(symbols)} benchmark={args.benchmark} {start.date()}~{end.date()}",
+        flush=True,
+    )
 
     panels, bench_df = await _load_panels(symbols, args.benchmark, start, end)
     if not panels:
@@ -171,11 +226,23 @@ async def run(args) -> None:
     print(f"[wf] running {len(candidates)} candidates × {len(windows)} folds …", flush=True)
     report = runner.run(panels, trading_days, windows)
 
+    # ── P5 Go/No-Go 게이트: 벤치 OOS 수익·약세장 MDD를 채워 판정
+    bench_oos_ret, bench_bear_mdd = _benchmark_oos_metrics(bench_df, trading_days, windows)
+    gate_inputs = gate_inputs_from_report(
+        report,
+        benchmark_oos_return_pct=bench_oos_ret,
+        benchmark_bear_mdd=bench_bear_mdd,
+        slippage_2x_positive=None,  # 비용 민감도는 별도 실행 필요 → NA(미측정)
+    )
+    gate_result = evaluate_gates(gate_inputs)
+    # 게이트 판정을 리포트 상단(headline 다음)에 삽입
+    report_md = report.markdown + "\n" + gate_result.markdown()
+
     REPORTS_DIR.mkdir(exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     md_path = REPORTS_DIR / f"walk_forward_{stamp}.md"
     json_path = REPORTS_DIR / f"walk_forward_{stamp}.json"
-    md_path.write_text(report.markdown, encoding="utf-8")
+    md_path.write_text(report_md, encoding="utf-8")
     json_path.write_text(
         json.dumps(
             {
@@ -197,6 +264,19 @@ async def run(args) -> None:
                 "use_tax": not args.no_tax,
                 "oos": report.oos,
                 "stats": report.stats,
+                "gate": {
+                    "verdict": gate_result.verdict,
+                    "reason": gate_result.reason,
+                    "passed": gate_result.passed,
+                    "failed": gate_result.failed,
+                    "na": gate_result.na,
+                    "benchmark_oos_return_pct": bench_oos_ret,
+                    "benchmark_bear_mdd": bench_bear_mdd,
+                    "checks": [
+                        {"key": c.key, "name": c.name, "status": c.status, "detail": c.detail}
+                        for c in gate_result.checks
+                    ],
+                },
                 "folds": [
                     {
                         "train": f"{f.window.train_start}~{f.window.train_end}",
@@ -238,6 +318,15 @@ async def run(args) -> None:
                 f"dailySharpe={m['daily_sharpe']} mdd={m['mdd']}%",
                 flush=True,
             )
+    print("-" * 64, flush=True)
+    print(
+        f"[wf] GATE verdict={gate_result.verdict}  "
+        f"PASS={gate_result.passed} FAIL={gate_result.failed} NA={gate_result.na}",
+        flush=True,
+    )
+    for c in gate_result.checks:
+        print(f"[wf]   {c.key} {c.status:4} {c.name} — {c.detail}", flush=True)
+    print(f"[wf] GATE reason: {gate_result.reason}", flush=True)
     print(f"[wf] report: {md_path}", flush=True)
     print(f"[wf] json:   {json_path}", flush=True)
 
