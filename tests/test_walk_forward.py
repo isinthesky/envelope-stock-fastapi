@@ -129,6 +129,14 @@ def test_runner_produces_real_oos_metrics_and_frozen_hashes():
     assert "Walk-Forward" in report.markdown
     assert "Stitched OOS" in report.markdown
 
+    # P4 과적합 통계 배선 확인
+    assert "deflated_sharpe" in report.stats
+    assert "pbo" in report.stats  # 후보 2개 → PBO 산출됨(None 아님)
+    assert report.stats["pbo"] is not None
+    assert 0.0 <= report.stats["deflated_sharpe"] <= 1.0
+    assert isinstance(report.oos_daily_returns, list)
+    assert "과적합 정량화" in report.markdown
+
 
 def test_runner_asof_universe_excludes_short_history_symbol():
     # A,B,C 전기간 / SHORT는 후반부만 존재 → 초기 fold에서 제외되어야 함
@@ -175,11 +183,12 @@ def test_stitch_oos_dedups_overlapping_test_windows():
     seg2 = [_ds(4, "10000000"), _ds(5, "10300000"), _ds(6, "10500000")]  # 1/4 겹침
 
     runner = WalkForwardRunner(candidates=[WalkForwardCandidate("os25", _cfg(25.0))])
-    oos = runner._stitch_oos([seg1, seg2], Decimal("10000000"))
+    oos, oos_returns = runner._stitch_oos([seg1, seg2], Decimal("10000000"))
 
     # 고유 거래일 5개(1/2~1/6), 겹친 1/4는 한 번만
     assert oos["trading_days"] == 5
     assert oos["folds"] == 2
+    assert len(oos_returns) == 5  # 반환된 OOS 일별수익도 dedup됨
 
 
 def test_runner_requires_candidates_and_inputs():

@@ -16,7 +16,7 @@ Walk-Forward Runner (P3) — 진짜 out-of-sample 검증
 `PerformanceMetrics`로 계산한다. 손입력 숫자는 없다.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from hashlib import sha256
@@ -33,6 +33,11 @@ from src.application.domain.backtest.dto import (
 from src.application.domain.backtest.portfolio_parity_engine import (
     PortfolioConstraints,
     PortfolioParityEngine,
+)
+from src.application.domain.backtest.statistics import (
+    bootstrap_sharpe_ci,
+    deflated_sharpe_ratio,
+    probability_of_backtest_overfitting,
 )
 from src.application.domain.backtest.walk_forward_windows import WalkForwardWindow
 from src.application.domain.strategy.dto import GoldenCrossConfigDTO
@@ -63,6 +68,8 @@ class WalkForwardReport:
     markdown: str
     candidates: int
     trials: int  # 총 시도(후보×fold) — 데이터 스누핑 보정(P4 DSR) 입력
+    oos_daily_returns: list[float] = field(default_factory=list)
+    stats: dict = field(default_factory=dict)  # DSR/PBO/bootstrap(P4)
 
 
 def _metrics(result: BacktestResultDTO) -> dict:
@@ -119,6 +126,8 @@ class WalkForwardRunner:
         folds: list[FoldOutcome] = []
         oos_segments: list[list[DailyStatsDTO]] = []
         trials = 0
+        trial_sharpes: list[float] = []  # 모든 시도의 per-period Sharpe(DSR SR0용)
+        cand_fold_matrix: list[list[float]] = []  # (fold, candidate) train Sharpe(PBO용)
 
         for w in windows:
             lb_start = self._lookback_start(days, day_index, w.train_start)
@@ -138,15 +147,20 @@ class WalkForwardRunner:
             best_value: float | None = None
             best_candidate: WalkForwardCandidate | None = None
             best_result: BacktestResultDTO | None = None
+            fold_row: list[float] = []
             for cand in self.candidates:
                 trials += 1
                 engine = PortfolioParityEngine(cand.config, self.constraints)
                 res = engine.run(train_slice, self.backtest_config, active_from=w.train_start)
                 value = self._metric_value(res.result)
+                sp = self._daily_sharpe(res.result.daily_stats)
+                fold_row.append(sp)
+                trial_sharpes.append(sp)
                 if best_value is None or value > best_value:
                     best_value = value
                     best_candidate = cand
                     best_result = res.result
+            cand_fold_matrix.append(fold_row)
 
             assert best_candidate is not None and best_result is not None
             selected_hash = self._freeze(best_candidate)
@@ -173,14 +187,17 @@ class WalkForwardRunner:
             )
             oos_segments.append(test_res.result.daily_stats)
 
-        oos = self._stitch_oos(oos_segments, self.backtest_config.initial_capital)
-        markdown = self._report_md(folds, oos, trials)
+        oos, oos_returns = self._stitch_oos(oos_segments, self.backtest_config.initial_capital)
+        stats = self._overfitting_stats(oos_returns, trial_sharpes, cand_fold_matrix)
+        markdown = self._report_md(folds, oos, trials, stats)
         return WalkForwardReport(
             folds=folds,
             oos=oos,
             markdown=markdown,
             candidates=len(self.candidates),
             trials=trials,
+            oos_daily_returns=oos_returns,
+            stats=stats,
         )
 
     # ==================== helpers ====================
@@ -243,17 +260,58 @@ class WalkForwardRunner:
         payload = f"{candidate.label}:{candidate.config.model_dump_json()}"
         return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
-    def _stitch_oos(self, segments: list[list[DailyStatsDTO]], initial_capital: Decimal) -> dict:
+    @staticmethod
+    def _daily_sharpe(daily_stats: list[DailyStatsDTO]) -> float:
+        """일별 통계에서 per-period(일별) Sharpe를 계산한다(무거래=0)."""
+        rets = [float(s.daily_return) / 100.0 for s in daily_stats[1:]]
+        if len(rets) < 2:
+            return 0.0
+        import statistics as _st
+
+        sd = _st.pstdev(rets)
+        return (_st.fmean(rets) / sd) if sd > 0 else 0.0
+
+    def _overfitting_stats(
+        self,
+        oos_returns: list[float],
+        trial_sharpes: list[float],
+        cand_fold_matrix: list[list[float]],
+    ) -> dict:
+        """DSR / PBO / bootstrap CI를 산출한다(과적합 정량화)."""
+        dsr = deflated_sharpe_ratio(oos_returns, trial_sharpes)
+        ci = bootstrap_sharpe_ci(oos_returns)
+        # PBO: 행렬을 (fold × candidate)로. 후보 1개면 PBO 정의 불가(nan).
+        pbo = (
+            probability_of_backtest_overfitting(cand_fold_matrix)
+            if cand_fold_matrix and len(cand_fold_matrix[0]) >= 2
+            else float("nan")
+        )
+        return {
+            "deflated_sharpe": dsr.deflated_sharpe,
+            "observed_daily_sharpe": dsr.observed_sharpe,
+            "expected_max_sharpe": dsr.expected_max_sharpe,
+            "n_trials": dsr.n_trials,
+            "n_obs": dsr.n_obs,
+            "pbo": round(pbo, 4) if pbo == pbo else None,
+            "oos_sharpe_ci_low": round(ci.low, 4),
+            "oos_sharpe_ci_high": round(ci.high, 4),
+        }
+
+    def _stitch_oos(
+        self, segments: list[list[DailyStatsDTO]], initial_capital: Decimal
+    ) -> tuple[dict, list[float]]:
+        """(집계지표 dict, 연속 OOS 일별수익 배열)을 반환한다."""
         segments = [s for s in segments if s]
+        empty = {
+            "total_return": 0.0,
+            "cagr": 0.0,
+            "sharpe": 0.0,
+            "mdd": 0.0,
+            "trading_days": 0,
+            "folds": 0,
+        }
         if not segments:
-            return {
-                "total_return": 0.0,
-                "cagr": 0.0,
-                "sharpe": 0.0,
-                "mdd": 0.0,
-                "trading_days": 0,
-                "folds": 0,
-            }
+            return empty, []
         c0 = float(initial_capital)
 
         # fold별 일별수익을 (날짜, 수익) 쌍으로 모은다. 각 fold는 플랫 시작이므로
@@ -276,6 +334,7 @@ class WalkForwardRunner:
         seen: set[date] = set()
         equities = [c0]
         dates = []
+        oos_returns: list[float] = []
         for dt, r in sorted(per_day, key=lambda x: x[0]):
             d = dt.date() if hasattr(dt, "date") else dt
             if d in seen:
@@ -283,16 +342,10 @@ class WalkForwardRunner:
             seen.add(d)
             equities.append(equities[-1] * (1.0 + r))
             dates.append(dt)
+            oos_returns.append(r)
 
         if len(equities) < 2:
-            return {
-                "total_return": 0.0,
-                "cagr": 0.0,
-                "sharpe": 0.0,
-                "mdd": 0.0,
-                "trading_days": 0,
-                "folds": len(segments),
-            }
+            return {**empty, "folds": len(segments)}, []
         # equities[0]=c0 에 첫 날짜를 붙여 길이를 맞춘다.
         dates = [dates[0]] + dates
         final = equities[-1]
@@ -307,16 +360,21 @@ class WalkForwardRunner:
             Decimal(str(c0)), Decimal(str(final)), start_dt, end_dt
         )
         sharpe = PerformanceMetrics.calculate_sharpe_ratio(annualized, volatility)
-        return {
-            "total_return": round(total_return, 2),
-            "cagr": round(cagr, 2),
-            "sharpe": round(sharpe, 3),
-            "mdd": round(mdd, 2),
-            "trading_days": len(seen),
-            "folds": len(segments),
-        }
+        return (
+            {
+                "total_return": round(total_return, 2),
+                "cagr": round(cagr, 2),
+                "sharpe": round(sharpe, 3),
+                "mdd": round(mdd, 2),
+                "trading_days": len(seen),
+                "folds": len(segments),
+            },
+            oos_returns,
+        )
 
-    def _report_md(self, folds: list[FoldOutcome], oos: dict, trials: int) -> str:
+    def _report_md(self, folds: list[FoldOutcome], oos: dict, trials: int, stats: dict) -> str:
+        pbo = stats.get("pbo")
+        pbo_str = f"{pbo}" if pbo is not None else "n/a(후보 1개)"
         lines = [
             "# Walk-Forward Validation Report (real OOS)",
             "",
@@ -331,6 +389,16 @@ class WalkForwardRunner:
             f"- CAGR: **{oos['cagr']}%** | Sharpe: **{oos['sharpe']}** | "
             f"MDD: **{oos['mdd']}%** | total_return: {oos['total_return']}%",
             f"- OOS trading days: {oos['trading_days']} across {oos['folds']} folds",
+            "",
+            "## 과적합 정량화 (P4 — 이걸로 우연/과적합을 판별)",
+            "",
+            f"- **Deflated Sharpe**: {stats.get('deflated_sharpe')} "
+            f"(관측 일별SR {stats.get('observed_daily_sharpe')} vs 기대최대 "
+            f"{stats.get('expected_max_sharpe')}, N={stats.get('n_trials')}, "
+            f"T={stats.get('n_obs')}) — **≥0.95 미만이면 우연과 구분 불가**",
+            f"- **PBO**: {pbo_str} — **≤0.2 초과면 과적합 신호**",
+            f"- OOS 일별 Sharpe 95% CI: "
+            f"[{stats.get('oos_sharpe_ci_low')}, {stats.get('oos_sharpe_ci_high')}]",
             "",
             "## Per-fold (train 선택 → test OOS)",
             "",
