@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """전략 계산식 blind-spot 수정 회귀 테스트 (#1,#6,#7,#9 + fear-window).
 
-근거: docs/IMPROVEMENT_PLAN_strategy_calc.md
+근거: docs/archive/IMPROVEMENT_PLAN_strategy_calc.md
 """
 import pandas as pd
 import pytest
