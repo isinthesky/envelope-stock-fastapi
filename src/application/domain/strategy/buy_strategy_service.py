@@ -29,6 +29,10 @@ from src.adapters.database.repositories.stock_universe_repository import (
 from src.adapters.external.dart_api import FinancialScreeningDTO, get_dart_client
 from src.application.common.decorators import transaction
 from src.application.common.indicators import TechnicalIndicators
+from src.application.domain.backtest.regime_filter import (
+    RegimeEntryFilter,
+    is_entry_allowed_latest,
+)
 from src.application.domain.strategy.dto import (
     GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
@@ -40,6 +44,7 @@ from src.application.domain.strategy.ohlcv_data_loader import (
     LoadType,
     OHLCVDataLoader,
     get_kospi_or_proxy_closes,
+    get_regime_benchmark_ohlc,
 )
 from src.application.domain.strategy.signal_evaluator import (
     GoldenCrossScanContext,
@@ -76,24 +81,42 @@ class _Ma5BreakoutMetrics(NamedTuple):
     gap_ratio: float
 
 
-def _market_regime_up(closes, timestamps, source, ma_period) -> bool:
-    """시장 상승레짐 판정(하드 게이트). 오탐 하락레짐이 전체 매수를 억제할 수 있으므로,
-    신뢰 가능한 '최신 KOSPI 실데이터'일 때만 실제 판정하고 그 외(프록시/데이터부족/stale)는
-    True(fail-open)로 통과시킨다."""
-    if source != "KOSPI" or len(closes) < ma_period:
+def _build_regime_filter() -> RegimeEntryFilter:
+    """운영 설정(gc_regime_mode/ma/adx)으로 진입 국면 필터를 구성한다.
+    walk-forward A/B가 검증한 것과 동일한 RegimeEntryFilter를 사용해 라이브·백테스트
+    수식을 일치시킨다. 알 수 없는 mode는 권장값(adx)로 폴백."""
+    mode = settings.gc_regime_mode
+    use_ma = mode in ("ma", "ma_adx")
+    use_adx = mode in ("adx", "ma_adx")
+    if not use_ma and not use_adx:  # 방어: 미지의 mode → ADX(권장)
+        use_adx = True
+    return RegimeEntryFilter(
+        use_ma=use_ma,
+        ma_period=settings.gc_regime_ma,
+        use_adx=use_adx,
+        adx_period=settings.gc_regime_adx_period,
+        adx_min=settings.gc_regime_adx_min,
+    )
+
+
+def _market_regime_ok(bench_df) -> bool:
+    """시장 레짐 진입 허용 판정(하드 게이트). 실 OHLC 벤치가 없거나(프록시 불가)
+    최신 바가 stale/미래이면 신뢰불가 → fail-open(True). 그 외에는 검증된
+    `is_entry_allowed_latest`(라이브·백테스트 공용)로 최신 바를 판정한다."""
+    if bench_df is None or getattr(bench_df, "empty", True):
         return True
     try:
-        last = timestamps[-1]
+        last = bench_df["timestamp"].iloc[-1]
         if getattr(last, "tzinfo", None) is None:
             last = last.replace(tzinfo=timezone.utc)
         age = datetime.now(timezone.utc) - last
         # 오래됨(>7일) 또는 미래(음수 age, 데이터 오류)면 신뢰불가 → fail-open
         if age > timedelta(days=7) or age < -timedelta(days=1):
-            logger.warning("[GC Scan] KOSPI regime series stale/future (last=%s), fail-open", last)
+            logger.warning("[GC Scan] regime benchmark stale/future (last=%s), fail-open", last)
             return True
     except Exception:  # noqa: BLE001
         return True
-    return TechnicalIndicators.is_market_uptrend(closes, ma_period)
+    return is_entry_allowed_latest(bench_df, _build_regime_filter())
 
 
 class BuyStrategyService:
@@ -504,19 +527,21 @@ class BuyStrategyService:
         market_regime_up = True  # 레짐필터 off거나 데이터 부족 시 통과(fail-open)
         if settings.fear_buy_window_enabled or settings.gc_regime_filter_enabled:
             try:
-                # MA(gc_regime_ma) 레짐 판정에 충분하도록 넉넉히 로드
-                market_closes, _mts, _src = await get_kospi_or_proxy_closes(session, days=500)
                 if settings.fear_buy_window_enabled:
+                    # 공포 윈도우: 종가 시계열(프록시 허용)로 BB 기반 판정
+                    market_closes, _mts, _src = await get_kospi_or_proxy_closes(session, days=500)
                     market_fear_window_open = TechnicalIndicators.is_market_fear_recent(
                         market_closes, window=settings.fear_buy_window_days
                     )
                 if settings.gc_regime_filter_enabled:
-                    market_regime_up = _market_regime_up(
-                        market_closes, _mts, _src, settings.gc_regime_ma
+                    # 레짐: 실 OHLC 벤치(ADX엔 high/low 필요) — 없으면 fail-open
+                    regime_bench = await get_regime_benchmark_ohlc(
+                        session, settings.gc_regime_benchmark, days=500
                     )
+                    market_regime_up = _market_regime_ok(regime_bench)
                 logger.info(
-                    f"[GC Scan] market source={_src} closes={len(market_closes)} "
-                    f"fear_window_open={market_fear_window_open} regime_up={market_regime_up}"
+                    f"[GC Scan] fear_window_open={market_fear_window_open} "
+                    f"regime_up={market_regime_up}"
                 )
             except Exception as e:  # noqa: BLE001 - fail-open: 데이터 오류 시 통과 가정
                 logger.warning(f"[GC Scan] market load failed, fail-open: {e}")
@@ -691,11 +716,11 @@ class BuyStrategyService:
         market_regime_up = True
         if settings.gc_regime_filter_enabled:
             try:
-                market_closes, _mts, _src = await get_kospi_or_proxy_closes(session, days=500)
-                market_regime_up = _market_regime_up(
-                    market_closes, _mts, _src, settings.gc_regime_ma
+                regime_bench = await get_regime_benchmark_ohlc(
+                    session, settings.gc_regime_benchmark, days=500
                 )
-                logger.info(f"[GC Scan] regime source={_src} regime_up={market_regime_up}")
+                market_regime_up = _market_regime_ok(regime_bench)
+                logger.info(f"[GC Scan] regime_up={market_regime_up}")
             except Exception as e:  # noqa: BLE001 - fail-open
                 logger.warning(f"[GC Scan] regime load failed, fail-open: {e}")
                 market_regime_up = True

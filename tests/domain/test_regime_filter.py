@@ -8,6 +8,7 @@ import pandas as pd
 from src.application.domain.backtest.regime_filter import (
     RegimeEntryFilter,
     compute_allowed_entry_dates,
+    is_entry_allowed_latest,
     wilder_adx_series,
 )
 
@@ -89,3 +90,23 @@ def test_describe_labels():
     assert RegimeEntryFilter(use_ma=True, use_adx=False).describe() == "MA200"
     assert "ADX14" in RegimeEntryFilter(use_ma=False, use_adx=True).describe()
     assert RegimeEntryFilter(use_ma=False, use_adx=False).describe() == "no-filter"
+
+
+def test_is_entry_allowed_latest_ma():
+    up = _bench(250, 0)  # 순수 상승 → 최신 바 close>MA200 → 허용
+    down = _bench(250, 100)  # 하락 종료 → 최신 바 close<MA200 → 차단
+    f = RegimeEntryFilter(use_ma=True, ma_period=200, use_adx=False)
+    assert is_entry_allowed_latest(up, f) is True
+    assert is_entry_allowed_latest(down, f) is False
+
+
+def test_is_entry_allowed_latest_fail_open():
+    up = _bench(250, 0)
+    # 필터 None → fail-open
+    assert is_entry_allowed_latest(up, None) is True
+    # 벤치 없음/빈 → fail-open
+    assert is_entry_allowed_latest(None, RegimeEntryFilter(use_ma=True)) is True
+    assert is_entry_allowed_latest(pd.DataFrame(), RegimeEntryFilter(use_ma=True)) is True
+    # 워밍업(이력 부족, MA 미확정) → fail-open
+    short = _bench(50, 0)
+    assert is_entry_allowed_latest(short, RegimeEntryFilter(use_ma=True, ma_period=200)) is True

@@ -12,9 +12,31 @@ from src.application.domain.strategy.sell_strategy_service import SellStrategySe
 
 # Wilder(1978) 표준 예시 종가 (첫 RSI ≈ 70.53 @ 15번째 종가)
 WILDER_CLOSES = [
-    44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42,
-    45.84, 46.08, 45.89, 46.03, 45.61, 46.28, 46.28, 46.00,
-    46.03, 46.41, 46.22, 45.64, 46.21, 46.25, 45.71, 46.45, 45.78,
+    44.34,
+    44.09,
+    44.15,
+    43.61,
+    44.33,
+    44.83,
+    45.10,
+    45.42,
+    45.84,
+    46.08,
+    45.89,
+    46.03,
+    45.61,
+    46.28,
+    46.28,
+    46.00,
+    46.03,
+    46.41,
+    46.22,
+    45.64,
+    46.21,
+    46.25,
+    45.71,
+    46.45,
+    45.78,
 ]
 
 
@@ -46,24 +68,45 @@ def test_fear_recent_window_detects_prior_fear():
     assert TI.is_market_fear_recent(closes, window=7) is True
 
 
-def test_market_regime_guard_fail_open():
-    # 레짐 하드게이트는 신뢰가능한 최신 KOSPI 실데이터일 때만 판정, 그 외 fail-open(True)
-    from datetime import datetime, timezone, timedelta
-    from src.application.domain.strategy.buy_strategy_service import _market_regime_up
+def _regime_df(closes, timestamps):
+    import pandas as pd
+
+    return pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": closes,
+            "high": [c * 1.01 for c in closes],
+            "low": [c * 0.99 for c in closes],
+            "close": closes,
+            "volume": [1000] * len(closes),
+        }
+    )
+
+
+def test_market_regime_guard_fail_open(monkeypatch):
+    # 레짐 하드게이트는 실 OHLC 벤치·신선 데이터일 때만 판정, 그 외 fail-open(True)
+    from datetime import datetime, timedelta, timezone
+
+    from src.application.domain.strategy import buy_strategy_service as mod
 
     now = datetime.now(timezone.utc)
     up = [float(x) for x in range(1, 251)]
     down = [float(x) for x in range(250, 0, -1)]
     fresh = [now - timedelta(days=250 - i) for i in range(250)]
     stale = [now - timedelta(days=400 - i) for i in range(250)]
+    future = [now + timedelta(days=i) for i in range(250)]
 
-    assert _market_regime_up(up, fresh, "PROXY", 200) is True      # 프록시 → fail-open
-    assert _market_regime_up(up[:100], fresh[:100], "KOSPI", 200) is True  # 이력부족 → fail-open
-    assert _market_regime_up(up, stale, "KOSPI", 200) is True       # stale → fail-open
-    future = [now + timedelta(days=i) for i in range(250)]          # 마지막이 미래(데이터오류)
-    assert _market_regime_up(down, future, "KOSPI", 200) is True    # 미래 timestamp → fail-open
-    assert _market_regime_up(up, fresh, "KOSPI", 200) is True       # 실KOSPI 상승레짐
-    assert _market_regime_up(down, fresh, "KOSPI", 200) is False    # 실KOSPI 하락레짐
+    assert mod._market_regime_ok(None) is True  # 벤치 없음(프록시 불가) → fail-open
+    assert (
+        mod._market_regime_ok(_regime_df(up[:100], fresh[:100])) is True
+    )  # 이력부족 → fail-open(워밍업)
+    assert mod._market_regime_ok(_regime_df(up, stale)) is True  # stale → fail-open
+    assert mod._market_regime_ok(_regime_df(down, future)) is True  # 미래 timestamp → fail-open
+
+    # mode=ma 로 고정하면 close>MA200 판정이 결정적
+    monkeypatch.setattr(mod.settings, "gc_regime_mode", "ma")
+    assert mod._market_regime_ok(_regime_df(up, fresh)) is True  # 상승레짐 → 허용
+    assert mod._market_regime_ok(_regime_df(down, fresh)) is False  # 하락레짐 → 차단
 
 
 def test_market_uptrend_regime():
@@ -112,7 +155,10 @@ def test_wilder_diverges_from_sma_after_smoothing():
     # seed bar에서는 Wilder==SMA. 이후 bar에서 재귀 smoothing으로 갈라져야 한다.
     df = pd.DataFrame({"close": WILDER_CLOSES})
     wilder_last = TI.calculate_rsi_series(df, 14).iloc[-1]
-    ch = [WILDER_CLOSES[i] - WILDER_CLOSES[i - 1] for i in range(len(WILDER_CLOSES) - 14, len(WILDER_CLOSES))]
+    ch = [
+        WILDER_CLOSES[i] - WILDER_CLOSES[i - 1]
+        for i in range(len(WILDER_CLOSES) - 14, len(WILDER_CLOSES))
+    ]
     g = sum(max(c, 0) for c in ch) / 14
     loss_sum = sum(-c for c in ch if c < 0)
     sma_rsi = 100.0 if loss_sum == 0 else 100 - 100 / (1 + g / (loss_sum / 14))
@@ -127,7 +173,10 @@ def _svc():
 def test_single_tick_dip_does_not_trigger_sell():
     out = _svc().compute_simple_sell_signal(
         df=pd.DataFrame({"close": [100, 102, 104, 106, 108]}),
-        rsi=75.0, current_price=107.0, entry_price=90.0, highest_price=108.0,
+        rsi=75.0,
+        current_price=107.0,
+        entry_price=90.0,
+        highest_price=108.0,
     )
     assert out["should_sell"] is False
 
@@ -136,7 +185,9 @@ def test_single_tick_dip_does_not_trigger_sell():
 def test_hard_stop_from_entry_triggers():
     out = _svc().compute_simple_sell_signal(
         df=pd.DataFrame({"close": [100, 99, 98, 84]}),
-        rsi=50.0, current_price=84.0, entry_price=100.0,
+        rsi=50.0,
+        current_price=84.0,
+        entry_price=100.0,
     )
     assert out["should_sell"] is True
     assert any("하드 손절" in r for r in out["reasons"])
@@ -146,7 +197,10 @@ def test_no_orphan_20d_high_rule():
     # 20일 고점 -15% 고아 규칙 제거: 진입가 대비 이익이고 85% 미발동이면 매도 아님.
     out = _svc().compute_simple_sell_signal(
         df=pd.DataFrame({"close": [100 + i for i in range(30)]}),
-        rsi=50.0, current_price=127.0, entry_price=100.0, highest_price=129.0,
+        rsi=50.0,
+        current_price=127.0,
+        entry_price=100.0,
+        highest_price=129.0,
     )
     assert out["should_sell"] is False
 
@@ -161,14 +215,26 @@ async def test_hybrid_with_nonempty_df_no_crash():
     svc = _svc()
     df = pd.DataFrame({"close": [100.0 + i for i in range(25)]})
     legacy = SellSignalAnalysisDTO(
-        symbol="005930", current_price=90, analyzed_at=datetime.now(),
-        ma_short=80, ma_long=85, ma_gap_ratio=-1.0, is_death_cross=True,
-        stoch_k=60.0, stoch_d=55.0, is_stoch_overbought=False,
-        rsi=72.0, is_rsi_overbought=True,
-        final_stage=SellStageEnum.REDUCE_1, sell_reasons=["legacy"],
+        symbol="005930",
+        current_price=90,
+        analyzed_at=datetime.now(),
+        ma_short=80,
+        ma_long=85,
+        ma_gap_ratio=-1.0,
+        is_death_cross=True,
+        stoch_k=60.0,
+        stoch_d=55.0,
+        is_stoch_overbought=False,
+        rsi=72.0,
+        is_rsi_overbought=True,
+        final_stage=SellStageEnum.REDUCE_1,
+        sell_reasons=["legacy"],
     )
     with patch.object(svc, "analyze_sell_signal", new=AsyncMock(return_value=legacy)):
         result = await svc.analyze_sell_signal_hybrid(
-            "005930", df=df, entry_price=100.0, highest_price=124.0,
+            "005930",
+            df=df,
+            entry_price=100.0,
+            highest_price=124.0,
         )
     assert set(result) == {"legacy", "simple", "hybrid_stage"}

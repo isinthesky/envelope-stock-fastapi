@@ -119,3 +119,18 @@ def compute_allowed_entry_dates(
 
     allowed_mask = ma_ok & adx_ok
     return {d for d, ok in zip(dates, allowed_mask) if bool(ok)}
+
+
+def is_entry_allowed_latest(
+    benchmark_df: pd.DataFrame | None, filt: RegimeEntryFilter | None
+) -> bool:
+    """**최신 바** 기준 진입 허용 여부(라이브 스캔용). 백테스트와 동일 수식 재사용.
+
+    필터 없음 / 벤치 없음 / 지표 미확정(워밍업)은 fail-open(True). 최신 바에서
+    게이트를 명시적으로 위반할 때만 False.
+    """
+    allowed = compute_allowed_entry_dates(benchmark_df, filt)
+    if allowed is None or benchmark_df is None or benchmark_df.empty:
+        return True
+    last_ts = benchmark_df.sort_values("timestamp")["timestamp"].iloc[-1]
+    return _row_date(last_ts) in allowed

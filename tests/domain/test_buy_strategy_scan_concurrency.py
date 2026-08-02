@@ -143,23 +143,28 @@ async def test_scan_regime_filter_gates_gc_entries(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(buy_strategy_service_module, "AsyncSessionLocal", lambda: _ds())
     monkeypatch.setattr(buy_strategy_service_module, "OHLCVDataLoader", lambda session=None: loader)
     monkeypatch.setattr(
-        TechnicalIndicators, "prepare_golden_cross_indicators",
+        TechnicalIndicators,
+        "prepare_golden_cross_indicators",
         staticmethod(lambda df, **kw: df),
     )
 
     async def _dummy_market(session, days=500):
         return ([100.0] * 250, [None] * 250, "KOSPI")
 
+    async def _dummy_bench(session, symbol="069500", days=500):
+        return None  # 레짐 판정은 _market_regime_ok 패치로 결정 → 벤치 로드는 무해한 스텁
+
     monkeypatch.setattr(buy_strategy_service_module, "get_kospi_or_proxy_closes", _dummy_market)
+    monkeypatch.setattr(buy_strategy_service_module, "get_regime_benchmark_ohlc", _dummy_bench)
     monkeypatch.setattr(buy_strategy_service_module.settings, "gc_regime_filter_enabled", True)
     monkeypatch.setattr(buy_strategy_service_module.settings, "fear_buy_window_enabled", False)
 
     # 하락레짐 → GC 진입 차단(후보 0)
-    monkeypatch.setattr(buy_strategy_service_module, "_market_regime_up", lambda *a, **k: False)
+    monkeypatch.setattr(buy_strategy_service_module, "_market_regime_ok", lambda *a, **k: False)
     down = await service.scan_golden_cross_candidates(market=None, gc_only=False, max_concurrent=2)
     assert down.stocks == []
 
     # 상승레짐 → 통과(2 후보)
-    monkeypatch.setattr(buy_strategy_service_module, "_market_regime_up", lambda *a, **k: True)
+    monkeypatch.setattr(buy_strategy_service_module, "_market_regime_ok", lambda *a, **k: True)
     up = await service.scan_golden_cross_candidates(market=None, gc_only=False, max_concurrent=2)
     assert len(up.stocks) == 2

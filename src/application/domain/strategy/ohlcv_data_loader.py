@@ -14,8 +14,6 @@ from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 from zoneinfo import ZoneInfo
 
-from src.application.domain.ohlcv.cache_manager import KOREA_HOLIDAYS
-
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +21,7 @@ from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.repositories.ohlcv_repository import OHLCVRepository
 from src.adapters.external.kis_api.client import get_kis_client
 from src.application.domain.market_data.service import MarketDataService
-
+from src.application.domain.ohlcv.cache_manager import KOREA_HOLIDAYS
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +75,23 @@ async def get_kospi_or_proxy_closes(
     closes = norm.mean(axis=1).tolist()
     ts = list(proxy_df.index)
     return closes, ts, "PROXY"
+
+
+async def get_regime_benchmark_ohlc(
+    session: AsyncSession, symbol: str = "069500", days: int = 600
+) -> pd.DataFrame | None:
+    """레짐 필터용 **실 OHLC 벤치** 로드(ADX는 high/low 필요 → 합성 프록시로는 불가).
+
+    실 ETF/지수 심볼의 최신 N개 일봉을 timestamp ASC로 반환. 데이터가 없거나
+    OHLC 컬럼이 없으면 None(호출측은 fail-open 처리).
+    """
+    repo = OHLCVRepository(session)
+    df = await repo.get_recent_candles_to_dataframe(
+        symbol=symbol, end_date=_FAR_FUTURE, limit=days, interval="1d"
+    )
+    if df is None or df.empty or not {"high", "low", "close", "timestamp"}.issubset(df.columns):
+        return None
+    return df.sort_values("timestamp").reset_index(drop=True)
 
 
 def is_trading_day_kst(target: date) -> bool:
@@ -155,14 +170,16 @@ def iter_date_chunks(
 
 class LoadType(str, Enum):
     """데이터 로딩 유형"""
-    CACHE_HIT = "cache_hit"           # 캐시 완전 히트
-    INCREMENTAL = "incremental"       # 증분 업데이트 (1 API call)
-    FULL_LOAD = "full_load"           # 전체 로딩 (2 API calls)
+
+    CACHE_HIT = "cache_hit"  # 캐시 완전 히트
+    INCREMENTAL = "incremental"  # 증분 업데이트 (1 API call)
+    FULL_LOAD = "full_load"  # 전체 로딩 (2 API calls)
 
 
 @dataclass
 class LoadResult:
     """데이터 로딩 결과"""
+
     df: pd.DataFrame
     load_type: LoadType
     api_calls: int = 0
@@ -304,7 +321,9 @@ class OHLCVDataLoader:
             # 캐시 완전 히트
             df = cache_result["df"]
             load_type = LoadType.CACHE_HIT
-            logger.debug(f"[OHLCVLoader] {symbol}: Cache hit ({len(df) if df is not None else 0} candles)")
+            logger.debug(
+                f"[OHLCVLoader] {symbol}: Cache hit ({len(df) if df is not None else 0} candles)"
+            )
 
         elif cache_status == "stale" and cache_result["df"] is not None:
             # 증분 업데이트
@@ -375,9 +394,7 @@ class OHLCVDataLoader:
 
         # 중복 제거 및 정렬
         df = (
-            df.drop_duplicates(subset=["timestamp"])
-            .sort_values("timestamp")
-            .reset_index(drop=True)
+            df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
         )
 
         candle_count = len(df)

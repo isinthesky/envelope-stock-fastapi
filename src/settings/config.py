@@ -310,11 +310,31 @@ class Settings(BaseSettings):
     )
     gc_regime_filter_enabled: bool = Field(
         default=False,
-        description="[regime] 시장 상승레짐(KOSPI>MA)일 때만 골든크로스 진입 허용(opt-in, 기본 OFF). "
-        "백테스트상 약세·횡보장 whipsaw 회피로 승률·수익 개선. fear-buy(역추세)에는 미적용",
+        description="[regime] 시장 상승레짐일 때만 골든크로스 진입 허용(opt-in, 기본 OFF/kill-switch). "
+        "판정 방식은 gc_regime_mode. walk-forward A/B에서 ADX가 chop 잠식 제거로 유일 개선. "
+        "fear-buy(역추세)에는 미적용",
+    )
+    gc_regime_mode: Literal["ma", "adx", "ma_adx"] = Field(
+        default="adx",
+        description="[regime] 레짐 판정 방식. adx=추세강도(권장, chop 회피), "
+        "ma=지수>MA(A/B 최악, 하위호환), ma_adx=둘 다(방어 특화, MDD 최소). "
+        "ADX는 실 OHLC 벤치(gc_regime_benchmark) 필요 — 없으면 fail-open",
     )
     gc_regime_ma: int = Field(
-        default=200, ge=20, le=300, description="[regime] 시장 레짐 판정용 KOSPI 이동평균 기간(일)"
+        default=200, ge=20, le=300, description="[regime] MA 레짐 판정용 이동평균 기간(일)"
+    )
+    gc_regime_adx_period: int = Field(
+        default=14, ge=2, le=60, description="[regime] ADX 추세강도 판정 기간(일)"
+    )
+    gc_regime_adx_min: float = Field(
+        default=20.0,
+        ge=0.0,
+        le=100.0,
+        description="[regime] ADX 최소 임계(이상이면 추세 有 → 진입 허용)",
+    )
+    gc_regime_benchmark: str = Field(
+        default="069500",
+        description="[regime] 레짐 판정 기준 벤치 심볼(실 OHLC 필요, ADX용). 기본 KODEX200",
     )
     gc_short_ma_period: int = Field(
         default=55,
