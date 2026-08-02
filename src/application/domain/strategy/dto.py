@@ -553,17 +553,17 @@ class GoldenCrossScanItemDTO(BaseDTO):
     industry_code: str | None = Field(default=None, description="네이버 업종 코드 (industryCode)")
     industry_name: str | None = Field(default=None, description="업종명 (industry_code 매핑 결과)")
 
-    # 이동평균 (실시간 스캔용: MA55/MA165)
+    # 이동평균 (실시간 스캔용: config MA 단기/장기)
     ma_short: Decimal = Field(description="단기 MA (55일)")
     ma_long: Decimal = Field(description="장기 MA (165일)")
-    ma_gap_ratio: float = Field(description="MA 갭 비율 ((MA55-MA165)/MA165*100)")
+    ma_gap_ratio: float = Field(description="MA 갭 비율 ((단기MA-장기MA)/장기MA*100)")
 
     # Stochastic
     stoch_k: float = Field(description="Stochastic %K", ge=0.0, le=100.0)
     stoch_d: float = Field(description="Stochastic %D", ge=0.0, le=100.0)
 
     # 상태
-    is_gc_active: bool = Field(description="골든크로스 활성 여부 (MA55 > MA165)")
+    is_gc_active: bool = Field(description="골든크로스 활성 여부 (단기 MA > 장기 MA)")
     gc_state: str = Field(
         description="골든크로스 상태 (NOT_GC, GC_ACTIVE, WAITING_FOR_PULLBACK, BUY_INTEREST, READY_TO_BUY, OPTIMAL_BUY, FEAR_BUY)"
     )
@@ -759,8 +759,8 @@ class SellSignalAnalysisDTO(BaseDTO):
     ma_short: Decimal = Field(description="단기 MA (55일)")
     ma_long: Decimal = Field(description="장기 MA (165일)")
     ma_gap_ratio: float = Field(description="MA 갭 비율 (%)")
-    is_death_cross: bool = Field(description="데드크로스 여부 (MA55 < MA165)")
-    is_gc_active: bool = Field(default=False, description="골든크로스 활성 여부 (MA55 > MA165)")
+    is_death_cross: bool = Field(description="데드크로스 여부 (단기 MA < 장기 MA)")
+    is_gc_active: bool = Field(default=False, description="골든크로스 활성 여부 (단기 MA > 장기 MA)")
 
     # Stochastic 지표
     stoch_k: float = Field(description="Stochastic %K")

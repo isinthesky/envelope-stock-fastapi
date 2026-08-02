@@ -397,7 +397,7 @@ class BuyStrategyService:
 
         - DB 캐싱을 통해 반복 호출 최소화
         - 캐시가 오래된 경우 증분 업데이트 (chunking 지원)
-        - MA55/MA165 지표 사용
+        - config MA(단기/장기) 지표 사용
 
         Args:
             session: Database Session (@transaction에서 주입)
@@ -443,7 +443,8 @@ class BuyStrategyService:
 
         concurrency = self._resolve_scan_concurrency(max_concurrent, len(stocks))
         logger.info(
-            f"[GC Scan] Scanning {len(stocks)} stocks with MA55/MA165 "
+            f"[GC Scan] Scanning {len(stocks)} stocks with "
+            f"MA{settings.gc_short_ma_period}/MA{settings.gc_long_ma_period} "
             f"(concurrency={concurrency}, cache_freshness_days={cache_freshness_days}, "
             f"force_refresh={force_refresh})"
         )
@@ -637,7 +638,10 @@ class BuyStrategyService:
                 errors=["No symbols provided"],
             )
 
-        logger.info(f"[GC Scan] Scanning {len(symbols)} symbols with MA55/MA165")
+        logger.info(
+            f"[GC Scan] Scanning {len(symbols)} symbols with "
+            f"MA{settings.gc_short_ma_period}/MA{settings.gc_long_ma_period}"
+        )
 
         # 시장 레짐(스캔당 1회, fail-open) — GC(추세추종) 진입 게이트. scan_golden_cross_candidates와 일관.
         market_regime_up = True

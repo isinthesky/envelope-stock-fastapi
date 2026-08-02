@@ -30,7 +30,7 @@ STRATEGY_PRESETS: dict[str, StrategyPreset] = {
     "gc_standard": StrategyPreset(
         preset_id="gc_standard",
         name="골든크로스 기본형",
-        description="MA55/MA165 골든크로스 + Stochastic 과매도 매수. 기본 설정으로 안정적인 중기 추세추종.",
+        description="골든크로스(config MA 단기/장기) + Stochastic 과매도 매수. 기본 설정으로 안정적인 중기 추세추종.",
         strategy_type="golden_cross",
         config=GoldenCrossConfigDTO(),
         tags=["골든크로스", "중기", "추세추종"],
