@@ -89,7 +89,7 @@ class AnalysisHistoryModel(Base, BaseModel):
     )
 
     is_death_cross: Mapped[bool | None] = mapped_column(
-        Boolean, nullable=True, comment="데드크로스 여부 (MA55 < MA160)"
+        Boolean, nullable=True, comment="데드크로스 여부 (단기 MA < 장기 MA)"
     )
 
     is_stoch_overbought: Mapped[bool | None] = mapped_column(

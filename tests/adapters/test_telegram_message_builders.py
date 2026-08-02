@@ -50,7 +50,7 @@ class TestBuildSellSignalsSummaryMessage:
         assert "진입 60,800원" in message
         assert "Stoch K 88.2" in message
         assert "RSI 76.4" in message
-        assert "MA55/165갭 +8.1%" in message
+        assert f"MA{settings.gc_short_ma_period}/{settings.gc_long_ma_period}갭 +8.1%" in message
         assert "거래량: 1.70x" in message
         assert "하락 동반 매도 신호" in message
         assert "개인수급 과열" in message

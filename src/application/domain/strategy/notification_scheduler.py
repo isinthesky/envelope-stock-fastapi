@@ -414,7 +414,7 @@ class NotificationScheduler:
 
                 request = WarmupRequestDTO(
                     symbols=symbols,
-                    days=300,
+                    days=max(300, int((settings.gc_long_ma_period + 20) * 1.6)),
                     interval="1d",
                     force_refresh=True,
                 )

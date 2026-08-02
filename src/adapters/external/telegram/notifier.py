@@ -271,7 +271,9 @@ def build_sell_signals_summary_message(
             indicator_bits.append(f"RSI {rsi:.1f}")
         ma_gap = _to_float(stock.get("ma_gap_ratio"))
         if ma_gap is not None:
-            indicator_bits.append(f"MA55/165갭 {ma_gap:+.1f}%")
+            indicator_bits.append(
+                f"MA{settings.gc_short_ma_period}/{settings.gc_long_ma_period}갭 {ma_gap:+.1f}%"
+            )
         if indicator_bits:
             block_lines.append("   ├ 지표: " + " / ".join(indicator_bits))
 

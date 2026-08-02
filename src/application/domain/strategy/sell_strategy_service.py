@@ -433,18 +433,20 @@ class SellStrategyService:
         score = 0.0
         reasons: list[str] = []
 
+        short_label = f"MA{settings.gc_short_ma_period}"
+        long_label = f"MA{settings.gc_long_ma_period}"
         is_death_cross = ma_short < ma_long
-        is_below_ma55 = current_price < ma_short
+        is_below_short_ma = current_price < ma_short
 
-        if is_death_cross and is_below_ma55:
+        if is_death_cross and is_below_short_ma:
             score = 10.0
-            reasons.append("데드크로스 + 현재가 MA55 하회")
+            reasons.append(f"데드크로스 + 현재가 {short_label} 하회")
         elif is_death_cross:
             score = 7.0
-            reasons.append("데드크로스 발생 (MA55 < MA165)")
-        elif is_below_ma55:
+            reasons.append(f"데드크로스 발생 ({short_label} < {long_label})")
+        elif is_below_short_ma:
             score = 5.0
-            reasons.append(f"현재가 MA55 하회 ({current_price:,.0f} < {ma_short:,.0f})")
+            reasons.append(f"현재가 {short_label} 하회 ({current_price:,.0f} < {ma_short:,.0f})")
 
         if not is_death_cross and ma_gap_ratio < 3.0:
             score += 3.0
@@ -525,7 +527,7 @@ class SellStrategyService:
         매도 시그널 분석
 
         종목의 기술적 지표를 분석하여 매도 시그널을 판단합니다.
-        - MA55/MA165 데드크로스 확인
+        - 단기/장기 MA 데드크로스 확인 (config 기간)
         - Stochastic 과매수 확인
         - RSI 과매수 확인
         - Phase 기반 선제적 매도 시그널
@@ -597,12 +599,17 @@ class SellStrategyService:
         # 1. OHLCV 데이터 로딩
         data_loader = self._get_data_loader()
 
+        # 매수 스캔과 동일한 config MA 기간 사용(라이브 정합: 매수 GC와 매도 DC가
+        # 같은 크로스오버를 판정하도록). ETF 모드면 50/200, 기본이면 55/165.
+        short_ma_period = settings.gc_short_ma_period
+        long_ma_period = settings.gc_long_ma_period
+
         try:
             df = await data_loader.load_ohlcv_dataframe(
                 symbol=symbol,
-                days=300,  # MA165 + 충분한 버퍼
+                days=max(300, int((long_ma_period + 20) * 1.6)),  # 장기 MA + 충분한 버퍼
                 interval="1d",
-                min_candles=165,
+                min_candles=long_ma_period + 20,
                 force_refresh=force_refresh,
             )
         except ValueError as e:
@@ -611,11 +618,11 @@ class SellStrategyService:
         ctx = _SellAnalysisContext(df=df)
         ctx.candle_count = len(df)
 
-        # 2. 기술적 지표 계산 (MA55/MA165 + Stochastic)
+        # 2. 기술적 지표 계산 (config MA short/long + Stochastic)
         df = TechnicalIndicators.prepare_golden_cross_indicators(
             df,
-            short_ma_period=55,
-            long_ma_period=165,
+            short_ma_period=short_ma_period,
+            long_ma_period=long_ma_period,
             stoch_k_period=14,
             stoch_d_period=3,
         )
@@ -1511,8 +1518,8 @@ class SellStrategyService:
         - PHASE_5: 데드크로스 + Stoch > 90 + RSI > 85 (강력 매도)
 
         Args:
-            is_gc_active: 골든크로스 활성 여부 (MA55 > MA165)
-            is_death_cross: 데드크로스 여부 (MA55 < MA165)
+            is_gc_active: 골든크로스 활성 여부 (단기 MA > 장기 MA)
+            is_death_cross: 데드크로스 여부 (단기 MA < 장기 MA)
             ma_gap_ratio: MA 갭 비율 (%)
             stoch_k: Stochastic %K
             rsi: RSI
@@ -1521,7 +1528,7 @@ class SellStrategyService:
             tuple[SellPhaseEnum, list[str]]: (Phase, 근거 리스트)
 
         Note:
-            MA55 == MA165인 경우 is_gc_active=False, is_death_cross=False로 처리됨
+            단기 MA == 장기 MA인 경우 is_gc_active=False, is_death_cross=False로 처리됨
         """
         reasons: list[str] = []
 
@@ -1587,7 +1594,10 @@ class SellStrategyService:
 
         # 데드크로스
         if is_death_cross:
-            sell_reasons.append(f"데드크로스 발생 (MA55 {ma_short:,.0f} < MA165 {ma_long:,.0f})")
+            sell_reasons.append(
+                f"데드크로스 발생 (MA{settings.gc_short_ma_period} {ma_short:,.0f} "
+                f"< MA{settings.gc_long_ma_period} {ma_long:,.0f})"
+            )
 
         # Stochastic 과매수
         if is_stoch_overbought:
@@ -1981,7 +1991,7 @@ class SellStrategyService:
                 reasons.append(f"RSI 과매수 상태 (RSI={rsi:.1f}) — 하락 시작 미확인 (매도 보류)")
         # 참고: RSI < 70이면 이 블록 스킵
 
-        # 2. 기계적 손절 (#7): 진입가 하드 손절 + 장기추세(MA165) 이탈.
+        # 2. 기계적 손절 (#7): 진입가 하드 손절 + 장기추세(장기 MA) 이탈.
         #    기존 '20일 고점 -15%' 고아 규칙 제거 — 85% 트레일링과 중복/오작동(회복장 조기청산).
         if entry_price and current_price < entry_price * (1 - settings.sell_hard_stop_pct):
             should_sell = True
@@ -1995,7 +2005,9 @@ class SellStrategyService:
                 and current_price < float(ma_long_last) * (1 - settings.sell_trend_stop_pct)
             ):
                 should_sell = True
-                reasons.append(f"추세 이탈: MA165 {settings.sell_trend_stop_pct:.0%} 하회")
+                reasons.append(
+                    f"추세 이탈: MA{settings.gc_long_ma_period} {settings.sell_trend_stop_pct:.0%} 하회"
+                )
 
         # 3. 85% 수익 지키기 — 기계적 보호
         if entry_price and highest_price and highest_price > entry_price and current_price:
