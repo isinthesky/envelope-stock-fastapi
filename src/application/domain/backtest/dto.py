@@ -187,29 +187,6 @@ class TradeDTO(BaseDTO):
     )
 
 
-class PositionDTO(BaseDTO):
-    """
-    포지션 정보 DTO
-
-    Attributes:
-        symbol: 종목코드
-        quantity: 수량
-        entry_price: 평균 매수가
-        entry_date: 진입일
-        current_price: 현재가
-        unrealized_profit: 평가 손익
-        unrealized_profit_rate: 평가 손익률 (%)
-    """
-
-    symbol: str = Field(description="종목코드")
-    quantity: int = Field(description="수량")
-    entry_price: Decimal = Field(description="평균 매수가")
-    entry_date: datetime = Field(description="진입일")
-    current_price: Decimal = Field(description="현재가")
-    unrealized_profit: Decimal = Field(description="평가 손익")
-    unrealized_profit_rate: float = Field(description="평가 손익률 (%)")
-
-
 class DailyStatsDTO(BaseDTO):
     """
     일별 통계 DTO

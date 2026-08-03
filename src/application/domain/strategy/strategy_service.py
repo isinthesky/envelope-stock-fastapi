@@ -499,7 +499,7 @@ class StrategyService:
         config: GoldenCrossConfigDTO,
     ) -> GoldenCrossConfigDTO:
         """골든크로스 전략 설정 수정"""
-        strategy = await self._get_or_raise(strategy_id, session)
+        await self._get_or_raise(strategy_id, session)  # 존재 검증
 
         config_json = config.model_dump_json()
         await self.strategy_repo.update_by_id(strategy_id, session=session, config_json=config_json)

@@ -100,17 +100,6 @@ async def get_async_session() -> AsyncIterator[AsyncSession]:
 # ==================== Database 생명주기 ====================
 
 
-async def init_db() -> None:
-    """
-    데이터베이스 초기화 (테이블 생성)
-
-    Note:
-        운영 환경에서는 Alembic 마이그레이션 사용 권장
-    """
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
 async def close_db() -> None:
     """데이터베이스 연결 종료"""
     await engine.dispose()

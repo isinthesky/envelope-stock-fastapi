@@ -40,8 +40,6 @@ class AccessLoggingMiddleware(BaseHTTPMiddleware):
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
         """요청 처리 및 로깅"""
-        path = request.url.path
-
         # 로깅 대상 여부 확인
         should_log = self._should_log(request)
 

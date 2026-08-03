@@ -913,16 +913,6 @@ class SellSignalAnalysisDTO(BaseDTO):
     candle_count: int = Field(default=0, description="분석에 사용된 캔들 수")
 
 
-class SellSignalRequestDTO(BaseDTO):
-    """매도 시그널 분석 요청 DTO"""
-
-    symbol: str = Field(description="종목코드")
-    stoch_overbought: float = Field(
-        default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값"
-    )
-    rsi_overbought: float = Field(default=70.0, ge=50.0, le=90.0, description="RSI 과매수 임계값")
-
-
 # ==================== Analysis History DTOs ====================
 
 
