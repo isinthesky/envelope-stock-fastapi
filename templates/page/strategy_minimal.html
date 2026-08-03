@@ -71,6 +71,16 @@
 {% block content %}
 <h1>매수 전략 (골든크로스)</h1>
 <p>MA{{ gc_short_ma }}/MA{{ gc_long_ma }} 골든크로스 + Stochastic 눌림목 매수 전략</p>
+{% if gc_regime_filter_enabled %}
+<p style="font-size:12px; color:#92400e; background:#fef3c7; display:inline-block; padding:4px 10px; border-radius:8px; margin:2px 0;">
+  🛡️ 레짐필터:
+  {% if gc_regime_mode == 'adx' %}<strong>ADX 추세강도</strong> (벤치 {{ gc_regime_benchmark }} · ADX≥{{ gc_regime_adx_min }})
+  {% elif gc_regime_mode == 'ma_adx' %}<strong>MA{{ gc_regime_ma }}+ADX</strong> (벤치 {{ gc_regime_benchmark }} · ADX≥{{ gc_regime_adx_min }})
+  {% else %}<strong>MA{{ gc_regime_ma }}</strong> (벤치 {{ gc_regime_benchmark }})
+  {% endif %}
+  ON · 상승레짐일 때만 진입
+</p>
+{% endif %}
 
 <section class="strategy-info">
   <h2>전략 개요</h2>

@@ -30,5 +30,11 @@ async def strategy_page(request: Request) -> HTMLResponse:
             "gc_long_ma": settings.gc_long_ma_period,
             "etf_universe_enabled": settings.etf_universe_enabled,
             "etf_universe_count": len(settings.etf_universe_symbols),
+            # [regime] 진입 국면 게이트 현재값(상태 배지용, 읽기전용)
+            "gc_regime_filter_enabled": settings.gc_regime_filter_enabled,
+            "gc_regime_mode": settings.gc_regime_mode,
+            "gc_regime_ma": settings.gc_regime_ma,
+            "gc_regime_adx_min": settings.gc_regime_adx_min,
+            "gc_regime_benchmark": settings.gc_regime_benchmark,
         },
     )

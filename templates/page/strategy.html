@@ -14,6 +14,16 @@
   📊 유니버스: <strong>ETF {{ etf_universe_count }}종</strong> (개별종목 중단 · 장수 ETF 추세추종)
 </p>
 {% endif %}
+{% if gc_regime_filter_enabled %}
+<p style="font-size:12px; color:#92400e; background:#fef3c7; display:inline-block; padding:4px 10px; border-radius:8px; margin:2px 0;">
+  🛡️ 레짐필터:
+  {% if gc_regime_mode == 'adx' %}<strong>ADX 추세강도</strong> (벤치 {{ gc_regime_benchmark }} · ADX≥{{ gc_regime_adx_min }})
+  {% elif gc_regime_mode == 'ma_adx' %}<strong>MA{{ gc_regime_ma }}+ADX</strong> (벤치 {{ gc_regime_benchmark }} · ADX≥{{ gc_regime_adx_min }})
+  {% else %}<strong>MA{{ gc_regime_ma }}</strong> (벤치 {{ gc_regime_benchmark }})
+  {% endif %}
+  ON · 상승레짐일 때만 진입
+</p>
+{% endif %}
 
 <div class="row embed-hide" style="margin: 12px 0; flex-wrap: wrap;">
   <button class="secondary" onclick="location.href='/mypage/strategy/dashboard'">My Strategies</button>
