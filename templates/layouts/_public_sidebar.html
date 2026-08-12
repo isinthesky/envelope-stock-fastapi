@@ -1,0 +1,17 @@
+<nav class="sidebar" id="public-sidebar" aria-label="공개 전략 메뉴">
+  <h2 class="brand"><a href="/page/">전략 인사이트</a></h2>
+  <ul>
+    <li>
+      <a href="/page/"
+         {% if active_page == "public_overview" %}class="active" aria-current="page"{% endif %}>전략 소개</a>
+    </li>
+    <li>
+      <a href="/page/scan/"
+         {% if active_page == "public_scan" %}class="active" aria-current="page"{% endif %}>골든크로스 스캔</a>
+    </li>
+    <li>
+      <a href="/page/recommendations/"
+         {% if active_page == "public_recommendations" %}class="active" aria-current="page"{% endif %}>오늘의 추천</a>
+    </li>
+  </ul>
+</nav>

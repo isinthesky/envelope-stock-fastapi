@@ -1,0 +1,562 @@
+/* Public Strategy Portal (/page/) - 공개 전용 스타일
+ * 관리자 mypage.css와 분리된 독립 스타일시트.
+ * - :focus-visible 포커스 링, 충분한 대비, prefers-reduced-motion 지원
+ * - 모바일 결과표는 .table-scroll 래퍼로 가로 스크롤 (body 가로 스크롤 금지)
+ */
+
+:root {
+  --bg: #f6f8fa;
+  --surface: #ffffff;
+  --text: #1e293b;
+  --muted: #5b6b7f;
+  --border: #dbe3ec;
+  --brand: #1e3a5f;
+  --brand-soft: #2d5a87;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --sky: #7dd3fc;
+  --danger: #b91c1c;
+  --warn-bg: #fef3c7;
+  --warn-text: #92400e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* [hidden]이 .stats-row {display:flex} 등 클래스 규칙에 덮이지 않도록 강제 */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Apple SD Gothic Neo",
+    "Noto Sans KR", "Malgun Gothic", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* ==================== 접근성 ==================== */
+
+.skip-link {
+  position: absolute;
+  top: -48px;
+  left: 12px;
+  z-index: 100;
+  padding: 10px 16px;
+  background: var(--brand);
+  color: #ffffff;
+  border-radius: 0 0 8px 8px;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+:focus-visible {
+  outline: 3px solid #d97706;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==================== 레이아웃 ==================== */
+
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 232px;
+  flex-shrink: 0;
+  background: linear-gradient(180deg, var(--brand) 0%, var(--brand-soft) 100%);
+  color: #e0f2fe;
+  padding: 20px 14px;
+}
+
+.sidebar .brand {
+  margin: 0 0 8px;
+  font-size: 18px;
+  padding: 0 12px;
+}
+
+.sidebar .brand a {
+  color: var(--sky);
+  text-decoration: none;
+}
+
+.sidebar .brand a:hover {
+  text-decoration: underline;
+}
+
+.sidebar ul {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.sidebar li {
+  margin: 4px 0;
+}
+
+.sidebar a {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #e0f2fe;
+  text-decoration: none;
+}
+
+.sidebar a:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.sidebar a.active {
+  background: var(--sky);
+  color: #0f2b46;
+  font-weight: 700;
+}
+
+body.sidebar-hidden .sidebar {
+  display: none;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: 64px 24px 24px;
+}
+
+.content-inner {
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+.site-footer {
+  max-width: 1040px;
+  margin: 40px auto 0;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ==================== 사이드바 토글/백드롭 ==================== */
+
+.sidebar-toggle {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 60;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.sidebar-toggle:hover {
+  background: #eef2f7;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(78vw, 280px);
+    z-index: 50;
+    overflow-y: auto;
+    padding-top: 56px;
+  }
+
+  body:not(.sidebar-hidden) .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(15, 23, 42, 0.55);
+  }
+
+  .content {
+    padding: 64px 14px 20px;
+  }
+}
+
+/* ==================== 공통 요소 ==================== */
+
+h1 {
+  font-size: 26px;
+  margin: 0 0 8px;
+}
+
+h2 {
+  font-size: 19px;
+  margin: 0 0 12px;
+}
+
+section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0;
+}
+
+.page-lead {
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+
+button.primary {
+  padding: 10px 18px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.primary:hover {
+  background: var(--accent-strong);
+}
+
+button.primary:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+
+select {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+
+label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-message {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #eef2f7;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.status-message.is-error {
+  background: #fee2e2;
+  color: var(--danger);
+}
+
+.status-message.is-warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+/* aria-live 리전은 비어 있어도 DOM에 유지해야 첫 메시지가 스크린리더에 공지된다.
+   display:none 대신 시각적으로만 접어 둔다(패딩/배경 제거). */
+.status-message:empty {
+  padding: 0;
+  margin-top: 0;
+  background: none;
+}
+
+/* ==================== 전략 소개 ==================== */
+
+.strategy-info {
+  background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
+  color: #ffffff;
+  border: none;
+}
+
+.strategy-info h2 {
+  color: var(--sky);
+  margin-bottom: 16px;
+}
+
+.strategy-info p {
+  color: #e0f2fe;
+}
+
+.strategy-flow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 16px 0;
+  flex-wrap: wrap;
+}
+
+.strategy-flow .step {
+  background: rgba(255, 255, 255, 0.15);
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.strategy-flow .step.step-interest {
+  background: rgba(22, 163, 74, 0.25);
+  border: 1px solid #4ade80;
+}
+
+.strategy-flow .step.step-optimal {
+  background: rgba(234, 179, 8, 0.35);
+  border: 2px solid #eab308;
+}
+
+.strategy-flow .arrow {
+  color: var(--sky);
+  font-size: 18px;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.config-item {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 12px;
+  border-radius: 6px;
+}
+
+.config-item .label {
+  font-size: 11px;
+  color: #93c5fd;
+  text-transform: uppercase;
+}
+
+.config-item .value {
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.regime-badge {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  padding: 4px 10px;
+  border-radius: 8px;
+  margin: 2px 0 8px;
+}
+
+/* ==================== 통계 카드 ==================== */
+
+.stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.stat-card {
+  flex: 1;
+  min-width: 120px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+}
+
+.stat-card .number {
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.stat-card .label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.stat-card.highlight {
+  border: 2px solid #eab308;
+}
+
+/* ==================== 테이블 ==================== */
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.data-table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.data-table th {
+  background: #f1f5f9;
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table tr:hover {
+  background: #f8fafc;
+}
+
+.data-table .empty-row td {
+  text-align: center;
+  color: var(--muted);
+}
+
+.indicator {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.indicator.bullish {
+  color: #15803d;
+}
+
+.indicator.bearish {
+  color: #b91c1c;
+}
+
+/* ==================== 상태 배지 ==================== */
+
+.state-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.state-not-gc {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.state-gc-active {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.state-waiting-pullback {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.state-buy-interest {
+  background: #fed7aa;
+  color: #9a3412;
+  border: 1px solid #fb923c;
+}
+
+.state-ready-buy {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.state-optimal-buy {
+  background: #fef08a;
+  color: #854d0e;
+  border: 2px solid #eab308;
+  font-weight: 700;
+}
+
+.state-fear-buy {
+  background: #fce7f3;
+  color: #9d174d;
+}
+
+/* ==================== 추천 페이지 ==================== */
+
+.meta-line {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0;
+}
+
+.criteria-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.industry-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.industry-list li {
+  background: #eef2f7;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.empty-state {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+  background: #f8fafc;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}

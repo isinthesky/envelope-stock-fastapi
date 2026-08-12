@@ -1,0 +1,52 @@
+{% extends "layouts/public_base.html" %}
+
+{% block title %}오늘의 추천 - 전략 인사이트{% endblock %}
+
+{% block content %}
+<h1>오늘의 추천</h1>
+<p class="page-lead">
+  스케줄 스캔 결과로 생성된 골든크로스 추천 요약입니다. 페이지 조회는 새 스캔을 실행하지 않습니다.
+</p>
+
+<section>
+  <h2>추천 요약 <span class="meta-line" style="display:inline;">(출처: 스케줄 결과)</span></h2>
+  <div id="public-reco-status" class="status-message" role="status" aria-live="polite">추천 데이터를 불러오는 중...</div>
+
+  <div id="public-reco-content" hidden>
+    <p class="meta-line" id="public-reco-generated"></p>
+    <p class="meta-line" id="public-reco-scan-time"></p>
+    <p class="meta-line" id="public-reco-count"></p>
+
+    <h2 style="margin-top:20px;">Top 종목</h2>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>종목명</th>
+            <th>시장</th>
+            <th>현재가</th>
+            <th>신호 상태</th>
+            <th>추천 점수</th>
+          </tr>
+        </thead>
+        <tbody id="public-reco-table-body"></tbody>
+      </table>
+    </div>
+
+    <h2 style="margin-top:20px;">Top 업종</h2>
+    <ul class="industry-list" id="public-reco-industries"></ul>
+
+    <h2 style="margin-top:20px;">선정 기준</h2>
+    <ul class="criteria-list" id="public-reco-criteria"></ul>
+  </div>
+
+  <div id="public-reco-empty" class="empty-state" hidden>
+    아직 생성된 추천이 없습니다. 추천은 장중 스케줄 스캔 후 갱신되며, 최대 48시간 동안 제공됩니다.
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_script_tags %}
+<script src="/static/js/pages/public_strategy_recommendations.js?v={{ static_version }}"></script>
+{% endblock %}

@@ -18,7 +18,8 @@ interface/
 | `api/market_data_router.py` | `/api/v1/market` | 현재가/호가/차트 | `ResponseDTO` |
 | `api/account_router.py` | `/api/v1/accounts` | 잔고/포지션 | `ResponseDTO` |
 | `api/order_router.py` | `/api/v1/orders` | 주문 생성/취소/조회/정정 | `ResponseDTO` |
-| `api/strategy_router.py` | `/api/v1/strategies` | 전략/유니버스/시그널/스케줄링 | `ResponseDTO` |
+| `api/strategy_router.py` | `/api/v1/strategies` | 전략/유니버스/시그널/스케줄링 (**관리자 전용** — main.py에서 라우터 단위 `verify_admin_access`) | `ResponseDTO` |
+| `api/public_strategy_router.py` | `/api/v1/public/strategies` (내부 prefix) | 공개 골든크로스 스캔(제한형)/추천 스냅샷 — IP 쿨다운·전역 락·고정 한도는 `PublicStrategyService` | `ResponseDTO` |
 | `api/sell_rule_research_router.py` | `/api/v1/strategies` (내부 prefix) | 사전등록 매도 규칙 리서치 | `ResponseDTO` |
 | `api/ohlcv_router.py` | `/api/v1/ohlcv` | OHLCV 캐시 통계/워밍업/정리/검증 | `ResponseDTO` |
 | `api/screener_router.py` | `/api/v1/screener` (내부 prefix) | 네이버 기반 가치주 스크리닝 | `ResponseDTO` |
@@ -26,10 +27,11 @@ interface/
 | `api/backtest_router.py` | `/api/v1/backtest` (내부 prefix) | 백테스트 실행/검증 | **raw DTO** (`BacktestResultDTO` 등) |
 | `api/websocket_router.py` | `/ws` | 실시간 WebSocket | WS 메시지 |
 
-## Page 라우터(관리 페이지)
-- `page/__init__.py`의 `page_routers` 리스트에 등록된 라우터가 `src/main.py`에서 일괄 include 됩니다.
+## Page 라우터(관리 페이지 + 공개 포털)
+- `page/__init__.py`의 `mypage_routers`는 `src/main.py`에서 `verify_admin_access`와 함께, `public_page_routers`는 의존성 없이 include 됩니다.
 - 각 라우터는 자체 prefix와 템플릿을 가집니다(`templates/page/*.html`).
 - 신규 추천 관리 화면은 `page/recommendation_page_router.py` → `/mypage/recommendation/` → `templates/page/recommendation.html` → `static/js/pages/recommendation.js` 흐름을 따릅니다.
+- 공개 전략 포털: `page/public_strategy_page_router.py` → `/page/`(소개)·`/page/scan/`(제한형 스캔)·`/page/recommendations/`(추천 스냅샷) → `templates/layouts/public_base.html` + `templates/page/public_strategy_*.html` + `static/js/pages/public_strategy_*.js`. 공개 레이아웃에는 관리자 CSRF fetch shim을 넣지 않습니다.
 
 ## 구현 규칙
 - **비즈니스 로직 금지**: 라우터는 서비스 호출만 수행합니다.

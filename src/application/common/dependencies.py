@@ -287,6 +287,34 @@ def get_buy_strategy_service(
 BuyStrategyServiceDep = Annotated["BuyStrategyService", Depends(get_buy_strategy_service)]
 
 
+def get_public_strategy_service(
+    strategy_service: StrategyServiceDep,
+    redis_client: RedisDep,
+) -> "PublicStrategyService":
+    """
+    Public Strategy Service Dependency
+
+    공개 전략 포털(/page/)의 rate limit/전역 락/고정 한도 스캔을 담당합니다.
+
+    Args:
+        strategy_service: Strategy Service
+        redis_client: Redis Client
+
+    Returns:
+        PublicStrategyService: 공개 전략 서비스
+    """
+    from src.application.domain.strategy.public_strategy_service import PublicStrategyService
+
+    return PublicStrategyService(
+        strategy_service=strategy_service,
+        redis_client=redis_client,
+    )
+
+
+# Type alias for Public Strategy Service
+PublicStrategyServiceDep = Annotated["PublicStrategyService", Depends(get_public_strategy_service)]
+
+
 # ==================== Admin Access Control ====================
 
 UNSAFE_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -294,11 +322,18 @@ ADMIN_CSRF_HEADER = "x-requested-with"
 ADMIN_CSRF_HEADER_VALUE = "XMLHttpRequest"
 
 
-def _get_client_ip(request: Request, trusted_proxy_ips: list[str] | None = None) -> str:
-    """클라이언트 IP 추출
+def get_client_ip(request: Request, trusted_proxy_ips: list[str] | None = None) -> str:
+    """클라이언트 IP 추출 (관리자 검증 + 공개 rate limit 공용)
 
     프록시 헤더(X-Forwarded-For/X-Real-IP)는 직접 연결 IP가
     신뢰할 수 있는 내부 네트워크(Docker bridge 등)인 경우에만 참조합니다.
+    신뢰하지 않는 직접 접속의 위조 헤더는 무시됩니다.
+
+    X-Forwarded-For는 프록시가 append하므로(nginx $proxy_add_x_forwarded_for),
+    client가 왼쪽에 위조 값을 끼워넣을 수 있습니다. 따라서 왼쪽이 아니라
+    오른쪽(가장 가까운 hop)부터 신뢰 프록시가 아닌 첫 IP(마지막 미신뢰 hop)를
+    실제 클라이언트로 취급해, 위조를 통한 IP 스푸핑(관리자 허용 IP/공개 쿨다운
+    우회)을 차단합니다.
     """
     direct_ip = request.client.host if request.client else None
 
@@ -311,9 +346,18 @@ def _get_client_ip(request: Request, trusted_proxy_ips: list[str] | None = None)
             is_trusted = False
 
         if is_trusted:
+            trusted = trusted_proxy_ips or []
             forwarded_for = request.headers.get("x-forwarded-for")
             if forwarded_for:
-                return forwarded_for.split(",")[0].strip()
+                hops = [p.strip() for p in forwarded_for.split(",") if p.strip()]
+                # 오른쪽부터 신뢰 프록시가 아닌 첫 hop = 실제 클라이언트
+                for candidate in reversed(hops):
+                    if not _is_ip_allowed(candidate, trusted):
+                        return candidate
+                # 모든 hop이 신뢰 프록시(비정상)면 가장 바깥 값 사용
+                if hops:
+                    return hops[0]
+            # X-Real-IP는 프록시가 overwrite로 설정하는 단일 값(single-proxy 전제)
             real_ip = request.headers.get("x-real-ip")
             if real_ip:
                 return real_ip
@@ -366,7 +410,7 @@ async def verify_admin_access(request: Request) -> str:
     from src.settings.config import get_settings
 
     settings = get_settings()
-    client_ip = _get_client_ip(request, settings.trusted_proxy_ips)
+    client_ip = get_client_ip(request, settings.trusted_proxy_ips)
 
     if not _is_ip_allowed(client_ip, settings.admin_allowed_ips):
         raise AuthorizationError(

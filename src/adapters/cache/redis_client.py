@@ -98,6 +98,29 @@ class RedisClient:
         except Exception:
             return False
 
+    async def set_nx(self, key: str, value: str, ttl: int) -> bool:
+        """SET key value EX ttl NX (락/쿨다운 전용)
+
+        일반 set()은 Redis 오류를 False로 삼켜 "NX 경합"과 "인프라 장애"를
+        구분할 수 없다. 락/쿨다운은 이 둘을 구분해야 하므로(장애는 fail-closed
+        503, 경합은 429) 여기서는 오류를 삼키지 않고 전파한다.
+
+        Args:
+            key: 키
+            value: 값 (직렬화하지 않음)
+            ttl: TTL (초)
+
+        Returns:
+            bool: 새로 설정하면 True, 이미 존재(경합)하면 False
+
+        Raises:
+            Exception: Redis 미연결/통신 오류 (호출자가 503으로 변환)
+        """
+        if not self.redis:
+            raise ConnectionError("Redis is not connected")
+        res = await self.redis.set(key, value, ex=ttl, nx=True)
+        return bool(res)
+
     async def get(self, key: str, deserialize: bool = True) -> Any | None:
         """
         캐시 조회

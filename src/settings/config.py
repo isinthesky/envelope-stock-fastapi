@@ -647,6 +647,23 @@ class Settings(BaseSettings):
         default=1000, ge=1, description="매수 알림 추천 스캔 대상 종목 수 상한"
     )
 
+    # ==================== 공개 전략 포털 (/page/) 설정 ====================
+    public_strategy_scan_limit: int = Field(
+        default=100, ge=1, le=500, description="공개 골든크로스 스캔 대상 종목 상한"
+    )
+    public_strategy_scan_max_concurrent: int = Field(
+        default=2, ge=1, le=5, description="공개 스캔 내부 동시 처리 수"
+    )
+    public_strategy_scan_cooldown_seconds: int = Field(
+        default=300, ge=30, description="공개 스캔 IP별 재실행 대기 시간 (초)"
+    )
+    public_strategy_scan_lock_seconds: int = Field(
+        default=180, ge=30, description="공개 스캔 전역 실행 락 안전 만료 (초)"
+    )
+    public_strategy_recommendation_ttl_seconds: int = Field(
+        default=172800, ge=3600, description="공개 추천 스냅샷 Redis 보관 기간 (초)"
+    )
+
     # ==================== DART API 설정 ====================
     dart_open_api_key: str = Field(default="", description="DART Open API 키")
     dart_api_base_url: str = Field(

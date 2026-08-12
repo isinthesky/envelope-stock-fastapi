@@ -315,6 +315,9 @@ from src.application.interface.api.backtest_router import router as backtest_rou
 from src.application.interface.api.market_data_router import router as market_data_router
 from src.application.interface.api.ops_router import router as ops_router
 from src.application.interface.api.order_router import router as order_router
+from src.application.interface.api.public_strategy_router import (
+    router as public_strategy_router,
+)
 from src.application.interface.api.recommendation_router import router as recommendation_router
 from src.application.interface.api.screener_router import router as screener_router
 from src.application.interface.api.sell_rule_research_router import (
@@ -331,7 +334,16 @@ app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
 app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
 app.include_router(ops_router)
 app.include_router(sell_rule_research_router)
-app.include_router(strategy_router, prefix="/api/v1/strategies", tags=["Strategy"])
+# 기존 범용 전략 API는 관리자 전용 (외부 사용자는 /api/v1/public/strategies/*만 사용)
+app.include_router(
+    strategy_router,
+    prefix="/api/v1/strategies",
+    tags=["Strategy"],
+    dependencies=[Depends(verify_admin_access)],
+)
+
+# 공개 전략 API (rate limit/고정 한도는 PublicStrategyService가 담당)
+app.include_router(public_strategy_router)  # 내부 prefix: /api/v1/public/strategies
 
 # 전략 생성/수정/삭제 같은 관리자 전용 라우트는 기본 비활성(완전 비노출)
 if settings.enable_admin_strategy_routes:

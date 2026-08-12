@@ -1,0 +1,73 @@
+{% extends "layouts/public_base.html" %}
+
+{% block title %}골든크로스 스캔 - 전략 인사이트{% endblock %}
+
+{% block content %}
+<h1>골든크로스 스캔</h1>
+<p class="page-lead">
+  MA{{ gc_short_ma }}/MA{{ gc_long_ma }} 골든크로스 조건에 부합하는 종목을 실시간으로 확인합니다.
+  외부 데이터 보호를 위해 스캔은 IP당 일정 시간에 한 번, 한 번에 하나씩만 실행됩니다.
+</p>
+
+<section>
+  <h2>스캔 실행</h2>
+  <div class="controls-row">
+    <label for="public-scan-market">시장</label>
+    <select id="public-scan-market">
+      <option value="" selected>전체</option>
+      <option value="KOSPI">KOSPI</option>
+      <option value="KOSDAQ">KOSDAQ</option>
+      <option value="ETF">ETF</option>
+    </select>
+    <button type="button" class="primary" id="public-scan-run">스캔 실행</button>
+  </div>
+  <div id="public-scan-status" class="status-message" role="status" aria-live="polite"></div>
+
+  <div class="stats-row" id="public-scan-stats" hidden>
+    <div class="stat-card">
+      <div class="number" id="stat-total">-</div>
+      <div class="label">스캔 종목</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" id="stat-gc">-</div>
+      <div class="label">골든크로스</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" id="stat-pullback">-</div>
+      <div class="label">눌림목 대기</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" id="stat-ready">-</div>
+      <div class="label">매수 관심</div>
+    </div>
+    <div class="stat-card highlight">
+      <div class="number" id="stat-optimal">-</div>
+      <div class="label">매수 적기</div>
+    </div>
+  </div>
+
+  <div id="public-scan-result" hidden>
+    <p class="meta-line" id="public-scan-time"></p>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>종목명</th>
+            <th>시장</th>
+            <th>현재가</th>
+            <th>MA Gap</th>
+            <th>Stoch K/D</th>
+            <th>신호 상태</th>
+          </tr>
+        </thead>
+        <tbody id="public-scan-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_script_tags %}
+<script src="/static/js/pages/public_strategy_scan.js?v={{ static_version }}"></script>
+{% endblock %}

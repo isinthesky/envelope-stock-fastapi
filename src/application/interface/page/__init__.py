@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Page Router Package - 도메인별 관리 페이지
+"""Page Router Package - 도메인별 관리 페이지 + 공개 전략 포털
 
-- /mypage/* : 관리자 페이지 (nav bar 포함)
-- /page/ : 공개용 Buy 전략 페이지 (nav bar 없음)
+- /mypage/* : 관리자 페이지 (verify_admin_access로 IP 게이트)
+- /page/*   : 공개 전략 포털 (전략 소개 / 골든크로스 스캔 / 오늘의 추천)
 """
 
 from src.application.interface.page.access_logs_page_router import (
@@ -69,7 +69,7 @@ mypage_routers = [
     access_logs_page_router,
 ]
 
-# /page/ 공개용 페이지 라우터 (nav bar 없음)
+# /page/* 공개 전략 포털 라우터 (관리자 의존성 없이 등록)
 public_page_routers = [
     public_strategy_page_router,
 ]

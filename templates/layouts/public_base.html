@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}전략 인사이트{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231e3a5f'/%3E%3Cpath d='M14 42 L26 30 L36 38 L50 20' fill='none' stroke='%237dd3fc' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/styles/public_strategy.css?v={{ static_version }}" />
+</head>
+<body class="sidebar-hidden">
+  <a class="skip-link" href="#main-content">본문 바로가기</a>
+  <button class="sidebar-toggle" type="button" aria-controls="public-sidebar" aria-expanded="false">메뉴 열기</button>
+  <div class="sidebar-backdrop" data-sidebar-backdrop="1"></div>
+  <div class="layout">
+    {% include "layouts/_public_sidebar.html" %}
+
+    <main class="content" id="main-content">
+      <div class="content-inner">
+        {% block content %}{% endblock %}
+      </div>
+      <footer class="site-footer">
+        <p>본 정보는 투자 조언이 아니며 투자 판단과 손익 책임은 이용자에게 있습니다.</p>
+      </footer>
+    </main>
+  </div>
+  <script>
+    (function () {
+      // 관리자 레이아웃(sidebarHidden)과 분리된 공개 전용 사이드바 상태 키
+      var STORAGE_KEY = "publicStrategySidebarHidden";
+      var toggle = document.querySelector(".sidebar-toggle");
+      var backdrop = document.querySelector("[data-sidebar-backdrop]");
+      var sidebar = document.getElementById("public-sidebar");
+
+      var isMobile = function () {
+        return window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+      };
+
+      var setHidden = function (hidden) {
+        document.body.classList.toggle("sidebar-hidden", hidden);
+        if (toggle) {
+          toggle.setAttribute("aria-expanded", (!hidden).toString());
+          toggle.textContent = hidden ? "메뉴 열기" : "메뉴 닫기";
+        }
+      };
+
+      var savePreference = function (hidden) {
+        try {
+          localStorage.setItem(STORAGE_KEY, hidden ? "true" : "false");
+        } catch (e) {
+          /* 저장 불가 환경은 무시 */
+        }
+      };
+
+      var loadPreference = function () {
+        // 모바일은 항상 닫힌 상태로 시작
+        if (isMobile()) {
+          setHidden(true);
+          return;
+        }
+        try {
+          var stored = localStorage.getItem(STORAGE_KEY);
+          setHidden(stored === null ? false : stored === "true");
+        } catch (e) {
+          setHidden(false);
+        }
+      };
+
+      var focusFirstMenuLink = function () {
+        // 브랜드 로고가 아니라 메뉴 목록(ul)의 첫 항목으로 포커스 이동
+        var first = sidebar ? sidebar.querySelector("ul a") : null;
+        if (first) first.focus();
+      };
+
+      var closeAndRestoreFocus = function () {
+        if (document.body.classList.contains("sidebar-hidden")) return;
+        setHidden(true);
+        savePreference(true);
+        if (toggle) toggle.focus();
+      };
+
+      if (toggle) {
+        toggle.addEventListener("click", function () {
+          var nextHidden = !document.body.classList.contains("sidebar-hidden");
+          setHidden(nextHidden);
+          savePreference(nextHidden);
+          if (!nextHidden) focusFirstMenuLink();
+        });
+      }
+
+      if (backdrop) {
+        backdrop.addEventListener("click", closeAndRestoreFocus);
+      }
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") closeAndRestoreFocus();
+      });
+
+      loadPreference();
+    })();
+  </script>
+  {% block extra_script_tags %}{% endblock %}
+</body>
+</html>

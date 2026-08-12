@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 
+from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.connection import get_async_session
 from src.adapters.database.models.ohlcv import OHLCVModel
 from src.adapters.database.repositories.analysis_history_repository import (
@@ -461,6 +462,41 @@ class NotificationScheduler:
 
     # ==================== 매수 알림 Job ====================
 
+    async def _cache_public_recommendation_snapshot(self, recommendations) -> bool:
+        """공개 포털(/page/recommendations/)용 추천 스냅샷 캐시 저장
+
+        저장 실패는 warning 로그만 남기고 Telegram 발송/중복 방지/작업 결과 기록을
+        중단시키지 않는다.
+        """
+        try:
+            from src.application.domain.strategy.public_dto import (
+                PublicRecommendationSnapshotDTO,
+            )
+            from src.application.domain.strategy.public_strategy_service import (
+                PUBLIC_RECOMMENDATION_SNAPSHOT_KEY,
+            )
+
+            snapshot = PublicRecommendationSnapshotDTO.from_internal(
+                recommendations,
+                generated_at=datetime.now(KST),
+            )
+            redis_client = await get_redis_client()
+            saved = await redis_client.set(
+                PUBLIC_RECOMMENDATION_SNAPSHOT_KEY,
+                snapshot.model_dump(mode="json"),
+                ttl=settings.public_strategy_recommendation_ttl_seconds,
+            )
+            if not saved:
+                logger.warning(
+                    "[NotificationScheduler] Public recommendation snapshot cache save failed"
+                )
+            return bool(saved)
+        except Exception as e:
+            logger.warning(
+                f"[NotificationScheduler] Public recommendation snapshot cache error: {e}"
+            )
+            return False
+
     def _extract_candle_warning_symbols(self, warnings: list[str]) -> dict[str, str]:
         """캔들 데이터 경고 메시지에서 자동 제외 검토 대상 종목코드 추출."""
         symbols: dict[str, str] = {}
@@ -566,6 +602,10 @@ class NotificationScheduler:
                     top_n=settings.buy_notification_top_n,
                     top_industries_n=settings.buy_notification_top_industries_n,
                 )
+
+                # 공개 스냅샷은 계산 직후 캐시한다 — Telegram 비활성/발송 실패/중복 스킵과
+                # 무관하게 수동/스케줄 실행으로 계산된 추천은 항상 캐시된다.
+                await self._cache_public_recommendation_snapshot(recommendations)
 
                 notification_payload = recommendations.model_dump(mode="json")
                 signature = self._dedupe.build_notification_signature(
