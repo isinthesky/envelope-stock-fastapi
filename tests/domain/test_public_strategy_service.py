@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""PublicStrategyService 보호 정책 테스트
+"""PublicStrategyService 보호 정책 + 시장 가용성 정책 테스트
 
 - 서버 고정 한도(stoch 30 / gc_only / include_etf / limit / max_concurrent)
 - IP 쿨다운(SET NX EX)과 전역 락, fail-closed 503
 - 추천 스냅샷은 캐시 전용(재계산 없음)
+- 시장 가용성: 설정(ETF_UNIVERSE_ENABLED) ∩ 실제 활성 유니버스(count) 교집합 정책
+  (`.omo/plans/public-scan-market-availability.md` 6.2)
 """
 
 from datetime import datetime
@@ -11,8 +13,10 @@ from decimal import Decimal
 
 import pytest
 
+import src.application.common.decorators as decorators_module
 from src.application.common.exceptions import (
     RateLimitExceededError,
+    ResourceConflictError,
     ServiceUnavailableError,
     ValidationError,
 )
@@ -35,18 +39,26 @@ from src.settings.config import settings
 
 
 class FakeRedis:
-    """RedisClient 표면(set_nx/set/get/ttl/delete/ping)만 흉내내는 인메모리 fake"""
+    """RedisClient 표면(set_nx/set/get/ttl/delete/ping)만 흉내내는 인메모리 fake
+
+    ping_calls/set_nx_calls는 "시장 가용성 검사가 Redis 보호자원보다 먼저 수행되어
+    거부 시 Redis를 전혀 건드리지 않는다"를 검증하기 위한 호출 카운터다.
+    """
 
     def __init__(self, ping_ok: bool = True, set_nx_error: Exception | None = None):
         self.store: dict[str, object] = {}
         self.ttls: dict[str, int] = {}
         self.ping_ok = ping_ok
         self.set_nx_error = set_nx_error
+        self.ping_calls = 0
+        self.set_nx_calls: list[tuple] = []
 
     async def ping(self) -> bool:
+        self.ping_calls += 1
         return self.ping_ok
 
     async def set_nx(self, key, value, ttl) -> bool:
+        self.set_nx_calls.append((key, value, ttl))
         if self.set_nx_error is not None:
             raise self.set_nx_error
         if key in self.store:
@@ -79,6 +91,40 @@ class FakeRedis:
         return True
 
 
+class FakeUniverseRepo:
+    """StockUniverseRepository 표면(get_scan_market_counts)만 흉내내는 fake
+
+    실제 repository 계약과 동일하게, 요청한 시장 중 counts에 없는 시장은 0으로
+    채워 반환한다. calls는 서비스가 어떤 시장 집합으로 집계를 요청했는지 기록한다.
+    """
+
+    def __init__(self, counts: dict[str, int] | None = None):
+        self.counts = counts or {}
+        self.calls: list[list[str]] = []
+
+    async def get_scan_market_counts(self, markets, session=None) -> dict[str, int]:
+        _ = session
+        self.calls.append([m.value for m in markets])
+        return {m.value: self.counts.get(m.value, 0) for m in markets}
+
+
+class RaisingUniverseRepo:
+    """get_scan_market_counts가 예외를 던지는 fake
+
+    DB 커넥션 풀 고갈/타임아웃 등 인프라 장애를 시뮬레이션한다. Redis 호출과
+    동일하게 fail-closed 503으로 변환되는지 검증하는 데 사용한다.
+    """
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.calls: list[list[str]] = []
+
+    async def get_scan_market_counts(self, markets, session=None) -> dict[str, int]:
+        _ = session
+        self.calls.append([m.value for m in markets])
+        raise self._error
+
+
 def _scan_item(**overrides) -> GoldenCrossScanItemDTO:
     base = dict(
         symbol="005930",
@@ -102,8 +148,8 @@ def _scan_item(**overrides) -> GoldenCrossScanItemDTO:
     return GoldenCrossScanItemDTO(**base)
 
 
-def _scan_result() -> GoldenCrossScanListDTO:
-    return GoldenCrossScanListDTO(
+def _scan_result(**overrides) -> GoldenCrossScanListDTO:
+    base = dict(
         stocks=[_scan_item()],
         total_scanned=100,
         gc_active_count=10,
@@ -114,6 +160,8 @@ def _scan_result() -> GoldenCrossScanListDTO:
         scan_time=datetime(2026, 8, 13, 11, 30),
         errors=["종목 123456 내부 오류 상세"],
     )
+    base.update(overrides)
+    return GoldenCrossScanListDTO(**base)
 
 
 class FakeStrategyService:
@@ -132,19 +180,324 @@ class FakeStrategyService:
 
 
 def _service(
-    redis=None, strategy=None
-) -> tuple[PublicStrategyService, FakeRedis, FakeStrategyService]:
+    redis=None,
+    strategy=None,
+    universe_repo=None,
+) -> tuple[PublicStrategyService, FakeRedis, FakeStrategyService, FakeUniverseRepo]:
     redis = redis or FakeRedis()
     strategy = strategy or FakeStrategyService()
-    return PublicStrategyService(strategy_service=strategy, redis_client=redis), redis, strategy
+    # 기본: ETF 전용 모드 + ETF 221개 활성 (운영 실측과 동일한 baseline).
+    # 시장 모드/가용성 자체를 검증하는 테스트는 universe_repo/etf_universe_enabled를
+    # 명시적으로 override한다.
+    universe_repo = universe_repo or FakeUniverseRepo({"ETF": 221})
+    return (
+        PublicStrategyService(
+            strategy_service=strategy, redis_client=redis, universe_repo=universe_repo
+        ),
+        redis,
+        strategy,
+        universe_repo,
+    )
+
+
+class _DummySession:
+    """@transaction이 여는 실 DB 세션을 대체하는 더미 (commit/rollback no-op)
+
+    FakeUniverseRepo.get_scan_market_counts는 session을 사용하지 않으므로,
+    get_scan_capabilities()가 실제 DB 연결 없이 동작하도록 세션 껍데기만 제공한다.
+    """
+
+    async def commit(self) -> None:
+        pass
+
+    async def rollback(self) -> None:
+        pass
+
+
+class _DummySessionContext:
+    async def __aenter__(self) -> _DummySession:
+        return _DummySession()
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+@pytest.fixture(autouse=True)
+def _stub_transaction_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_scan_capabilities()의 @transaction이 여는 AsyncSessionLocal()을 더미로 치환
+
+    이 스위트는 실 DB를 사용하지 않는다 — FakeUniverseRepo가 session 인자를
+    무시하므로 세션 자체는 커밋/롤백만 흉내내면 된다.
+    """
+    monkeypatch.setattr(decorators_module, "AsyncSessionLocal", lambda: _DummySessionContext())
+
+
+@pytest.fixture(autouse=True)
+def _default_etf_only_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """기본 실행 모드는 ETF 전용 — 시장 가용성과 무관한 쿨다운/락/fail-closed
+    테스트가 새 가용성 게이트를 통과하도록 하는 안전한 기본값이다. 모드 자체를
+    검증하는 테스트는 각자 override한다."""
+    monkeypatch.setattr(settings, "etf_universe_enabled", True, raising=False)
+
+
+# ==================== 공개 스캔: 가용성 — capability 조회 ====================
+
+
+@pytest.mark.asyncio
+async def test_etf_mode_capabilities_single_market_no_all_option() -> None:
+    """ETF 모드 + ETF 221개: capability는 ETF 하나, allow_all=false, default=ETF"""
+    service, _redis, _strategy, _universe = _service(universe_repo=FakeUniverseRepo({"ETF": 221}))
+
+    capabilities = await service.get_scan_capabilities()
+
+    assert capabilities.scan_enabled is True
+    assert capabilities.universe_mode == "ETF_ONLY"
+    assert capabilities.allow_all is False
+    assert capabilities.default_market == "ETF"
+    assert [(m.value, m.label, m.active_count) for m in capabilities.markets] == [
+        ("ETF", "ETF", 221)
+    ]
+    assert capabilities.notice == "현재 ETF 전용 유니버스로 운영 중입니다."
+
+
+@pytest.mark.asyncio
+async def test_capabilities_scan_disabled_when_configured_market_has_zero_active() -> None:
+    """ETF 모드 + 활성 ETF 0개: capability는 scan_enabled=false"""
+    service, _redis, _strategy, _universe = _service(universe_repo=FakeUniverseRepo({"ETF": 0}))
+
+    capabilities = await service.get_scan_capabilities()
+
+    assert capabilities.scan_enabled is False
+    assert capabilities.markets == []
+    assert capabilities.default_market is None
+    assert capabilities.notice == "현재 스캔 가능한 유니버스를 준비 중입니다."
+
+
+@pytest.mark.asyncio
+async def test_stocks_mode_capabilities_two_active_markets_allow_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """개별주 모드 + KOSPI/KOSDAQ 활성: capability에 두 시장과 allow_all=true"""
+    monkeypatch.setattr(settings, "etf_universe_enabled", False, raising=False)
+    service, _redis, _strategy, _universe = _service(
+        universe_repo=FakeUniverseRepo({"KOSPI": 50, "KOSDAQ": 40})
+    )
+
+    capabilities = await service.get_scan_capabilities()
+
+    assert capabilities.universe_mode == "STOCKS"
+    assert capabilities.allow_all is True
+    assert capabilities.default_market is None
+    assert [m.value for m in capabilities.markets] == ["KOSPI", "KOSDAQ"]
+    assert capabilities.notice is None
+
+
+@pytest.mark.asyncio
+async def test_stocks_mode_capabilities_single_active_market(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """개별주 모드 + KOSPI만 활성: capability는 KOSPI 하나, default=KOSPI"""
+    monkeypatch.setattr(settings, "etf_universe_enabled", False, raising=False)
+    service, _redis, _strategy, _universe = _service(
+        universe_repo=FakeUniverseRepo({"KOSPI": 50, "KOSDAQ": 0})
+    )
+
+    capabilities = await service.get_scan_capabilities()
+
+    assert capabilities.allow_all is False
+    assert capabilities.default_market == "KOSPI"
+    assert [m.value for m in capabilities.markets] == ["KOSPI"]
+
+
+# ==================== 공개 스캔: DB 사전조회 실패 — fail-closed ====================
+
+
+@pytest.mark.asyncio
+async def test_get_scan_capabilities_db_failure_fails_closed_503() -> None:
+    """DB 사전조회(get_scan_market_counts) 실패는 Redis 미연결과 동일하게
+    fail-closed 503으로 변환된다 (500이 새어나가지 않음)"""
+    universe_repo = RaisingUniverseRepo(RuntimeError("connection pool exhausted"))
+    service, _redis, _strategy, _universe = _service(universe_repo=universe_repo)
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await service.get_scan_capabilities()
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_run_public_scan_db_failure_fails_closed_without_touching_redis() -> None:
+    """run_public_scan 중 DB 사전조회가 실패하면 Redis ping/쿨다운/락을 전혀
+    소모하지 않고 503으로 종료된다 (Redis 보호자원 미사용은 비가용 시장 케이스와 동일)"""
+    universe_repo = RaisingUniverseRepo(RuntimeError("connection pool exhausted"))
+    service, redis, strategy, _universe = _service(universe_repo=universe_repo)
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await service.run_public_scan(market=None, client_ip="1.2.3.4")
+
+    assert exc_info.value.status_code == 503
+    assert strategy.calls == []
+    assert redis.ping_calls == 0
+    assert redis.set_nx_calls == []
+
+
+# ==================== 공개 스캔: 가용성 — run_public_scan 정규화/거부 ====================
+
+
+@pytest.mark.asyncio
+async def test_etf_mode_null_market_normalizes_to_etf() -> None:
+    """ETF 모드: market=null은 ETF로 정규화되어 전략 서비스에 전달된다"""
+    service, _redis, strategy, _universe = _service(universe_repo=FakeUniverseRepo({"ETF": 221}))
+
+    result = await service.run_public_scan(market=None, client_ip="1.2.3.4")
+
+    assert strategy.calls[0]["market"] == "ETF"
+    assert strategy.calls[0]["include_etf"] is True
+    assert result.market == "ETF"
+
+
+@pytest.mark.asyncio
+async def test_etf_mode_rejects_explicit_kospi_without_touching_protections() -> None:
+    """ETF 모드 + 명시적 KOSPI 요청: 409 MARKET_NOT_AVAILABLE, 스캔/Redis 미호출"""
+    service, redis, strategy, _universe = _service(universe_repo=FakeUniverseRepo({"ETF": 221}))
+
+    with pytest.raises(ResourceConflictError) as exc_info:
+        await service.run_public_scan(market="KOSPI", client_ip="1.2.3.4")
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.details == {
+        "reason": "MARKET_NOT_AVAILABLE",
+        "requested_market": "KOSPI",
+        "available_markets": ["ETF"],
+        "universe_mode": "ETF_ONLY",
+    }
+    assert strategy.calls == []
+    assert redis.ping_calls == 0
+    assert redis.set_nx_calls == []
+
+
+@pytest.mark.asyncio
+async def test_etf_mode_rejects_explicit_kosdaq_without_touching_protections() -> None:
+    """ETF 모드 + 명시적 KOSDAQ 요청도 동일하게 409 + Redis/스캔 미호출"""
+    service, redis, strategy, _universe = _service(universe_repo=FakeUniverseRepo({"ETF": 221}))
+
+    with pytest.raises(ResourceConflictError) as exc_info:
+        await service.run_public_scan(market="KOSDAQ", client_ip="1.2.3.4")
+
+    assert exc_info.value.details["reason"] == "MARKET_NOT_AVAILABLE"
+    assert exc_info.value.details["requested_market"] == "KOSDAQ"
+    assert strategy.calls == []
+    assert redis.ping_calls == 0
+    assert redis.set_nx_calls == []
+
+
+@pytest.mark.asyncio
+async def test_zero_active_markets_returns_503_without_touching_protections() -> None:
+    """설정상 허용 시장 전체가 비가용: 503, 스캔/Redis 보호자원 미사용"""
+    service, redis, strategy, _universe = _service(universe_repo=FakeUniverseRepo({"ETF": 0}))
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await service.run_public_scan(market=None, client_ip="1.2.3.4")
+
+    assert exc_info.value.status_code == 503
+    assert strategy.calls == []
+    assert redis.ping_calls == 0
+    assert redis.set_nx_calls == []
+
+
+@pytest.mark.asyncio
+async def test_stocks_mode_null_market_scans_both_and_excludes_etf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """개별주 모드 + KOSPI/KOSDAQ 활성: market=null은 include_etf=false로 호출된다"""
+    monkeypatch.setattr(settings, "etf_universe_enabled", False, raising=False)
+    service, _redis, strategy, _universe = _service(
+        universe_repo=FakeUniverseRepo({"KOSPI": 50, "KOSDAQ": 40})
+    )
+
+    result = await service.run_public_scan(market=None, client_ip="1.2.3.4")
+
+    assert strategy.calls[0]["market"] is None
+    assert strategy.calls[0]["include_etf"] is False
+    assert result.market is None
+
+
+@pytest.mark.asyncio
+async def test_stocks_mode_null_market_normalizes_to_only_active_market(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """개별주 모드 + KOSPI만 활성: null 요청은 KOSPI로 정규화된다"""
+    monkeypatch.setattr(settings, "etf_universe_enabled", False, raising=False)
+    service, _redis, strategy, _universe = _service(
+        universe_repo=FakeUniverseRepo({"KOSPI": 50, "KOSDAQ": 0})
+    )
+
+    result = await service.run_public_scan(market=None, client_ip="1.2.3.4")
+
+    assert strategy.calls[0]["market"] == "KOSPI"
+    assert result.market == "KOSPI"
+
+
+# ==================== 공개 스캔: total_scanned=0 경쟁 조건 / outcome ====================
+
+
+@pytest.mark.asyncio
+async def test_race_condition_total_scanned_zero_converts_to_conflict() -> None:
+    """사전 count는 양수였지만 실제 스캔이 total_scanned=0이면 409 SCAN_TARGETS_CHANGED로 변환"""
+    empty_result = _scan_result(stocks=[], total_scanned=0, gc_active_count=0, errors=[])
+    strategy = FakeStrategyService(result=empty_result)
+    service, redis, strategy, universe_repo = _service(strategy=strategy)
+
+    with pytest.raises(ResourceConflictError) as exc_info:
+        await service.run_public_scan(market=None, client_ip="1.2.3.4")
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.details == {"reason": "SCAN_TARGETS_CHANGED"}
+    # 사전 count는 양수였으므로 실제 스캔은 수행됐다 (경쟁 조건 시뮬레이션)
+    assert len(strategy.calls) == 1
+    assert universe_repo.calls == [["ETF"]]
+    # 409로 변환돼도 전역 락은 finally에서 정상 해제된다
+    assert PUBLIC_SCAN_LOCK_KEY not in redis.store
+
+
+@pytest.mark.asyncio
+async def test_no_matches_outcome_when_targets_scanned_but_no_candidates() -> None:
+    """total_scanned>0, stocks=[]는 정상 결과이며 outcome=NO_MATCHES다 (200)"""
+    result = _scan_result(stocks=[], total_scanned=50, gc_active_count=0, errors=[])
+    strategy = FakeStrategyService(result=result)
+    service, _redis, _strategy, _universe = _service(strategy=strategy)
+
+    dto = await service.run_public_scan(market=None, client_ip="1.2.3.4")
+
+    assert dto.outcome == "NO_MATCHES"
+    assert dto.total_scanned == 50
+    assert dto.stocks == []
+    assert dto.market == "ETF"
+
+
+@pytest.mark.asyncio
+async def test_matches_found_outcome_when_stocks_present() -> None:
+    service, _redis, _strategy, _universe = _service()
+
+    dto = await service.run_public_scan(market=None, client_ip="1.2.3.4")
+
+    assert dto.outcome == "MATCHES_FOUND"
+    assert len(dto.stocks) == 1
 
 
 # ==================== 공개 스캔: 고정 정책 ====================
 
 
 @pytest.mark.asyncio
-async def test_scan_uses_fixed_server_policy() -> None:
-    service, _redis, strategy = _service()
+async def test_scan_uses_fixed_server_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """개별주(STOCKS) 모드 + KOSPI 활성 상태에서 명시적 시장 요청은 고정 서버 정책으로 스캔한다
+
+    (KOSPI가 무조건 스캔 성공한다는 가정은 개별주 모드 fixture로 명시 이동)
+    """
+    monkeypatch.setattr(settings, "etf_universe_enabled", False, raising=False)
+    service, _redis, strategy, _universe = _service(
+        universe_repo=FakeUniverseRepo({"KOSPI": 50, "KOSDAQ": 40})
+    )
 
     result = await service.run_public_scan(market="KOSPI", client_ip="1.2.3.4")
 
@@ -163,7 +516,7 @@ async def test_scan_uses_fixed_server_policy() -> None:
 
 @pytest.mark.asyncio
 async def test_scan_projection_excludes_internal_fields() -> None:
-    service, _redis, _strategy = _service()
+    service, _redis, _strategy, _universe = _service()
 
     result = await service.run_public_scan(market=None, client_ip="1.2.3.4")
 
@@ -188,7 +541,7 @@ async def test_scan_projection_excludes_internal_fields() -> None:
 
 @pytest.mark.asyncio
 async def test_scan_rejects_invalid_market() -> None:
-    service, _redis, strategy = _service()
+    service, _redis, strategy, _universe = _service()
 
     with pytest.raises(ValidationError):
         await service.run_public_scan(market="NASDAQ", client_ip="1.2.3.4")
@@ -201,7 +554,7 @@ async def test_scan_rejects_invalid_market() -> None:
 
 @pytest.mark.asyncio
 async def test_second_request_from_same_ip_hits_cooldown() -> None:
-    service, _redis, strategy = _service()
+    service, _redis, strategy, _universe = _service()
 
     await service.run_public_scan(market=None, client_ip="1.2.3.4")
 
@@ -215,7 +568,7 @@ async def test_second_request_from_same_ip_hits_cooldown() -> None:
 
 @pytest.mark.asyncio
 async def test_cooldown_key_stores_hash_not_raw_ip() -> None:
-    service, redis, _strategy = _service()
+    service, redis, _strategy, _universe = _service()
 
     await service.run_public_scan(market=None, client_ip="9.9.9.9")
 
@@ -226,7 +579,7 @@ async def test_cooldown_key_stores_hash_not_raw_ip() -> None:
 
 @pytest.mark.asyncio
 async def test_global_lock_blocks_other_ip_and_keeps_cooldown() -> None:
-    service, redis, strategy = _service()
+    service, redis, strategy, _universe = _service()
     # 다른 공개 스캔이 실행 중인 상태
     redis.store[PUBLIC_SCAN_LOCK_KEY] = "1"
     redis.ttls[PUBLIC_SCAN_LOCK_KEY] = 90
@@ -243,7 +596,7 @@ async def test_global_lock_blocks_other_ip_and_keeps_cooldown() -> None:
 
 @pytest.mark.asyncio
 async def test_lock_released_after_success_but_cooldown_kept() -> None:
-    service, redis, _strategy = _service()
+    service, redis, _strategy, _universe = _service()
 
     await service.run_public_scan(market=None, client_ip="1.2.3.4")
 
@@ -264,7 +617,7 @@ async def test_finally_does_not_delete_lock_reacquired_by_another_run() -> None:
             return await super().scan_golden_cross_candidates(**kwargs)
 
     strategy = SlowStrategyService()
-    service, _, _ = _service(redis=redis, strategy=strategy)
+    service, _, _, _ = _service(redis=redis, strategy=strategy)
 
     await service.run_public_scan(market=None, client_ip="1.2.3.4")
 
@@ -275,7 +628,7 @@ async def test_finally_does_not_delete_lock_reacquired_by_another_run() -> None:
 @pytest.mark.asyncio
 async def test_lock_released_when_scan_fails() -> None:
     strategy = FakeStrategyService(error=RuntimeError("scan boom"))
-    service, redis, _ = _service(strategy=strategy)
+    service, redis, _, _ = _service(strategy=strategy)
 
     with pytest.raises(RuntimeError):
         await service.run_public_scan(market=None, client_ip="1.2.3.4")
@@ -289,7 +642,7 @@ async def test_lock_released_when_scan_fails() -> None:
 @pytest.mark.asyncio
 async def test_redis_down_fails_closed_with_503() -> None:
     redis = FakeRedis(ping_ok=False)
-    service, _, strategy = _service(redis=redis)
+    service, _, strategy, _universe = _service(redis=redis)
 
     with pytest.raises(ServiceUnavailableError) as exc_info:
         await service.run_public_scan(market=None, client_ip="1.2.3.4")
@@ -302,7 +655,7 @@ async def test_redis_down_fails_closed_with_503() -> None:
 async def test_redis_error_after_ping_maps_to_503_not_429() -> None:
     # ping은 통과하지만 직후 set_nx가 인프라 오류를 던지는 경우 → 503 (429로 위장 금지)
     redis = FakeRedis(ping_ok=True, set_nx_error=ConnectionError("redis reset"))
-    service, _, strategy = _service(redis=redis)
+    service, _, strategy, _universe = _service(redis=redis)
 
     with pytest.raises(ServiceUnavailableError) as exc_info:
         await service.run_public_scan(market=None, client_ip="1.2.3.4")
@@ -328,7 +681,7 @@ def _recommendation() -> GoldenCrossRecommendationDTO:
 
 @pytest.mark.asyncio
 async def test_recommendations_return_empty_when_cache_missing() -> None:
-    service, _redis, strategy = _service()
+    service, _redis, strategy, _universe = _service()
 
     snapshot = await service.get_public_recommendations()
 
@@ -339,7 +692,7 @@ async def test_recommendations_return_empty_when_cache_missing() -> None:
 
 @pytest.mark.asyncio
 async def test_recommendations_read_cache_only() -> None:
-    service, redis, strategy = _service()
+    service, redis, strategy, _universe = _service()
     cached = PublicRecommendationSnapshotDTO.from_internal(
         _recommendation(), generated_at=datetime(2026, 8, 13, 11, 31)
     )
@@ -355,7 +708,7 @@ async def test_recommendations_read_cache_only() -> None:
 
 @pytest.mark.asyncio
 async def test_recommendations_invalid_cache_returns_empty() -> None:
-    service, redis, _strategy = _service()
+    service, redis, _strategy, _universe = _service()
     redis.store[PUBLIC_RECOMMENDATION_SNAPSHOT_KEY] = {"top_stocks": "broken"}
 
     snapshot = await service.get_public_recommendations()

@@ -1,15 +1,20 @@
 // Public Strategy Scan page (/page/scan/)
+// - GET /api/v1/public/strategies/scan-capabilities (페이지 진입 시 1회, 409 이후 재조회)
+//   시장 select/배지/실행 버튼은 이 capability 응답에 따라 렌더링한다.
 // - POST /api/v1/public/strategies/golden-cross-scan (market만 전송)
-// - 요청 중 버튼 비활성화, 429(쿨다운/실행 중)/503(서비스 장애) 메시지 표시
-// - 모든 API 문자열은 escapeHtml로 이스케이프 후 렌더링
+// - 요청 중 버튼 비활성화, 429(쿨다운/실행 중)/503(서비스 장애)/409(시장 비가용) 메시지 표시
+// - 모든 API 문자열은 escapeHtml로 이스케이프 후 렌더링하거나 textContent로만 대입한다.
 
 (function () {
   "use strict";
 
+  var CAPABILITIES_ENDPOINT = "/api/v1/public/strategies/scan-capabilities";
   var SCAN_ENDPOINT = "/api/v1/public/strategies/golden-cross-scan";
 
   var runButton = document.getElementById("public-scan-run");
   var marketSelect = document.getElementById("public-scan-market");
+  var marketLabel = document.getElementById("public-scan-market-label");
+  var marketBadge = document.getElementById("public-scan-market-badge");
   var statusEl = document.getElementById("public-scan-status");
   var statsEl = document.getElementById("public-scan-stats");
   var resultEl = document.getElementById("public-scan-result");
@@ -51,6 +56,12 @@
     FEAR_BUY: "공포 매수",
   };
 
+  var MARKET_TEXT = {
+    KOSPI: "KOSPI",
+    KOSDAQ: "KOSDAQ",
+    ETF: "ETF",
+  };
+
   var setStatus = function (message, kind) {
     statusEl.textContent = message || "";
     statusEl.classList.remove("is-error", "is-warn");
@@ -70,6 +81,124 @@
     if (el) el.textContent = value;
   };
 
+  // ==================== 시장 선택 컨트롤 (capability 기반) ====================
+
+  var clearMarketOptions = function () {
+    while (marketSelect.firstChild) {
+      marketSelect.removeChild(marketSelect.firstChild);
+    }
+  };
+
+  // option label은 textContent로만 대입한다 (innerHTML 미사용, 서버 문자열이어도 안전).
+  var addMarketOption = function (value, label) {
+    var opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    marketSelect.appendChild(opt);
+  };
+
+  // select/badge/버튼을 "선택 불가 + placeholder" 상태로 되돌린 뒤 필요한 부분만 덮어쓴다.
+  var resetControlsDisabled = function (placeholderLabel) {
+    clearMarketOptions();
+    addMarketOption("", placeholderLabel);
+    marketSelect.disabled = true;
+    marketSelect.hidden = false;
+    if (marketLabel) marketLabel.hidden = false;
+    marketBadge.hidden = true;
+    marketBadge.textContent = "";
+    runButton.disabled = true;
+  };
+
+  var showLoadingControls = function () {
+    resetControlsDisabled("불러오는 중...");
+    setStatus("스캔 가능한 시장 정보를 불러오는 중입니다...", null);
+  };
+
+  var showUnavailableControls = function (notice) {
+    resetControlsDisabled("스캔 준비 중");
+    setStatus(notice ? String(notice) : "현재 스캔 가능한 유니버스를 준비 중입니다.", "warn");
+  };
+
+  var marketBadgeText = function (marketOption) {
+    var value = marketOption && marketOption.value;
+    var label = (marketOption && marketOption.label) || MARKET_TEXT[value] || String(value || "");
+    return label + " 전용 유니버스";
+  };
+
+  var showSingleMarketControl = function (marketOption, notice) {
+    clearMarketOptions();
+    addMarketOption(marketOption.value, marketOption.label || marketOption.value);
+    marketSelect.value = marketOption.value;
+    marketSelect.disabled = true;
+    marketSelect.hidden = true;
+    if (marketLabel) marketLabel.hidden = true;
+    marketBadge.textContent = marketBadgeText(marketOption);
+    marketBadge.hidden = false;
+    runButton.disabled = false;
+    setStatus(notice ? String(notice) : "", null);
+  };
+
+  var showMultiMarketControl = function (markets, allowAll, notice) {
+    clearMarketOptions();
+    if (allowAll) addMarketOption("", "전체");
+    markets.forEach(function (m) {
+      addMarketOption(m.value, m.label || m.value);
+    });
+    marketSelect.disabled = false;
+    marketSelect.hidden = false;
+    if (marketLabel) marketLabel.hidden = false;
+    marketBadge.hidden = true;
+    marketBadge.textContent = "";
+    runButton.disabled = false;
+    setStatus(notice ? String(notice) : "", null);
+  };
+
+  var applyCapability = function (data) {
+    var capability = data && typeof data === "object" ? data : {};
+    var markets = Array.isArray(capability.markets) ? capability.markets : [];
+    var notice = capability.notice;
+
+    if (!capability.scan_enabled || markets.length === 0) {
+      showUnavailableControls(notice);
+      return;
+    }
+    if (markets.length === 1) {
+      showSingleMarketControl(markets[0], notice);
+      return;
+    }
+    showMultiMarketControl(markets, !!capability.allow_all, notice);
+  };
+
+  // capability 재조회. 409(MARKET_NOT_AVAILABLE/SCAN_TARGETS_CHANGED) 이후에도 재사용한다.
+  var loadCapabilities = function () {
+    showLoadingControls();
+    return fetch(CAPABILITIES_ENDPOINT, { method: "GET" })
+      .then(function (res) {
+        return res
+          .json()
+          .catch(function () {
+            return null;
+          })
+          .then(function (body) {
+            return { ok: res.ok, body: body };
+          });
+      })
+      .then(function (result) {
+        if (!result.ok || !result.body || result.body.success !== true || !result.body.data) {
+          resetControlsDisabled("스캔 준비 중");
+          setStatus("스캔 가능 여부를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.", "error");
+          return;
+        }
+        applyCapability(result.body.data);
+      })
+      .catch(function () {
+        resetControlsDisabled("스캔 준비 중");
+        setStatus("네트워크 오류로 스캔 가능 여부를 확인하지 못했습니다.", "error");
+      });
+  };
+
+  // ==================== 스캔 결과 렌더링 ====================
+
   var renderResult = function (data) {
     setText("stat-total", safeNum(data.total_scanned));
     setText("stat-gc", safeNum(data.gc_active_count));
@@ -81,10 +210,21 @@
     setText("stat-optimal", safeNum(data.optimal_buy_count));
     statsEl.hidden = false;
 
-    scanTimeEl.textContent = "스캔 시각: " + formatKstTime(data.scan_time);
+    var marketText = data.market ? MARKET_TEXT[data.market] || String(data.market) : "전체";
+    scanTimeEl.textContent =
+      "스캔 시각: " + formatKstTime(data.scan_time) + " · 시장: " + marketText;
 
     var stocks = Array.isArray(data.stocks) ? data.stocks : [];
-    if (stocks.length === 0) {
+    // outcome이 없는 응답(구버전 호환)은 total_scanned/stocks로 동일하게 판정한다.
+    var outcome =
+      data.outcome || (Number(data.total_scanned) > 0 && stocks.length === 0 ? "NO_MATCHES" : "MATCHES_FOUND");
+
+    if (outcome === "NO_MATCHES") {
+      tableBody.innerHTML =
+        '<tr class="empty-row"><td colspan="7">' +
+        escapeHtml(safeNum(data.total_scanned)) +
+        "개 종목을 스캔했지만 현재 조건에 맞는 종목이 없습니다.</td></tr>";
+    } else if (stocks.length === 0) {
       tableBody.innerHTML =
         '<tr class="empty-row"><td colspan="7">조건에 맞는 종목이 없습니다.</td></tr>';
     } else {
@@ -127,13 +267,38 @@
     return "약 " + Math.ceil(n) + "초 후";
   };
 
+  var handleConflict = function (body) {
+    var details = body && body.error && body.error.details ? body.error.details : null;
+    var reason = details ? details.reason : null;
+
+    if (reason === "MARKET_NOT_AVAILABLE") {
+      setStatus(
+        "선택한 시장은 현재 지원되지 않습니다. 지원 가능한 시장 정보를 다시 불러옵니다.",
+        "warn"
+      );
+    } else if (reason === "SCAN_TARGETS_CHANGED") {
+      setStatus(
+        "스캔 대상 유니버스가 갱신 중일 수 있습니다. 지원 가능한 시장 정보를 다시 불러옵니다.",
+        "warn"
+      );
+    } else {
+      setStatus("요청을 처리할 수 없습니다. 지원 가능한 시장 정보를 다시 불러옵니다.", "warn");
+    }
+    // 두 사유 모두 화면이 알고 있던 시장 가용성이 오래됐다는 뜻이므로 capability를 다시 조회한다.
+    loadCapabilities();
+  };
+
   var runScan = function () {
+    if (runButton.disabled) return;
+
     runButton.disabled = true;
     statsEl.hidden = true;
     resultEl.hidden = true;
     setStatus("스캔 중입니다... 종목 수에 따라 1~2분 정도 걸릴 수 있습니다.");
 
     var market = marketSelect && marketSelect.value ? marketSelect.value : null;
+    // 409 경로는 loadCapabilities()가 버튼 활성 여부를 새로 결정하므로 finally에서 되살리지 않는다.
+    var reenableOnFinish = true;
 
     fetch(SCAN_ENDPOINT, {
       method: "POST",
@@ -163,6 +328,11 @@
           );
           return;
         }
+        if (result.status === 409) {
+          reenableOnFinish = false;
+          handleConflict(result.body);
+          return;
+        }
         if (result.status === 503) {
           setStatus("스캔 서비스가 일시적으로 이용 불가합니다. 잠시 후 다시 시도해 주세요.", "error");
           return;
@@ -177,11 +347,18 @@
         setStatus("네트워크 오류로 스캔에 실패했습니다. 연결 상태를 확인해 주세요.", "error");
       })
       .finally(function () {
-        runButton.disabled = false;
+        if (reenableOnFinish) runButton.disabled = false;
       });
   };
 
   if (runButton) {
     runButton.addEventListener("click", runScan);
   }
+
+  var init = function () {
+    loadCapabilities();
+  };
+
+  document.addEventListener("DOMContentLoaded", init);
+  if (document.readyState !== "loading") init();
 })();

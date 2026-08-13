@@ -57,19 +57,19 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
 
         # 기본 조건: 일반 주식
         base_condition = (
-            (self.model.is_active == True) &
-            (self.model.is_tradable == True) &
-            (self.model.is_excluded == False) &
-            (self.model.passed_market_cap == True) &
-            (self.model.passed_volume == True)
+            (self.model.is_active == True)
+            & (self.model.is_tradable == True)
+            & (self.model.is_excluded == False)
+            & (self.model.passed_market_cap == True)
+            & (self.model.passed_volume == True)
         )
 
         # ETF 조건: 스크리닝 조건 완화 (활성화 + 거래 가능만 확인)
         etf_condition = (
-            (self.model.is_active == True) &
-            (self.model.is_tradable == True) &
-            (self.model.is_excluded == False) &
-            (self.model.market == MarketType.ETF.value)
+            (self.model.is_active == True)
+            & (self.model.is_tradable == True)
+            & (self.model.is_excluded == False)
+            & (self.model.market == MarketType.ETF.value)
         )
 
         if market:
@@ -80,9 +80,7 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
             )
         elif include_etf:
             # ETF 포함 옵션: 일반 주식 + ETF
-            stmt = select(self.model).where(
-                or_(base_condition, etf_condition)
-            )
+            stmt = select(self.model).where(or_(base_condition, etf_condition))
         else:
             # 기본: 일반 주식만
             stmt = select(self.model).where(base_condition)
@@ -148,6 +146,44 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
         result = await db.execute(stmt)
         return result.scalars().all()
 
+    async def get_scan_market_counts(
+        self,
+        markets: Sequence[MarketType],
+        session: AsyncSession | None = None,
+    ) -> dict[str, int]:
+        """시장별 스캔 가능(활성) 종목 수 집계
+
+        `get_scan_stocks()`와 동일한 조건(is_active, is_tradable, is_excluded)만 적용한다.
+        시가총액·스크리닝 통과 여부는 반영하지 않는다 — 공개 스캔의 실제 대상 조건과
+        가용성 판단 기준이 어긋나면 안 되기 때문이다.
+
+        Args:
+            markets: 집계할 시장 목록
+            session: DB 세션 (없으면 생성자 세션 사용)
+
+        Returns:
+            dict[str, int]: {market_value: 활성 종목 수}. 요청한 시장 중 결과에
+            없는 시장(행이 0개)은 0으로 채워 반환한다.
+        """
+        db = self._get_session(session)
+
+        market_values = [m.value for m in markets]
+        counts: dict[str, int] = {value: 0 for value in market_values}
+        if not market_values:
+            return counts
+
+        condition = (
+            (self.model.is_active == True)
+            & (self.model.is_tradable == True)
+            & (self.model.is_excluded == False)
+            & (self.model.market.in_(market_values))
+        )
+        stmt = select(self.model.market, func.count()).where(condition).group_by(self.model.market)
+        result = await db.execute(stmt)
+        for market_value, count in result.all():
+            counts[market_value] = int(count)
+        return counts
+
     async def get_active_stocks(
         self,
         limit: int = 500,
@@ -177,7 +213,6 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
         )
         result = await db.execute(stmt)
         return result.scalars().all()
-
 
     async def get_by_market_cap_range(
         self,
@@ -323,11 +358,7 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
     ) -> Sequence[StockUniverseModel]:
         """제외된 종목 목록"""
         db = self._get_session(session)
-        stmt = (
-            select(self.model)
-            .where(self.model.is_excluded == True)
-            .order_by(self.model.symbol)
-        )
+        stmt = select(self.model).where(self.model.is_excluded == True).order_by(self.model.symbol)
         result = await db.execute(stmt)
         return result.scalars().all()
 
@@ -377,9 +408,7 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
             & (self.model.passed_market_cap == True)
             & (self.model.passed_volume == True)
         )
-        eligible_stmt = select(func.count()).select_from(self.model).where(
-            eligible_condition
-        )
+        eligible_stmt = select(func.count()).select_from(self.model).where(eligible_condition)
         eligible = await db.scalar(eligible_stmt)
 
         return {

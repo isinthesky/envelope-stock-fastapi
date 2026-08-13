@@ -19,8 +19,15 @@ from src.application.domain.strategy.dto import (
     GoldenCrossScanListDTO,
 )
 
-# 공개 스캔에서 허용하는 시장 값
+# 공개 스캔에서 허용하는 시장 값 (wire 값의 정적 타입).
+# 현재 운영에서 실제 허용되는 값(가용성)은 PublicStrategyService/capability가 결정한다.
 PublicMarket = Literal["KOSPI", "KOSDAQ", "ETF"]
+
+# 운영 유니버스 모드 (ETF_UNIVERSE_ENABLED 설정에서 파생)
+PublicUniverseMode = Literal["ETF_ONLY", "STOCKS"]
+
+# 공개 스캔 결과 요약 상태
+PublicScanOutcome = Literal["MATCHES_FOUND", "NO_MATCHES"]
 
 
 def _ensure_aware(dt: datetime | None) -> datetime | None:
@@ -44,6 +51,32 @@ class PublicGoldenCrossScanRequestDTO(BaseDTO):
     market: PublicMarket | None = Field(
         default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF, None=전체)"
     )
+
+
+# ==================== Scan Capabilities DTOs ====================
+
+
+class PublicScanMarketOptionDTO(BaseDTO):
+    """공개 스캔에서 실제 선택 가능한 시장 옵션"""
+
+    value: PublicMarket = Field(description="시장 코드")
+    label: str = Field(description="화면 표시용 라벨")
+    active_count: int = Field(description="실제 스캔 가능(활성) 종목 수")
+
+
+class PublicScanCapabilitiesDTO(BaseDTO):
+    """공개 스캔 가용성 (설정상 허용 시장 ∩ 실제 활성 유니버스)"""
+
+    scan_enabled: bool = Field(description="스캔 실행 가능 여부 (가용 시장 1개 이상)")
+    universe_mode: PublicUniverseMode = Field(description="현재 유니버스 운영 모드")
+    allow_all: bool = Field(description="복수 시장 통합('전체') 스캔 허용 여부")
+    default_market: PublicMarket | None = Field(
+        default=None, description="기본 선택 시장 (allow_all이면 None)"
+    )
+    markets: list[PublicScanMarketOptionDTO] = Field(
+        default_factory=list, description="선택 가능한 시장 목록 (KOSPI, KOSDAQ, ETF 순)"
+    )
+    notice: str | None = Field(default=None, description="상태 안내 문구")
 
 
 # ==================== Scan Response DTOs ====================
@@ -74,10 +107,27 @@ class PublicGoldenCrossScanDTO(BaseDTO):
     optimal_buy_count: int = Field(default=0, description="매수 적기 종목 수")
     scan_time: datetime = Field(description="스캔 시각")
     error_count: int = Field(default=0, description="스캔 중 오류 종목 수 (일반화된 요약)")
+    market: PublicMarket | None = Field(
+        default=None,
+        description="실제 적용된 시장 범위 (복수 개별주 시장을 함께 스캔한 경우만 None)",
+    )
+    outcome: PublicScanOutcome = Field(description="스캔 결과 상태")
 
     @classmethod
-    def from_internal(cls, result: GoldenCrossScanListDTO) -> "PublicGoldenCrossScanDTO":
-        """내부 스캔 DTO → 공개 projection (허용 필드만 명시적으로 복사)"""
+    def from_internal(
+        cls,
+        result: GoldenCrossScanListDTO,
+        market: PublicMarket | None,
+    ) -> "PublicGoldenCrossScanDTO":
+        """내부 스캔 DTO → 공개 projection (허용 필드만 명시적으로 복사)
+
+        Args:
+            result: 내부 스캔 결과
+            market: 실제 적용된 시장 범위 (서비스가 가용성 검사 후 정규화한 값).
+                호출 전에 total_scanned=0 경쟁 조건 검사가 끝났다고 가정하므로,
+                outcome은 stocks 유무만으로 판단한다.
+        """
+        outcome: PublicScanOutcome = "MATCHES_FOUND" if result.stocks else "NO_MATCHES"
         return cls(
             stocks=[
                 PublicScanStockDTO(
@@ -100,6 +150,8 @@ class PublicGoldenCrossScanDTO(BaseDTO):
             optimal_buy_count=result.optimal_buy_count,
             scan_time=_ensure_aware(result.scan_time),
             error_count=len(result.errors),
+            market=market,
+            outcome=outcome,
         )
 
 

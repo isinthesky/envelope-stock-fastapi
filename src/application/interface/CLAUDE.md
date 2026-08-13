@@ -19,7 +19,7 @@ interface/
 | `api/account_router.py` | `/api/v1/accounts` | 잔고/포지션 | `ResponseDTO` |
 | `api/order_router.py` | `/api/v1/orders` | 주문 생성/취소/조회/정정 | `ResponseDTO` |
 | `api/strategy_router.py` | `/api/v1/strategies` | 전략/유니버스/시그널/스케줄링 (**관리자 전용** — main.py에서 라우터 단위 `verify_admin_access`) | `ResponseDTO` |
-| `api/public_strategy_router.py` | `/api/v1/public/strategies` (내부 prefix) | 공개 골든크로스 스캔(제한형)/추천 스냅샷 — IP 쿨다운·전역 락·고정 한도는 `PublicStrategyService` | `ResponseDTO` |
+| `api/public_strategy_router.py` | `/api/v1/public/strategies` (내부 prefix) | 공개 골든크로스 스캔(제한형)/추천 스냅샷 — IP 쿨다운·전역 락·고정 한도는 `PublicStrategyService`. `GET /scan-capabilities`는 현재 유니버스 모드(ETF-only 여부)에 따른 가용 시장 목록을 인증 없이 조회 | `ResponseDTO` |
 | `api/sell_rule_research_router.py` | `/api/v1/strategies` (내부 prefix) | 사전등록 매도 규칙 리서치 | `ResponseDTO` |
 | `api/ohlcv_router.py` | `/api/v1/ohlcv` | OHLCV 캐시 통계/워밍업/정리/검증 | `ResponseDTO` |
 | `api/screener_router.py` | `/api/v1/screener` (내부 prefix) | 네이버 기반 가치주 스크리닝 | `ResponseDTO` |

@@ -11,8 +11,6 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends, Request
-
-from src.application.common.exceptions import AuthorizationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.cache.redis_client import RedisClient, get_redis_client
@@ -21,6 +19,7 @@ from src.adapters.database.repositories.order_repository import OrderRepository
 from src.adapters.external.kis_api.auth import KISAuth, get_kis_auth
 from src.adapters.external.kis_api.client import KISAPIClient, get_kis_client
 from src.adapters.external.websocket.kis_websocket import KISWebSocket, get_kis_websocket
+from src.application.common.exceptions import AuthorizationError
 
 # ==================== Database Session ====================
 
@@ -290,15 +289,18 @@ BuyStrategyServiceDep = Annotated["BuyStrategyService", Depends(get_buy_strategy
 def get_public_strategy_service(
     strategy_service: StrategyServiceDep,
     redis_client: RedisDep,
+    universe_repo: StockUniverseRepositoryDep,
 ) -> "PublicStrategyService":
     """
     Public Strategy Service Dependency
 
-    공개 전략 포털(/page/)의 rate limit/전역 락/고정 한도 스캔을 담당합니다.
+    공개 전략 포털(/page/)의 시장 가용성 정책(설정 ∩ 실제 활성 유니버스)/
+    rate limit/전역 락/고정 한도 스캔을 담당합니다.
 
     Args:
         strategy_service: Strategy Service
         redis_client: Redis Client
+        universe_repo: Stock Universe Repository (가용 시장 count 조회용)
 
     Returns:
         PublicStrategyService: 공개 전략 서비스
@@ -308,6 +310,7 @@ def get_public_strategy_service(
     return PublicStrategyService(
         strategy_service=strategy_service,
         redis_client=redis_client,
+        universe_repo=universe_repo,
     )
 
 

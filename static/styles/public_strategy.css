@@ -265,6 +265,24 @@ select {
   font-size: 14px;
 }
 
+select:disabled {
+  background: #f1f5f9;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* 공개 스캔: 단일 시장(capability 확정) 안내 배지 */
+.market-badge {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e40af;
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+
 label {
   font-size: 13px;
   color: var(--muted);

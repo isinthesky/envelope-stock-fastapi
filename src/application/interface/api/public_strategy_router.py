@@ -16,6 +16,7 @@ from src.application.domain.strategy.public_dto import (
     PublicGoldenCrossScanDTO,
     PublicGoldenCrossScanRequestDTO,
     PublicRecommendationSnapshotDTO,
+    PublicScanCapabilitiesDTO,
 )
 from src.settings.config import settings
 
@@ -24,6 +25,21 @@ router = APIRouter(
     tags=["Public-Strategy"],
     include_in_schema=False,
 )
+
+
+@router.get(
+    "/scan-capabilities",
+    response_model=ResponseDTO[PublicScanCapabilitiesDTO],
+    status_code=status.HTTP_200_OK,
+    summary="공개 스캔 가용 시장 조회",
+    description="설정(ETF_UNIVERSE_ENABLED)과 실제 활성 유니버스의 교집합으로 계산한 스캔 가능 시장",
+)
+async def public_scan_capabilities(
+    service: PublicStrategyServiceDep,
+) -> ResponseDTO[PublicScanCapabilitiesDTO]:
+    """공개 스캔 가용성 조회 - DB count만 수행, 스캔/추천은 실행하지 않음"""
+    result = await service.get_scan_capabilities()
+    return ResponseDTO.success_response(result, "Public scan capabilities retrieved")
 
 
 @router.post(

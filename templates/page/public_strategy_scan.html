@@ -11,15 +11,13 @@
 
 <section>
   <h2>스캔 실행</h2>
-  <div class="controls-row">
-    <label for="public-scan-market">시장</label>
-    <select id="public-scan-market">
-      <option value="" selected>전체</option>
-      <option value="KOSPI">KOSPI</option>
-      <option value="KOSDAQ">KOSDAQ</option>
-      <option value="ETF">ETF</option>
+  <div class="controls-row" id="public-scan-controls">
+    <label for="public-scan-market" id="public-scan-market-label">시장</label>
+    <select id="public-scan-market" disabled>
+      <option value="" selected>불러오는 중...</option>
     </select>
-    <button type="button" class="primary" id="public-scan-run">스캔 실행</button>
+    <span class="market-badge" id="public-scan-market-badge" hidden></span>
+    <button type="button" class="primary" id="public-scan-run" disabled>스캔 실행</button>
   </div>
   <div id="public-scan-status" class="status-message" role="status" aria-live="polite"></div>
 
