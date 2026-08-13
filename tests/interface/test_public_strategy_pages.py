@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """공개 전략 포털(/page/*) 페이지 경계 테스트
 
-- 세 공개 페이지가 비관리자 요청에서 200
-- 사이드바에는 공개 메뉴 3개만 존재 (관리자 UI/링크 노출 금지)
+- 두 공개 페이지가 비관리자 요청에서 200
+- 사이드바에는 공개 메뉴 2개만 존재 (관리자 UI/링크 노출 금지)
+- 폐기된 오늘의 추천 URL은 스캔 페이지로 영구 리다이렉트
 - 공개 HTML에 관리자 CSRF 헤더/관리자 endpoint 문자열 없음
 - 스캔 페이지에는 KOSPI/KOSDAQ/ETF 정적 option이 없고 로딩/비활성 상태로만 렌더링됨
   (실제 옵션은 capability API 응답에 따라 JS가 채운다 — 플랜 4.1/5단계)
@@ -22,7 +23,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PUBLIC_PAGES = {
     "/page/": "public_overview",
     "/page/scan/": "public_scan",
-    "/page/recommendations/": "public_recommendations",
 }
 
 # 공개 화면에 노출되어서는 안 되는 관리자 흔적
@@ -55,16 +55,26 @@ def test_public_pages_render_for_anonymous_visitors() -> None:
         assert response.status_code == 200, path
 
 
-def test_public_sidebar_has_exactly_three_menu_items() -> None:
+def test_public_sidebar_has_only_overview_and_scan_menu_items() -> None:
     client = TestClient(_build_app(), raise_server_exceptions=False)
 
     for path in PUBLIC_PAGES:
         html = client.get(path).text
-        assert html.count("<li>") == 3, path
+        assert html.count("<li>") == 2, path
         assert 'href="/page/"' in html, path
         assert 'href="/page/scan/"' in html, path
-        assert 'href="/page/recommendations/"' in html, path
+        assert 'href="/page/recommendations/"' not in html, path
+        assert "오늘의 추천" not in html, path
         assert "전략 인사이트" in html, path
+
+
+def test_retired_recommendations_page_redirects_permanently_to_scan() -> None:
+    client = TestClient(_build_app(), raise_server_exceptions=False)
+
+    response = client.get("/page/recommendations/", follow_redirects=False)
+
+    assert response.status_code == 308
+    assert response.headers["location"] == "/page/scan/"
 
 
 def test_public_pages_mark_active_menu_with_aria_current() -> None:

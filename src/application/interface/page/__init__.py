@@ -2,7 +2,7 @@
 """Page Router Package - 도메인별 관리 페이지 + 공개 전략 포털
 
 - /mypage/* : 관리자 페이지 (verify_admin_access로 IP 게이트)
-- /page/*   : 공개 전략 포털 (전략 소개 / 골든크로스 스캔 / 오늘의 추천)
+- /page/*   : 공개 전략 포털 (전략 소개 / 신호 등급별 골든크로스 스캔)
 """
 
 from src.application.interface.page.access_logs_page_router import (

@@ -463,7 +463,7 @@ class NotificationScheduler:
     # ==================== 매수 알림 Job ====================
 
     async def _cache_public_recommendation_snapshot(self, recommendations) -> bool:
-        """공개 포털(/page/recommendations/)용 추천 스냅샷 캐시 저장
+        """하위 호환 공개 추천 API용 추천 스냅샷 캐시 저장
 
         저장 실패는 warning 로그만 남기고 Telegram 발송/중복 방지/작업 결과 기록을
         중단시키지 않는다.

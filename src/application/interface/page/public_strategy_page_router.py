@@ -5,7 +5,7 @@ Public Strategy Page Router - 공개 전략 포털 (/page/*)
 관리자 의존성 없이 등록되는 공개 페이지:
 - /page/                 : 전략 소개 (읽기 전용)
 - /page/scan/            : 제한형 골든크로스 스캔 (공개 API 호출)
-- /page/recommendations/ : 스케줄 추천 스냅샷 (읽기 전용)
+- /page/recommendations/ : 이전 URL 호환용 스캔 페이지 영구 리다이렉트
 
 템플릿에는 active_page, 전략 설정값, static_version만 주입한다.
 """
@@ -13,7 +13,7 @@ Public Strategy Page Router - 공개 전략 포털 (/page/*)
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.settings.config import settings
@@ -60,11 +60,7 @@ async def public_strategy_scan_page(request: Request) -> HTMLResponse:
     )
 
 
-@router.get("/recommendations/", response_class=HTMLResponse)
-async def public_strategy_recommendations_page(request: Request) -> HTMLResponse:
-    """오늘의 추천 페이지 (스케줄 스냅샷)"""
-    return templates.TemplateResponse(
-        request,
-        "page/public_strategy_recommendations.html",
-        {"active_page": "public_recommendations", **_strategy_context()},
-    )
+@router.get("/recommendations/", response_class=RedirectResponse)
+async def public_strategy_recommendations_redirect() -> RedirectResponse:
+    """폐기된 오늘의 추천 URL을 신호 등급별 스캔 결과 화면으로 영구 연결한다."""
+    return RedirectResponse(url="/page/scan/", status_code=308)
