@@ -113,6 +113,18 @@ def test_public_layout_uses_isolated_sidebar_storage_key() -> None:
     assert '"sidebarHidden"' not in html
 
 
+def test_public_sidebar_toggle_is_fixed_to_browser_bottom_left() -> None:
+    css_source = (REPO_ROOT / "static" / "styles" / "public_strategy.css").read_text(
+        encoding="utf-8"
+    )
+    toggle_rule = css_source.split(".sidebar-toggle {", 1)[1].split("}", 1)[0]
+
+    assert "position: fixed" in toggle_rule
+    assert "bottom: max(12px, env(safe-area-inset-bottom))" in toggle_rule
+    assert "left: 12px" in toggle_rule
+    assert "top:" not in toggle_rule
+
+
 def test_public_overview_explains_buy_and_sell_strategies() -> None:
     client = TestClient(_build_app(), raise_server_exceptions=False)
 
