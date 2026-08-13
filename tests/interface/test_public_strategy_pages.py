@@ -130,6 +130,17 @@ def test_public_overview_explains_buy_and_sell_strategies() -> None:
     assert "진입가·보유수량·개인수급 없이" in html
 
 
+def test_public_overview_uses_canonical_buy_state_labels() -> None:
+    client = TestClient(_build_app(), raise_server_exceptions=False)
+
+    html = client.get("/page/").text
+
+    assert 'K &lt; 30<br><small>매수 준비</small>' in html
+    assert '회복 일부<br><small>매수 관심</small>' in html
+    assert "최근 과매도 이후 K 상승 또는 K&gt;D" in html
+    assert 'K &lt; 30<br><small>매수 관심</small>' not in html
+
+
 # ==================== 스캔 페이지: capability 기반 렌더링 (플랜 4.1/5단계) ====================
 
 
@@ -189,11 +200,22 @@ def test_public_scan_page_groups_signals_and_declares_20_result_limit() -> None:
         encoding="utf-8"
     )
 
+    assert "위 카드는 전체 스캔 집계" in html
     assert "최대 20개 종목만 표시" in html
     assert "신호 등급별 골든크로스 추천 종목" in html
     assert "MAX_DISPLAY_RESULTS = 20" in js_source
     assert "signal-group-row" in js_source
-    assert "매수 적기 종목 없음" in js_source
+    assert 'emptyMessage = label + " 종목 없음"' in js_source
+    assert 'id="stat-interest"' in html
+    assert 'id="stat-ready"' in html
+    assert 'setText("stat-interest", safeNum(data.buy_interest_count))' in js_source
+    assert 'setText("stat-ready", safeNum(data.ready_to_buy_count))' in js_source
+    assert 'candidateStates = ["OPTIMAL_BUY", "BUY_INTEREST", "READY_TO_BUY"]' in js_source
+    assert "추천 우선순위 상위 20개 밖입니다" in js_source
+    assert '"표시 " + safeNum(stocks.length) + " / 전체 " + safeNum(total)' in js_source
+    assert "종목은 표시 순위 밖입니다" in js_source
+    assert '"개 · 매수 관심 "' in js_source
+    assert '"개 · 매수 준비 "' in js_source
 
 
 def test_public_scan_page_persists_and_restores_recent_result_with_relative_time() -> None:

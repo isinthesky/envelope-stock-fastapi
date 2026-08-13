@@ -349,23 +349,46 @@
     );
   };
 
-  var renderSignalGroup = function (state, stocks) {
+  var renderSignalGroup = function (state, stocks, totalCount) {
     var label = STATE_LABEL[state] || state || "기타 신호";
+    var total = Math.max(stocks.length, Number(totalCount) || 0);
+    var countLabel =
+      stocks.length < total
+        ? "표시 " + safeNum(stocks.length) + " / 전체 " + safeNum(total)
+        : safeNum(total) + "종목";
     var rows =
       '<tr class="signal-group-row"><th colspan="7" scope="rowgroup">' +
       escapeHtml(label) +
-      '<span class="signal-group-count">' + safeNum(stocks.length) + "종목</span></th></tr>";
+      '<span class="signal-group-count">' +
+      countLabel +
+      "</span></th></tr>";
 
-    if (state === "OPTIMAL_BUY" && stocks.length === 0) {
+    if (stocks.length === 0) {
+      var emptyMessage = label + " 종목 없음";
+      if (total > 0) {
+        emptyMessage =
+          label + " " + total.toLocaleString() + "종목은 추천 우선순위 상위 20개 밖입니다.";
+      }
       return (
         rows +
-        '<tr class="empty-row signal-empty-row"><td colspan="7">매수 적기 종목 없음</td></tr>'
+        '<tr class="empty-row signal-empty-row"><td colspan="7">' +
+        escapeHtml(emptyMessage) +
+        "</td></tr>"
       );
     }
-    return rows + stocks.map(renderStockRow).join("");
+    var truncatedMessage = "";
+    if (total > stocks.length) {
+      truncatedMessage =
+        '<tr class="empty-row signal-limit-row"><td colspan="7">전체 ' +
+        safeNum(total) +
+        "종목 중 나머지 " +
+        safeNum(total - stocks.length) +
+        "종목은 표시 순위 밖입니다.</td></tr>";
+    }
+    return rows + stocks.map(renderStockRow).join("") + truncatedMessage;
   };
 
-  var renderGroupedStocks = function (stocks) {
+  var renderGroupedStocks = function (stocks, counts) {
     var visibleStocks = stocks.slice(0, MAX_DISPLAY_RESULTS);
     var grouped = {};
     visibleStocks.forEach(function (stock) {
@@ -374,19 +397,23 @@
       grouped[state].push(stock);
     });
 
-    // 매수 적기는 항상 렌더링해 0건도 명시한다. 나머지 등급은 종목이 있을 때만 표시한다.
-    var html = renderSignalGroup("OPTIMAL_BUY", grouped.OPTIMAL_BUY || []);
-    STATE_ORDER.slice(1).forEach(function (state) {
+    // 실제 매수 후보 3단계는 0건이거나 상위 20개 밖이어도 항상 상태를 명시한다.
+    var candidateStates = ["OPTIMAL_BUY", "BUY_INTEREST", "READY_TO_BUY"];
+    var html = "";
+    candidateStates.forEach(function (state) {
+      html += renderSignalGroup(state, grouped[state] || [], counts[state]);
+      delete grouped[state];
+    });
+    STATE_ORDER.slice(candidateStates.length).forEach(function (state) {
       if (grouped[state] && grouped[state].length > 0) {
-        html += renderSignalGroup(state, grouped[state]);
+        html += renderSignalGroup(state, grouped[state], grouped[state].length);
       }
       delete grouped[state];
     });
-    delete grouped.OPTIMAL_BUY;
 
     // 새 신호 코드가 추가되어도 결과를 버리지 않고 마지막 기타 그룹에 표시한다.
     Object.keys(grouped).forEach(function (state) {
-      html += renderSignalGroup(state, grouped[state]);
+      html += renderSignalGroup(state, grouped[state], grouped[state].length);
     });
     return html;
   };
@@ -396,10 +423,8 @@
     setText("stat-total", safeNum(data.total_scanned));
     setText("stat-gc", safeNum(data.gc_active_count));
     setText("stat-pullback", safeNum(data.pullback_waiting_count));
-    setText(
-      "stat-ready",
-      safeNum((Number(data.ready_to_buy_count) || 0) + (Number(data.buy_interest_count) || 0))
-    );
+    setText("stat-interest", safeNum(data.buy_interest_count));
+    setText("stat-ready", safeNum(data.ready_to_buy_count));
     setText("stat-optimal", safeNum(data.optimal_buy_count));
     statsEl.hidden = false;
 
@@ -415,10 +440,22 @@
     var outcome =
       data.outcome || (Number(data.total_scanned) > 0 && stocks.length === 0 ? "NO_MATCHES" : "MATCHES_FOUND");
 
-    tableBody.innerHTML = renderGroupedStocks(stocks);
+    tableBody.innerHTML = renderGroupedStocks(stocks, {
+      OPTIMAL_BUY: data.optimal_buy_count,
+      BUY_INTEREST: data.buy_interest_count,
+      READY_TO_BUY: data.ready_to_buy_count,
+    });
     resultEl.hidden = false;
 
     var summary = "스캔 완료: 추천 우선순위 " + stocks.length + "개 표시";
+    summary +=
+      " · 매수 적기 " +
+      safeNum(data.optimal_buy_count) +
+      "개 · 매수 관심 " +
+      safeNum(data.buy_interest_count) +
+      "개 · 매수 준비 " +
+      safeNum(data.ready_to_buy_count) +
+      "개";
     if (outcome === "NO_MATCHES") {
       summary += " · 현재 조건에 맞는 종목 없음";
     }

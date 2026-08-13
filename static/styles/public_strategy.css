@@ -655,6 +655,14 @@ label {
   color: #92400e;
 }
 
+.data-table .signal-limit-row td {
+  padding: 8px 12px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .indicator {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
