@@ -777,6 +777,11 @@ class StrategyService:
         entry_price: float | None = None,
         highest_price: float | None = None,
         trailing_stop_activated: bool = False,
+        force_refresh: bool = False,
+        use_scoring: bool = True,
+        merge_strategy: str = "conservative",
+        sell_mode: str = "hybrid",
+        include_overlays: bool = True,
     ) -> SellSignalAnalysisDTO:
         """
         매도 시그널 분석 (SellStrategyService로 위임)
@@ -789,6 +794,7 @@ class StrategyService:
             entry_price: 진입가 (수익률 기반 동적 임계값 적용)
             highest_price: 포지션 최고가 (트레일링 스탑용)
             trailing_stop_activated: 트레일링 스탑 활성화 여부
+            include_overlays: 개인 수급·시장 신용 오버레이 포함 여부
         """
         from src.application.domain.strategy.sell_strategy_service import SellStrategyService
 
@@ -800,6 +806,11 @@ class StrategyService:
             entry_price=entry_price,
             highest_price=highest_price,
             trailing_stop_activated=trailing_stop_activated,
+            force_refresh=force_refresh,
+            use_scoring=use_scoring,
+            merge_strategy=merge_strategy,
+            sell_mode=sell_mode,
+            include_overlays=include_overlays,
         )
 
     # ==================== Analysis History Methods ====================

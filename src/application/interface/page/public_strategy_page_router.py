@@ -5,6 +5,7 @@ Public Strategy Page Router - 공개 전략 포털 (/page/*)
 관리자 의존성 없이 등록되는 공개 페이지:
 - /page/                 : 전략 소개 (읽기 전용)
 - /page/scan/            : 제한형 골든크로스 스캔 (공개 API 호출)
+- /page/sell-analysis/   : 종목별 기술지표 매도 신호 분석
 - /page/recommendations/ : 이전 URL 호환용 스캔 페이지 영구 리다이렉트
 
 템플릿에는 active_page, 전략 설정값, static_version만 주입한다.
@@ -57,6 +58,16 @@ async def public_strategy_scan_page(request: Request) -> HTMLResponse:
         request,
         "page/public_strategy_scan.html",
         {"active_page": "public_scan", **_strategy_context()},
+    )
+
+
+@router.get("/sell-analysis/", response_class=HTMLResponse)
+async def public_sell_analysis_page(request: Request) -> HTMLResponse:
+    """개인화 정보가 없는 공개 기술지표 매도 신호 분석 페이지."""
+    return templates.TemplateResponse(
+        request,
+        "page/public_sell_analysis.html",
+        {"active_page": "public_sell_analysis", **_strategy_context()},
     )
 
 

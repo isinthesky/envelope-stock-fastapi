@@ -522,6 +522,7 @@ class SellStrategyService:
         name: str | None = None,
         market: str | None = None,
         sell_mode: str = "hybrid",  # "legacy", "simple", "hybrid"
+        include_overlays: bool = True,
     ) -> SellSignalAnalysisDTO:
         """
         매도 시그널 분석
@@ -541,6 +542,7 @@ class SellStrategyService:
             highest_price: 포지션 최고가 (트레일링 스탑용)
             trailing_stop_activated: 트레일링 스탑 활성화 여부
             force_refresh: True면 캐시와 관계없이 최신 데이터 요청
+            include_overlays: 개인 수급·시장 신용 오버레이 포함 여부
 
         Returns:
             SellSignalAnalysisDTO: 매도 시그널 분석 결과
@@ -557,7 +559,8 @@ class SellStrategyService:
         )
 
         # 3-2~3-3. 개인 수급 / 시장 신용 overlay
-        await self._build_overlays(ctx, symbol=symbol, market=market)
+        if include_overlays:
+            await self._build_overlays(ctx, symbol=symbol, market=market)
 
         # 4~8. 수익률/Phase/Stage/점수/근거 종합
         self._score_and_stage(
@@ -616,11 +619,7 @@ class SellStrategyService:
             raise StrategyError(str(e))
 
         # 방어: 로더 계약(ascending 정렬·필수 컬럼)을 신뢰하되 무결성 재확인.
-        if (
-            df is None
-            or df.empty
-            or not {"high", "low", "close", "timestamp"}.issubset(df.columns)
-        ):
+        if df is None or df.empty or not {"high", "low", "close", "timestamp"}.issubset(df.columns):
             raise StrategyError(f"{symbol}: OHLCV 데이터 부족/무결성 오류")
         df = df.sort_values("timestamp").reset_index(drop=True)
 
@@ -718,9 +717,7 @@ class SellStrategyService:
         ctx.is_market_credit_overheated = bool(
             ctx.market_credit_data and ctx.market_credit_data.is_overheated
         )
-        ctx.market_credit_reasons = (
-            ctx.market_credit_data.reasons if ctx.market_credit_data else []
-        )
+        ctx.market_credit_reasons = ctx.market_credit_data.reasons if ctx.market_credit_data else []
         ctx.overlay_signals = SellPeakRuleResearchService.evaluate_peak_rule_inputs(
             personal_buy_days_5d=(
                 ctx.personal_flow_data.days_positive_count if ctx.personal_flow_data else None

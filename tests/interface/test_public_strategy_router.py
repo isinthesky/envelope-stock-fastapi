@@ -11,7 +11,7 @@
 - market=null은 계속 허용되며, 스캔 성공 응답에는 market/outcome이 포함됨
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -28,6 +28,7 @@ from src.application.domain.strategy.public_dto import (
     PublicScanCapabilitiesDTO,
     PublicScanMarketOptionDTO,
     PublicScanStockDTO,
+    PublicSellAnalysisDTO,
 )
 from src.application.interface.api.public_strategy_router import router as public_strategy_router
 from src.settings.exception_handlers import register_exception_handlers
@@ -68,6 +69,36 @@ def _etf_only_capabilities() -> PublicScanCapabilitiesDTO:
     )
 
 
+def _sell_result() -> PublicSellAnalysisDTO:
+    return PublicSellAnalysisDTO(
+        symbol="005930",
+        name="삼성전자",
+        current_price=70000,
+        analyzed_at=datetime(2026, 8, 13, 11, 30, tzinfo=timezone.utc),
+        candle_count=300,
+        ma_short=69000,
+        ma_long=67000,
+        ma_gap_ratio=2.5,
+        is_death_cross=False,
+        is_gc_active=True,
+        stoch_k=72.0,
+        stoch_d=68.0,
+        is_stoch_overbought=True,
+        is_stoch_dead_cross=False,
+        rsi=71.0,
+        is_rsi_overbought=True,
+        sell_phase="PHASE_2",
+        sell_phase_name="매도 준비",
+        sell_phase_action="비중 축소 준비",
+        final_stage="REDUCE_1",
+        final_stage_name="1차 비중축소",
+        final_ratio_min=0.2,
+        final_ratio_max=0.3,
+        sell_reasons=["과매수"],
+        sell_stage_reasons=["모멘텀 둔화"],
+    )
+
+
 class StubPublicService:
     def __init__(
         self,
@@ -76,6 +107,7 @@ class StubPublicService:
         market_errors: dict[str | None, Exception] | None = None,
     ):
         self.scan_calls: list[dict] = []
+        self.sell_calls: list[dict] = []
         self.capability_calls = 0
         self._error = error
         self._capabilities = capabilities if capabilities is not None else _etf_only_capabilities()
@@ -95,6 +127,12 @@ class StubPublicService:
 
     async def get_public_recommendations(self):
         return PublicRecommendationSnapshotDTO.empty()
+
+    async def run_public_sell_analysis(self, symbol, client_ip):
+        self.sell_calls.append({"symbol": symbol, "client_ip": client_ip})
+        if self._error:
+            raise self._error
+        return _sell_result()
 
 
 def _build_app(service: StubPublicService) -> FastAPI:
@@ -131,6 +169,58 @@ def test_public_scan_rejects_invalid_market() -> None:
 
     assert response.status_code == 422
     assert service.scan_calls == []
+
+
+def test_public_sell_analysis_normalizes_symbol_and_returns_allowlist() -> None:
+    service = StubPublicService()
+    client = TestClient(_build_app(service), raise_server_exceptions=False)
+
+    response = client.post("/api/v1/public/strategies/sell-analysis", json={"symbol": " 00a123 "})
+
+    assert response.status_code == 200
+    assert service.sell_calls == [{"symbol": "00A123", "client_ip": "testclient"}]
+    keys = set(response.json()["data"])
+    assert keys == set(PublicSellAnalysisDTO.model_fields)
+    assert (
+        not {
+            "entry_price",
+            "profit_ratio",
+            "highest_price",
+            "holding_quantity",
+            "sell_score_result",
+            "personal_net_buy_latest",
+            "market_credit_balance_million",
+        }
+        & keys
+    )
+
+
+def test_public_sell_analysis_rejects_invalid_or_extra_input() -> None:
+    service = StubPublicService()
+    client = TestClient(_build_app(service), raise_server_exceptions=False)
+
+    invalid = client.post("/api/v1/public/strategies/sell-analysis", json={"symbol": "123"})
+    tampered = client.post(
+        "/api/v1/public/strategies/sell-analysis",
+        json={"symbol": "005930", "entry_price": 60000},
+    )
+
+    assert invalid.status_code == 422
+    assert tampered.status_code == 422
+    assert service.sell_calls == []
+
+
+def test_public_sell_analysis_uses_trusted_client_ip_rules() -> None:
+    service = StubPublicService()
+    client = TestClient(_build_app(service), raise_server_exceptions=False)
+
+    client.post(
+        "/api/v1/public/strategies/sell-analysis",
+        json={"symbol": "005930"},
+        headers={"X-Forwarded-For": "1.1.1.1"},
+    )
+
+    assert service.sell_calls[0]["client_ip"] == "testclient"
 
 
 def test_public_scan_ignores_tampering_body_fields() -> None:

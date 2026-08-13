@@ -299,6 +299,26 @@ async def test_overlay_stage_upgrade_applied_at_most_once_end_to_end(
     assert len(calls) == 1
 
 
+async def test_public_mode_skips_personal_flow_and_credit_overlays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SellStrategyService(session=None)
+    _stub_neutral_sell_dependencies(service, monkeypatch)
+
+    async def _must_not_run(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("public technical-only analysis must skip overlays")
+
+    monkeypatch.setattr(service, "_build_overlays", _must_not_run)
+
+    result = await service.analyze_sell_signal(
+        symbol="005930", use_scoring=True, include_overlays=False
+    )
+
+    assert result.personal_net_buy_latest is None
+    assert result.market_credit_balance_million is None
+
+
 async def test_hybrid_mode_applies_mechanical_floor_to_final_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

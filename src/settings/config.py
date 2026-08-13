@@ -663,6 +663,15 @@ class Settings(BaseSettings):
     public_strategy_recommendation_ttl_seconds: int = Field(
         default=172800, ge=3600, description="공개 추천 스냅샷 Redis 보관 기간 (초)"
     )
+    public_sell_analysis_cache_ttl_seconds: int = Field(
+        default=300, ge=30, description="공개 매도 분석 종목별 캐시 보관 시간 (초)"
+    )
+    public_sell_analysis_cooldown_seconds: int = Field(
+        default=60, ge=10, description="공개 매도 분석 IP별 재실행 대기 시간 (초)"
+    )
+    public_sell_analysis_lock_seconds: int = Field(
+        default=180, ge=30, description="공개 매도 분석 전역 실행 락 안전 만료 (초)"
+    )
 
     # ==================== DART API 설정 ====================
     dart_open_api_key: str = Field(default="", description="DART Open API 키")

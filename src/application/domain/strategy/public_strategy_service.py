@@ -31,12 +31,14 @@ from src.application.common.exceptions import (
     RateLimitExceededError,
     ResourceConflictError,
     ServiceUnavailableError,
+    StrategyError,
     ValidationError,
 )
 from src.application.domain.strategy.public_dto import (
     PublicGoldenCrossScanDTO,
     PublicMarket,
     PublicRecommendationSnapshotDTO,
+    PublicSellAnalysisDTO,
     PublicScanCapabilitiesDTO,
     PublicScanMarketOptionDTO,
     PublicUniverseMode,
@@ -50,6 +52,9 @@ logger = logging.getLogger(__name__)
 PUBLIC_SCAN_COOLDOWN_KEY_PREFIX = "public:strategy:gc-scan:cooldown:"
 PUBLIC_SCAN_LOCK_KEY = "public:strategy:gc-scan:lock"
 PUBLIC_RECOMMENDATION_SNAPSHOT_KEY = "public:strategy:recommendations:latest"
+PUBLIC_SELL_ANALYSIS_CACHE_KEY_PREFIX = "public:strategy:sell-analysis:v1:"
+PUBLIC_SELL_ANALYSIS_COOLDOWN_KEY_PREFIX = "public:strategy:sell-analysis:cooldown:"
+PUBLIC_SELL_ANALYSIS_LOCK_KEY = "public:strategy:sell-analysis:lock"
 
 # 공개 스캔 서버 고정 정책 (요청으로 조작 불가)
 PUBLIC_SCAN_STOCH_THRESHOLD = 30.0
@@ -231,6 +236,115 @@ class PublicStrategyService:
         snapshot.available = True
         return snapshot
 
+    # ==================== 공개 매도 신호 분석 ====================
+
+    async def run_public_sell_analysis(
+        self,
+        symbol: str,
+        client_ip: str,
+    ) -> PublicSellAnalysisDTO:
+        """공개 기술지표 매도 분석 (cache-first + IP 쿨다운 + 전역 락)."""
+        cache_key = f"{PUBLIC_SELL_ANALYSIS_CACHE_KEY_PREFIX}{symbol}"
+
+        if not await self._redis.ping():
+            raise ServiceUnavailableError("Public sell analysis is temporarily unavailable")
+
+        cached = await self._get_cached_sell_analysis(cache_key)
+        if cached is not None:
+            return cached.model_copy(update={"is_cached": True})
+
+        cooldown_seconds = settings.public_sell_analysis_cooldown_seconds
+        cooldown_key = self._sell_analysis_cooldown_key(client_ip)
+        try:
+            cooldown_acquired = await self._redis.set_nx(cooldown_key, "1", cooldown_seconds)
+        except Exception as e:
+            raise ServiceUnavailableError("Public sell analysis is temporarily unavailable") from e
+        if not cooldown_acquired:
+            retry_after = await self._redis.ttl(cooldown_key)
+            raise RateLimitExceededError(
+                retry_after=retry_after if retry_after > 0 else cooldown_seconds
+            )
+
+        lock_seconds = settings.public_sell_analysis_lock_seconds
+        lock_token = uuid.uuid4().hex
+        try:
+            lock_acquired = await self._redis.set_nx(
+                PUBLIC_SELL_ANALYSIS_LOCK_KEY, lock_token, lock_seconds
+            )
+        except Exception as e:
+            raise ServiceUnavailableError("Public sell analysis is temporarily unavailable") from e
+        if not lock_acquired:
+            retry_after = await self._redis.ttl(PUBLIC_SELL_ANALYSIS_LOCK_KEY)
+            raise RateLimitExceededError(
+                retry_after=retry_after if retry_after > 0 else lock_seconds
+            )
+
+        try:
+            # 다른 요청이 락을 기다리는 사이 결과를 만들었을 수 있으므로 재확인한다.
+            cached = await self._get_cached_sell_analysis(cache_key)
+            if cached is not None:
+                return cached.model_copy(update={"is_cached": True})
+
+            try:
+                result = await self._strategy_service.analyze_sell_signal(  # type: ignore[call-arg]
+                    symbol=symbol,
+                    stoch_overbought=70.0,
+                    rsi_overbought=70.0,
+                    entry_price=None,
+                    highest_price=None,
+                    trailing_stop_activated=False,
+                    force_refresh=False,
+                    use_scoring=True,
+                    merge_strategy="conservative",
+                    sell_mode="hybrid",
+                    include_overlays=False,
+                )
+            except StrategyError as e:
+                logger.info(
+                    "[PublicStrategyService] sell analysis data unavailable: symbol=%s",
+                    symbol,
+                )
+                raise ResourceConflictError(
+                    message="Analysis data is unavailable for this symbol",
+                    details={"reason": "ANALYSIS_DATA_UNAVAILABLE", "symbol": symbol},
+                ) from e
+            except Exception as e:
+                # 공개 응답과 로그에 공급자 원문/내부 예외 내용을 남기지 않는다.
+                logger.error(
+                    "[PublicStrategyService] public sell analysis failed: symbol=%s",
+                    symbol,
+                )
+                raise ServiceUnavailableError(
+                    "Public sell analysis is temporarily unavailable"
+                ) from e
+
+            public_result = PublicSellAnalysisDTO.from_internal(result)
+            stored = public_result.model_copy(update={"is_cached": False})
+            cache_saved = await self._redis.set(
+                cache_key,
+                stored.model_dump(mode="json"),
+                ttl=settings.public_sell_analysis_cache_ttl_seconds,
+            )
+            if not cache_saved:
+                logger.warning(
+                    "[PublicStrategyService] sell analysis cache write failed: symbol=%s",
+                    symbol,
+                )
+            return public_result
+        finally:
+            await self._redis.compare_and_delete(PUBLIC_SELL_ANALYSIS_LOCK_KEY, lock_token)
+
+    async def _get_cached_sell_analysis(self, cache_key: str) -> PublicSellAnalysisDTO | None:
+        cached = await self._redis.get(cache_key)
+        if not cached:
+            return None
+        try:
+            return PublicSellAnalysisDTO.model_validate(cached)
+        except Exception:
+            logger.warning("[PublicStrategyService] invalid public sell analysis cache discarded")
+            await self._redis.delete(cache_key)
+            return None
+
     # ==================== 내부 헬퍼: 가용성 정책 ====================
 
     @staticmethod
@@ -357,3 +471,8 @@ class PublicStrategyService:
         # 원본 IP를 Redis에 남기지 않도록 SHA-256 해시 사용
         ip_hash = hashlib.sha256(client_ip.encode("utf-8")).hexdigest()
         return f"{PUBLIC_SCAN_COOLDOWN_KEY_PREFIX}{ip_hash}"
+
+    @staticmethod
+    def _sell_analysis_cooldown_key(client_ip: str) -> str:
+        ip_hash = hashlib.sha256(client_ip.encode("utf-8")).hexdigest()
+        return f"{PUBLIC_SELL_ANALYSIS_COOLDOWN_KEY_PREFIX}{ip_hash}"

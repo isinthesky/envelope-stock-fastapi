@@ -9,15 +9,17 @@ Public Strategy DTO - 공개 전략 포털(/page/) 전용 데이터 전송 객�
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Literal, overload
+from typing import Literal, cast, overload
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, field_validator
 
 from src.application.common.dto import BaseDTO
 from src.application.domain.strategy.dto import (
     GoldenCrossRecommendationDTO,
     GoldenCrossScanListDTO,
+    SellSignalAnalysisDTO,
 )
+from src.application.domain.strategy.symbol_validation import KRX_SYMBOL_PATTERN
 
 # 공개 스캔에서 허용하는 시장 값 (wire 값의 정적 타입).
 # 현재 운영에서 실제 허용되는 값(가용성)은 PublicStrategyService/capability가 결정한다.
@@ -63,6 +65,129 @@ class PublicGoldenCrossScanRequestDTO(BaseDTO):
     market: PublicMarket | None = Field(
         default=None, description="시장 구분 (KOSPI/KOSDAQ/ETF, None=전체)"
     )
+
+
+class PublicSellAnalysisRequestDTO(BaseDTO):
+    """공개 매도 신호 분석 요청 (종목코드만 허용)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(description="6자리 KRX 종목코드", min_length=6, max_length=6)
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalize_and_validate_symbol(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("symbol must be a 6-character KRX code")
+        normalized = value.strip().upper()
+        if not KRX_SYMBOL_PATTERN.fullmatch(normalized):
+            raise ValueError("symbol must be a 6-character KRX code")
+        return normalized
+
+
+_PUBLIC_STAGE_NAMES = {
+    "HOLD": "보유 유지",
+    "REDUCE_1": "1차 비중축소",
+    "REDUCE_2": "2차 비중축소",
+    "EXIT_ALL": "전량 매도 검토",
+}
+
+
+class PublicSellAnalysisDTO(BaseDTO):
+    """개인 포지션과 외부 수급 원시값을 제외한 공개 기술지표 분석 결과."""
+
+    symbol: str
+    name: str | None = None
+    current_price: Decimal
+    analyzed_at: datetime
+    is_cached: bool = False
+    candle_count: int = 0
+
+    ma_short: Decimal
+    ma_long: Decimal
+    ma_gap_ratio: float
+    is_death_cross: bool
+    is_gc_active: bool
+
+    stoch_k: float
+    stoch_d: float
+    is_stoch_overbought: bool
+    is_stoch_dead_cross: bool
+    rsi: float
+    is_rsi_overbought: bool
+
+    sell_phase: str
+    sell_phase_name: str
+    sell_phase_action: str
+    final_stage: Literal["HOLD", "REDUCE_1", "REDUCE_2", "EXIT_ALL"]
+    final_stage_name: str
+    final_ratio_min: float
+    final_ratio_max: float
+    sell_reasons: list[str] = Field(default_factory=list, max_length=10)
+    sell_stage_reasons: list[str] = Field(default_factory=list, max_length=10)
+
+    volume_ratio: float | None = None
+    is_volume_spike: bool = False
+    price_drop_ratio: float | None = None
+    is_volume_sell_signal: bool = False
+    adx: float | None = None
+    plus_di: float | None = None
+    minus_di: float | None = None
+    is_strong_uptrend: bool = False
+    is_strong_downtrend: bool = False
+    overbought_sell_blocked: bool = False
+
+    @staticmethod
+    def _public_reasons(reasons: list[str]) -> list[str]:
+        return [str(reason)[:200] for reason in reasons[:10]]
+
+    @classmethod
+    def from_internal(cls, result: SellSignalAnalysisDTO) -> "PublicSellAnalysisDTO":
+        stage_value = (
+            result.final_stage.value
+            if hasattr(result.final_stage, "value")
+            else str(result.final_stage)
+        )
+        if stage_value not in _PUBLIC_STAGE_NAMES:
+            stage_value = "HOLD"
+        stage = cast(Literal["HOLD", "REDUCE_1", "REDUCE_2", "EXIT_ALL"], stage_value)
+        return cls(
+            symbol=result.symbol,
+            name=result.name,
+            current_price=result.current_price,
+            analyzed_at=_ensure_aware(result.analyzed_at),
+            candle_count=result.candle_count,
+            ma_short=result.ma_short,
+            ma_long=result.ma_long,
+            ma_gap_ratio=result.ma_gap_ratio,
+            is_death_cross=result.is_death_cross,
+            is_gc_active=result.is_gc_active,
+            stoch_k=result.stoch_k,
+            stoch_d=result.stoch_d,
+            is_stoch_overbought=result.is_stoch_overbought,
+            is_stoch_dead_cross=result.is_stoch_dead_cross,
+            rsi=result.rsi,
+            is_rsi_overbought=result.is_rsi_overbought,
+            sell_phase=result.sell_phase,
+            sell_phase_name=result.sell_phase_name,
+            sell_phase_action=result.sell_phase_action,
+            final_stage=stage,
+            final_stage_name=_PUBLIC_STAGE_NAMES.get(stage, "보유 유지"),
+            final_ratio_min=result.final_ratio_min,
+            final_ratio_max=result.final_ratio_max,
+            sell_reasons=cls._public_reasons(result.sell_reasons),
+            sell_stage_reasons=cls._public_reasons(result.sell_stage_reasons),
+            volume_ratio=result.volume_ratio,
+            is_volume_spike=result.is_volume_spike,
+            price_drop_ratio=result.price_drop_ratio,
+            is_volume_sell_signal=result.is_volume_sell_signal,
+            adx=result.adx,
+            plus_di=result.plus_di,
+            minus_di=result.minus_di,
+            is_strong_uptrend=result.is_strong_uptrend,
+            is_strong_downtrend=result.is_strong_downtrend,
+            overbought_sell_blocked=result.overbought_sell_blocked,
+        )
 
 
 # ==================== Scan Capabilities DTOs ====================

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """공개 전략 포털(/page/*) 페이지 경계 테스트
 
-- 두 공개 페이지가 비관리자 요청에서 200
-- 사이드바에는 공개 메뉴 2개만 존재 (관리자 UI/링크 노출 금지)
+- 세 공개 페이지가 비관리자 요청에서 200
+- 사이드바에는 공개 메뉴 3개만 존재 (관리자 UI/링크 노출 금지)
 - 폐기된 오늘의 추천 URL은 스캔 페이지로 영구 리다이렉트
 - 공개 HTML에 관리자 CSRF 헤더/관리자 endpoint 문자열 없음
 - 스캔 페이지에는 KOSPI/KOSDAQ/ETF 정적 option이 없고 로딩/비활성 상태로만 렌더링됨
@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PUBLIC_PAGES = {
     "/page/": "public_overview",
     "/page/scan/": "public_scan",
+    "/page/sell-analysis/": "public_sell_analysis",
 }
 
 # 공개 화면에 노출되어서는 안 되는 관리자 흔적
@@ -55,14 +56,15 @@ def test_public_pages_render_for_anonymous_visitors() -> None:
         assert response.status_code == 200, path
 
 
-def test_public_sidebar_has_only_overview_and_scan_menu_items() -> None:
+def test_public_sidebar_has_only_public_strategy_menu_items() -> None:
     client = TestClient(_build_app(), raise_server_exceptions=False)
 
     for path in PUBLIC_PAGES:
         html = client.get(path).text
-        assert html.count("<li>") == 2, path
+        assert html.count("<li>") == 3, path
         assert 'href="/page/"' in html, path
         assert 'href="/page/scan/"' in html, path
+        assert 'href="/page/sell-analysis/"' in html, path
         assert 'href="/page/recommendations/"' not in html, path
         assert "오늘의 추천" not in html, path
         assert "전략 인사이트" in html, path
@@ -192,3 +194,33 @@ def test_public_scan_page_persists_and_restores_recent_result_with_relative_time
     assert "renderResult(stored, { restored: true })" in js_source
     assert 'return minutes + "분 전"' in js_source
     assert 'return Math.floor(hours / 24) + "일 전"' in js_source
+
+
+def test_public_sell_analysis_page_is_public_only_and_persistent() -> None:
+    client = TestClient(_build_app(), raise_server_exceptions=False)
+    html = client.get("/page/sell-analysis/").text
+    js_source = (REPO_ROOT / "static" / "js" / "pages" / "public_sell_analysis.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "public_sell_analysis.js" in html
+    assert 'id="public-sell-form"' in html
+    assert 'aria-live="polite"' in html
+    assert "/api/v1/public/strategies/sell-analysis" in js_source
+    assert "publicSellAnalysisResult:v1" in js_source
+    assert "window.localStorage.setItem" in js_source
+    assert "window.localStorage.getItem" in js_source
+    assert 'return minutes + "분 전"' in js_source
+    assert 'return Math.floor(hours / 24) + "일 전"' in js_source
+
+    combined = html + js_source
+    for marker in [
+        "/api/v1/strategies/",
+        "analysis-history",
+        "strategy_id",
+        "entry_price",
+        "holding_quantity",
+        "cash-plan",
+        "backtest",
+    ]:
+        assert marker not in combined

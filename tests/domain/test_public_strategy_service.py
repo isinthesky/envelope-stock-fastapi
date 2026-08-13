@@ -10,6 +10,7 @@
 
 from datetime import datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +19,7 @@ from src.application.common.exceptions import (
     RateLimitExceededError,
     ResourceConflictError,
     ServiceUnavailableError,
+    StrategyError,
     ValidationError,
 )
 from src.application.domain.strategy.dto import (
@@ -30,10 +32,13 @@ from src.application.domain.strategy.public_dto import (
     PUBLIC_SCAN_MAX_RESULTS,
     PublicGoldenCrossScanDTO,
     PublicRecommendationSnapshotDTO,
+    PublicSellAnalysisDTO,
 )
 from src.application.domain.strategy.public_strategy_service import (
     PUBLIC_RECOMMENDATION_SNAPSHOT_KEY,
     PUBLIC_SCAN_LOCK_KEY,
+    PUBLIC_SELL_ANALYSIS_CACHE_KEY_PREFIX,
+    PUBLIC_SELL_ANALYSIS_LOCK_KEY,
     PublicStrategyService,
 )
 from src.settings.config import settings
@@ -181,12 +186,59 @@ class FakeStrategyService:
         self.calls: list[dict] = []
         self._result = result or _scan_result()
         self._error = error
+        self.sell_result = _sell_internal_result()
 
     async def scan_golden_cross_candidates(self, **kwargs):
         self.calls.append(kwargs)
         if self._error:
             raise self._error
         return self._result
+
+    async def analyze_sell_signal(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._error:
+            raise self._error
+        return self.sell_result
+
+
+def _sell_internal_result():
+    """PublicSellAnalysisDTO projection에 필요한 내부 결과 표면."""
+    return SimpleNamespace(
+        symbol="005930",
+        name="삼성전자",
+        current_price=Decimal("70000"),
+        analyzed_at=datetime(2026, 8, 13, 11, 30),
+        candle_count=300,
+        ma_short=Decimal("69000"),
+        ma_long=Decimal("67000"),
+        ma_gap_ratio=2.5,
+        is_death_cross=False,
+        is_gc_active=True,
+        stoch_k=72.0,
+        stoch_d=68.0,
+        is_stoch_overbought=True,
+        is_stoch_dead_cross=False,
+        rsi=71.0,
+        is_rsi_overbought=True,
+        sell_phase="PHASE_2",
+        sell_phase_name="매도 준비",
+        sell_phase_action="비중 축소 준비",
+        final_stage="REDUCE_1",
+        final_ratio_min=0.2,
+        final_ratio_max=0.3,
+        sell_reasons=["과매수"] * 12,
+        sell_stage_reasons=["모멘텀 둔화"],
+        volume_ratio=1.4,
+        is_volume_spike=True,
+        price_drop_ratio=0.02,
+        is_volume_sell_signal=True,
+        adx=30.0,
+        plus_di=20.0,
+        minus_di=35.0,
+        is_strong_uptrend=False,
+        is_strong_downtrend=True,
+        overbought_sell_blocked=False,
+    )
 
 
 def _service(
@@ -446,6 +498,124 @@ async def test_stocks_mode_null_market_normalizes_to_only_active_market(
 
     assert strategy.calls[0]["market"] == "KOSPI"
     assert result.market == "KOSPI"
+
+
+# ==================== 공개 매도 분석: projection/cache/protection ====================
+
+
+@pytest.mark.asyncio
+async def test_public_sell_analysis_uses_fixed_technical_only_parameters() -> None:
+    service, redis, strategy, _universe = _service()
+
+    result = await service.run_public_sell_analysis("005930", "1.2.3.4")
+
+    assert result.symbol == "005930"
+    assert result.final_stage == "REDUCE_1"
+    assert result.final_stage_name == "1차 비중축소"
+    assert len(result.sell_reasons) == 10
+    assert result.is_cached is False
+    assert strategy.calls == [
+        {
+            "symbol": "005930",
+            "stoch_overbought": 70.0,
+            "rsi_overbought": 70.0,
+            "entry_price": None,
+            "highest_price": None,
+            "trailing_stop_activated": False,
+            "force_refresh": False,
+            "use_scoring": True,
+            "merge_strategy": "conservative",
+            "sell_mode": "hybrid",
+            "include_overlays": False,
+        }
+    ]
+    cache_key = f"{PUBLIC_SELL_ANALYSIS_CACHE_KEY_PREFIX}005930"
+    assert redis.store[cache_key]["is_cached"] is False
+    assert redis.ttls[cache_key] == settings.public_sell_analysis_cache_ttl_seconds
+    assert redis.compare_and_delete_calls[-1][0] == PUBLIC_SELL_ANALYSIS_LOCK_KEY
+
+
+@pytest.mark.asyncio
+async def test_public_sell_analysis_cache_hit_bypasses_cooldown_and_strategy() -> None:
+    redis = FakeRedis()
+    cached = PublicSellAnalysisDTO.from_internal(_sell_internal_result())
+    redis.store[f"{PUBLIC_SELL_ANALYSIS_CACHE_KEY_PREFIX}005930"] = cached.model_dump(mode="json")
+    service, redis, strategy, _universe = _service(redis=redis)
+
+    result = await service.run_public_sell_analysis("005930", "1.2.3.4")
+
+    assert result.is_cached is True
+    assert strategy.calls == []
+    assert redis.set_nx_calls == []
+
+
+@pytest.mark.asyncio
+async def test_public_sell_analysis_invalid_cache_is_discarded_and_recomputed() -> None:
+    redis = FakeRedis()
+    cache_key = f"{PUBLIC_SELL_ANALYSIS_CACHE_KEY_PREFIX}005930"
+    redis.store[cache_key] = {"unexpected": "payload"}
+    service, redis, strategy, _universe = _service(redis=redis)
+
+    result = await service.run_public_sell_analysis("005930", "1.2.3.4")
+
+    assert result.is_cached is False
+    assert len(strategy.calls) == 1
+    assert redis.store[cache_key]["symbol"] == "005930"
+
+
+@pytest.mark.asyncio
+async def test_public_sell_analysis_data_error_maps_to_safe_409_and_releases_lock() -> None:
+    strategy = FakeStrategyService(error=StrategyError("provider details must not leak"))
+    service, redis, _strategy, _universe = _service(strategy=strategy)
+
+    with pytest.raises(ResourceConflictError) as exc_info:
+        await service.run_public_sell_analysis("005930", "1.2.3.4")
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.details == {
+        "reason": "ANALYSIS_DATA_UNAVAILABLE",
+        "symbol": "005930",
+    }
+    assert "provider details" not in exc_info.value.message
+    assert redis.compare_and_delete_calls[-1][0] == PUBLIC_SELL_ANALYSIS_LOCK_KEY
+
+
+@pytest.mark.asyncio
+async def test_public_sell_analysis_unexpected_error_maps_to_safe_503() -> None:
+    strategy = FakeStrategyService(error=RuntimeError("upstream secret response"))
+    service, _redis, _strategy, _universe = _service(strategy=strategy)
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await service.run_public_sell_analysis("005930", "1.2.3.4")
+
+    assert exc_info.value.status_code == 503
+    assert "upstream secret response" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_public_sell_analysis_redis_down_fails_closed() -> None:
+    service, redis, strategy, _universe = _service(redis=FakeRedis(ping_ok=False))
+
+    with pytest.raises(ServiceUnavailableError):
+        await service.run_public_sell_analysis("005930", "1.2.3.4")
+
+    assert strategy.calls == []
+    assert redis.set_nx_calls == []
+
+
+@pytest.mark.asyncio
+async def test_public_sell_analysis_global_lock_conflict_consumes_cooldown() -> None:
+    redis = FakeRedis()
+    redis.store[PUBLIC_SELL_ANALYSIS_LOCK_KEY] = "other-owner"
+    redis.ttls[PUBLIC_SELL_ANALYSIS_LOCK_KEY] = 77
+    service, redis, strategy, _universe = _service(redis=redis)
+
+    with pytest.raises(RateLimitExceededError) as exc_info:
+        await service.run_public_sell_analysis("005930", "1.2.3.4")
+
+    assert exc_info.value.details["retry_after"] == 77
+    assert len(redis.set_nx_calls) == 2
+    assert strategy.calls == []
 
 
 # ==================== 공개 스캔: total_scanned=0 경쟁 조건 / outcome ====================

@@ -1,0 +1,83 @@
+{% extends "layouts/public_base.html" %}
+
+{% block title %}매도 신호 분석 - 전략 인사이트{% endblock %}
+
+{% block content %}
+<h1>매도 신호 분석</h1>
+<p class="page-lead">
+  KRX 종목코드로 MA, Stochastic, RSI, 거래량과 ADX를 분석합니다.
+  보유 정보나 개인 수급은 사용하지 않는 공개 기술지표 분석입니다.
+</p>
+
+<section aria-labelledby="public-sell-form-heading">
+  <h2 id="public-sell-form-heading">종목 분석</h2>
+  <form id="public-sell-form" novalidate>
+    <div class="controls-row sell-analysis-controls">
+      <div class="field-group">
+        <label for="public-sell-symbol">종목코드</label>
+        <input id="public-sell-symbol" name="symbol" type="text" inputmode="text"
+               minlength="6" maxlength="6" pattern="[0-9A-Za-z]{6}"
+               autocomplete="off" autocapitalize="characters" spellcheck="false"
+               aria-describedby="public-sell-symbol-hint" placeholder="예: 005930" required />
+        <span class="field-hint" id="public-sell-symbol-hint">6자리 KRX 종목코드 · Stochastic/RSI 기준 70 고정</span>
+      </div>
+      <button type="submit" class="primary" id="public-sell-run">분석하기</button>
+    </div>
+  </form>
+  <div id="public-sell-status" class="status-message" role="status" aria-live="polite" aria-atomic="true"></div>
+</section>
+
+<section id="public-sell-result" aria-labelledby="public-sell-result-heading" aria-busy="false" hidden>
+  <div class="sell-result-header">
+    <div>
+      <h2 id="public-sell-result-heading" tabindex="-1">분석 결과</h2>
+      <p class="meta-line" id="public-sell-stock"></p>
+    </div>
+    <span class="state-badge" id="public-sell-stage"></span>
+  </div>
+
+  <div class="scan-result-freshness" aria-live="polite">
+    <span class="cached-result-badge" id="public-sell-local-badge" hidden>저장된 결과</span>
+    <span class="cached-result-badge" id="public-sell-server-cache-badge" hidden>서버 캐시 결과</span>
+    <strong id="public-sell-age">최근 분석</strong>
+    <span class="scan-time-detail" id="public-sell-time"></span>
+  </div>
+
+  <div class="sell-summary-grid">
+    <div class="stat-card highlight">
+      <div class="number sell-stage-name" id="public-sell-stage-name">-</div>
+      <div class="label">최종 단계</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" id="public-sell-ratio">-</div>
+      <div class="label">비중축소 검토 범위</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" id="public-sell-price">-</div>
+      <div class="label">현재가</div>
+    </div>
+  </div>
+
+  <dl class="indicator-grid">
+    <div><dt>MA {{ gc_short_ma }} / {{ gc_long_ma }}</dt><dd id="public-sell-ma">-</dd><span id="public-sell-ma-state">-</span></div>
+    <div><dt>Stochastic K / D</dt><dd id="public-sell-stoch">-</dd><span id="public-sell-stoch-state">-</span></div>
+    <div><dt>RSI</dt><dd id="public-sell-rsi">-</dd><span id="public-sell-rsi-state">-</span></div>
+    <div><dt>거래량 비율</dt><dd id="public-sell-volume">-</dd><span id="public-sell-volume-state">-</span></div>
+    <div><dt>ADX / +DI / -DI</dt><dd id="public-sell-adx">-</dd><span id="public-sell-trend-state">-</span></div>
+    <div><dt>분석 캔들</dt><dd id="public-sell-candles">-</dd><span>OHLCV 기준</span></div>
+  </dl>
+
+  <div class="sell-phase-summary">
+    <h3 id="public-sell-phase-name">판단 요약</h3>
+    <p id="public-sell-phase-action"></p>
+  </div>
+  <div class="reasons-list">
+    <h3>판단 근거</h3>
+    <ul id="public-sell-reasons"></ul>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_script_tags %}
+<script src="/static/js/pages/public_sell_analysis.js?v={{ static_version }}"></script>
+{% endblock %}

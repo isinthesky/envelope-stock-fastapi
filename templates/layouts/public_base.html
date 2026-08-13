@@ -37,6 +37,10 @@
 
       var setHidden = function (hidden) {
         document.body.classList.toggle("sidebar-hidden", hidden);
+        if (sidebar) {
+          sidebar.setAttribute("aria-hidden", hidden.toString());
+          sidebar.inert = hidden;
+        }
         if (toggle) {
           toggle.setAttribute("aria-expanded", (!hidden).toString());
           toggle.textContent = hidden ? "메뉴 열기" : "메뉴 닫기";

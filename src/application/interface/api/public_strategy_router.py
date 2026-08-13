@@ -17,6 +17,8 @@ from src.application.domain.strategy.public_dto import (
     PublicGoldenCrossScanRequestDTO,
     PublicRecommendationSnapshotDTO,
     PublicScanCapabilitiesDTO,
+    PublicSellAnalysisDTO,
+    PublicSellAnalysisRequestDTO,
 )
 from src.settings.config import settings
 
@@ -58,6 +60,26 @@ async def public_golden_cross_scan(
     client_ip = get_client_ip(request, settings.trusted_proxy_ips)
     result = await service.run_public_scan(market=body.market, client_ip=client_ip)
     return ResponseDTO.success_response(result, "Public golden cross scan completed")
+
+
+@router.post(
+    "/sell-analysis",
+    response_model=ResponseDTO[PublicSellAnalysisDTO],
+    status_code=status.HTTP_200_OK,
+    summary="공개 매도 신호 기술지표 분석",
+    description="종목코드만 입력받는 캐시·호출 제한 적용 공개 분석",
+)
+async def public_sell_analysis(
+    request: Request,
+    body: PublicSellAnalysisRequestDTO,
+    service: PublicStrategyServiceDep,
+) -> ResponseDTO[PublicSellAnalysisDTO]:
+    client_ip = get_client_ip(request, settings.trusted_proxy_ips)
+    result = await service.run_public_sell_analysis(
+        symbol=body.symbol,
+        client_ip=client_ip,
+    )
+    return ResponseDTO.success_response(result, "Public sell analysis completed")
 
 
 @router.get(
