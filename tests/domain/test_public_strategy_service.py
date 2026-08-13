@@ -27,6 +27,7 @@ from src.application.domain.strategy.dto import (
     IndustrySummaryDTO,
 )
 from src.application.domain.strategy.public_dto import (
+    PUBLIC_SCAN_MAX_RESULTS,
     PublicGoldenCrossScanDTO,
     PublicRecommendationSnapshotDTO,
 )
@@ -39,7 +40,7 @@ from src.settings.config import settings
 
 
 class FakeRedis:
-    """RedisClient 표면(set_nx/set/get/ttl/delete/ping)만 흉내내는 인메모리 fake
+    """RedisClient 표면(set_nx/compare_and_delete/get/ttl/ping)만 흉내내는 fake
 
     ping_calls/set_nx_calls는 "시장 가용성 검사가 Redis 보호자원보다 먼저 수행되어
     거부 시 Redis를 전혀 건드리지 않는다"를 검증하기 위한 호출 카운터다.
@@ -52,6 +53,7 @@ class FakeRedis:
         self.set_nx_error = set_nx_error
         self.ping_calls = 0
         self.set_nx_calls: list[tuple] = []
+        self.compare_and_delete_calls: list[tuple[str, str]] = []
 
     async def ping(self) -> bool:
         self.ping_calls += 1
@@ -86,6 +88,14 @@ class FakeRedis:
         return self.ttls.get(key, -1)
 
     async def delete(self, key) -> bool:
+        self.store.pop(key, None)
+        self.ttls.pop(key, None)
+        return True
+
+    async def compare_and_delete(self, key: str, expected_value: str) -> bool:
+        self.compare_and_delete_calls.append((key, expected_value))
+        if self.store.get(key) != expected_value:
+            return False
         self.store.pop(key, None)
         self.ttls.pop(key, None)
         return True
@@ -540,6 +550,23 @@ async def test_scan_projection_excludes_internal_fields() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scan_projection_keeps_only_top_20_in_existing_priority_order() -> None:
+    stocks = [
+        _scan_item(symbol=f"{index:06d}", name=f"우선순위 {index}")
+        for index in range(PUBLIC_SCAN_MAX_RESULTS + 5)
+    ]
+    strategy = FakeStrategyService(result=_scan_result(stocks=stocks))
+    service, _redis, _strategy, _universe = _service(strategy=strategy)
+
+    result = await service.run_public_scan(market=None, client_ip="1.2.3.4")
+
+    assert len(result.stocks) == PUBLIC_SCAN_MAX_RESULTS
+    assert [stock.symbol for stock in result.stocks] == [
+        f"{index:06d}" for index in range(PUBLIC_SCAN_MAX_RESULTS)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_scan_rejects_invalid_market() -> None:
     service, _redis, strategy, _universe = _service()
 
@@ -601,6 +628,7 @@ async def test_lock_released_after_success_but_cooldown_kept() -> None:
     await service.run_public_scan(market=None, client_ip="1.2.3.4")
 
     assert PUBLIC_SCAN_LOCK_KEY not in redis.store
+    assert redis.compare_and_delete_calls[0][0] == PUBLIC_SCAN_LOCK_KEY
     cooldown_keys = [k for k in redis.store if k.startswith("public:strategy:gc-scan:cooldown:")]
     assert len(cooldown_keys) == 1
 

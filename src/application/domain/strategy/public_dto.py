@@ -9,7 +9,7 @@ Public Strategy DTO - 공개 전략 포털(/page/) 전용 데이터 전송 객�
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, overload
 
 from pydantic import Field
 
@@ -28,6 +28,18 @@ PublicUniverseMode = Literal["ETF_ONLY", "STOCKS"]
 
 # 공개 스캔 결과 요약 상태
 PublicScanOutcome = Literal["MATCHES_FOUND", "NO_MATCHES"]
+
+# 내부 스캔은 전체 집계를 유지하되 공개 페이지에는 추천 우선순위 상위 N개만 전달한다.
+# BuyStrategyService가 canonical 신호 등급 + screening_score 순으로 정렬한 결과를 보존한다.
+PUBLIC_SCAN_MAX_RESULTS = 20
+
+
+@overload
+def _ensure_aware(dt: datetime) -> datetime: ...
+
+
+@overload
+def _ensure_aware(dt: None) -> None: ...
 
 
 def _ensure_aware(dt: datetime | None) -> datetime | None:
@@ -98,7 +110,11 @@ class PublicScanStockDTO(BaseDTO):
 class PublicGoldenCrossScanDTO(BaseDTO):
     """공개 골든크로스 스캔 결과 (집계 + 종목 목록 + 스캔 시각)"""
 
-    stocks: list[PublicScanStockDTO] = Field(default_factory=list, description="스캔 결과 목록")
+    stocks: list[PublicScanStockDTO] = Field(
+        default_factory=list,
+        description=f"추천 우선순위 상위 {PUBLIC_SCAN_MAX_RESULTS}개 스캔 결과",
+        max_length=PUBLIC_SCAN_MAX_RESULTS,
+    )
     total_scanned: int = Field(description="스캔한 전체 종목 수")
     gc_active_count: int = Field(description="골든크로스 활성 종목 수")
     pullback_waiting_count: int = Field(default=0, description="눌림목 대기 종목 수")
@@ -140,7 +156,7 @@ class PublicGoldenCrossScanDTO(BaseDTO):
                     stoch_d=stock.stoch_d,
                     gc_state=stock.gc_state,
                 )
-                for stock in result.stocks
+                for stock in result.stocks[:PUBLIC_SCAN_MAX_RESULTS]
             ],
             total_scanned=result.total_scanned,
             gc_active_count=result.gc_active_count,

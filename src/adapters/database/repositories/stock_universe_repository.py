@@ -9,7 +9,7 @@ Stock Universe Repository - 종목 유니버스 Repository
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Sequence
+from typing import Any, Sequence
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -240,7 +240,7 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
         self,
         symbol: str,
         session: AsyncSession | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> StockUniverseModel:
         """종목 Upsert"""
         db = self._get_session(session)
@@ -370,7 +370,7 @@ class StockUniverseRepository(BaseRepository[StockUniverseModel], PaginationMixi
         db = self._get_session(session)
         stmt = update(self.model).values(is_active=False)
         result = await db.execute(stmt)
-        return result.rowcount
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def activate(
         self,

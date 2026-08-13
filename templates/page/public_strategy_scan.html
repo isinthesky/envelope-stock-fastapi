@@ -45,9 +45,15 @@
   </div>
 
   <div id="public-scan-result" hidden>
-    <p class="meta-line" id="public-scan-time"></p>
+    <div class="scan-result-freshness" aria-live="polite">
+      <span class="cached-result-badge" id="public-scan-cache-badge" hidden>저장된 결과</span>
+      <strong id="public-scan-age">최근 스캔</strong>
+      <span class="scan-time-detail" id="public-scan-time"></span>
+    </div>
+    <p class="result-limit-note">추천 우선순위에 따라 최대 20개 종목만 표시합니다.</p>
     <div class="table-scroll">
       <table class="data-table">
+        <caption class="visually-hidden">신호 등급별 골든크로스 추천 종목</caption>
         <thead>
           <tr>
             <th>종목코드</th>

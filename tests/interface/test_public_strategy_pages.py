@@ -151,3 +151,34 @@ def test_public_scan_page_script_calls_scan_capabilities_endpoint() -> None:
     js_path = REPO_ROOT / "static" / "js" / "pages" / "public_strategy_scan.js"
     js_source = js_path.read_text(encoding="utf-8")
     assert "/api/v1/public/strategies/scan-capabilities" in js_source
+
+
+def test_public_scan_page_groups_signals_and_declares_20_result_limit() -> None:
+    client = TestClient(_build_app(), raise_server_exceptions=False)
+    html = client.get("/page/scan/").text
+    js_source = (REPO_ROOT / "static" / "js" / "pages" / "public_strategy_scan.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "최대 20개 종목만 표시" in html
+    assert "신호 등급별 골든크로스 추천 종목" in html
+    assert "MAX_DISPLAY_RESULTS = 20" in js_source
+    assert "signal-group-row" in js_source
+    assert "매수 적기 종목 없음" in js_source
+
+
+def test_public_scan_page_persists_and_restores_recent_result_with_relative_time() -> None:
+    client = TestClient(_build_app(), raise_server_exceptions=False)
+    html = client.get("/page/scan/").text
+    js_source = (REPO_ROOT / "static" / "js" / "pages" / "public_strategy_scan.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'id="public-scan-age"' in html
+    assert 'id="public-scan-cache-badge"' in html
+    assert "publicStrategyScanResult:v1" in js_source
+    assert "window.localStorage.setItem" in js_source
+    assert "window.localStorage.getItem" in js_source
+    assert "renderResult(stored, { restored: true })" in js_source
+    assert 'return minutes + "분 전"' in js_source
+    assert 'return Math.floor(hours / 24) + "일 전"' in js_source

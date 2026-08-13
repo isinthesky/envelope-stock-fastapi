@@ -100,7 +100,8 @@ class PublicStrategyService:
             ServiceUnavailableError: DB 사전조회 실패(fail-closed)
         """
         try:
-            return await self._fetch_scan_capabilities()
+            # @transaction이 런타임에 session을 주입한다.
+            return await self._fetch_scan_capabilities()  # type: ignore[call-arg]
         except ApplicationError:
             raise
         except Exception as e:
@@ -184,7 +185,8 @@ class PublicStrategyService:
             )
 
         try:
-            result = await self._strategy_service.scan_golden_cross_candidates(
+            # @transaction이 런타임에 session을 주입한다.
+            result = await self._strategy_service.scan_golden_cross_candidates(  # type: ignore[call-arg]
                 market=effective_market,
                 stoch_threshold=PUBLIC_SCAN_STOCH_THRESHOLD,
                 gc_only=PUBLIC_SCAN_GC_ONLY,
@@ -202,10 +204,9 @@ class PublicStrategyService:
             return PublicGoldenCrossScanDTO.from_internal(result, market=effective_market)
         finally:
             # 성공/실패와 무관하게 전역 락 해제 (프로세스 중단 시엔 TTL이 해제).
-            # 내 토큰일 때만 삭제 — TTL 만료 후 다른 실행이 재획득한 락 보호
-            current = await self._redis.get(PUBLIC_SCAN_LOCK_KEY, deserialize=False)
-            if current == lock_token:
-                await self._redis.delete(PUBLIC_SCAN_LOCK_KEY)
+            # 비교+삭제를 Redis 안에서 원자적으로 실행해, 확인 직후 TTL이 만료되어
+            # 다른 실행이 재획득한 락을 삭제하는 TOCTOU 경쟁 조건까지 방지한다.
+            await self._redis.compare_and_delete(PUBLIC_SCAN_LOCK_KEY, lock_token)
 
     # ==================== 공개 추천 스냅샷 ====================
 

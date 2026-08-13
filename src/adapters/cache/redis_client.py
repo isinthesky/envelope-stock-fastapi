@@ -121,6 +121,30 @@ class RedisClient:
         res = await self.redis.set(key, value, ex=ttl, nx=True)
         return bool(res)
 
+    async def compare_and_delete(self, key: str, expected_value: str) -> bool:
+        """값이 소유 토큰과 같을 때만 키를 원자적으로 삭제한다.
+
+        락 해제에서 ``GET`` 후 ``DELETE``를 따로 실행하면, 두 명령 사이에 TTL이
+        만료되고 다른 실행이 락을 재획득했을 때 새 소유자의 락까지 삭제할 수 있다.
+        Redis Lua 스크립트로 비교와 삭제를 한 명령 안에서 수행해 이 경쟁 조건을
+        제거한다. 정리(cleanup) 경로이므로 연결 오류는 기존 ``delete()``와 같이
+        False로 반환하며, 남은 락은 TTL로 만료된다.
+        """
+        if not self.redis:
+            return False
+
+        script = """
+        if redis.call('get', KEYS[1]) == ARGV[1] then
+            return redis.call('del', KEYS[1])
+        end
+        return 0
+        """
+        try:
+            deleted = await self.redis.eval(script, 1, key, expected_value)
+            return bool(deleted)
+        except Exception:
+            return False
+
     async def get(self, key: str, deserialize: bool = True) -> Any | None:
         """
         캐시 조회
