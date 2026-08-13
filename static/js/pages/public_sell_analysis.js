@@ -3,15 +3,20 @@
   "use strict";
 
   var ENDPOINT = "/api/v1/public/strategies/sell-analysis";
-  var STORAGE_KEY = "publicSellAnalysisResult:v1";
-  var STORAGE_VERSION = 1;
+  var LEGACY_STORAGE_KEY = "publicSellAnalysisResult:v1";
+  var HISTORY_STORAGE_KEY = "publicSellAnalysisHistory:v2";
+  var HISTORY_STORAGE_VERSION = 2;
+  var MAX_HISTORY_RESULTS = 20;
   var form = document.getElementById("public-sell-form");
   var symbolInput = document.getElementById("public-sell-symbol");
   var runButton = document.getElementById("public-sell-run");
   var statusEl = document.getElementById("public-sell-status");
   var resultEl = document.getElementById("public-sell-result");
   var resultHeading = document.getElementById("public-sell-result-heading");
+  var historySection = document.getElementById("public-sell-history-section");
+  var historyList = document.getElementById("public-sell-history-list");
   var lastResult = null;
+  var historyResults = [];
 
   var STAGE_CLASS = {
     HOLD: "state-hold",
@@ -75,6 +80,9 @@
     if (!lastResult) return;
     setText("public-sell-age", formatRelativeTime(lastResult.analyzed_at) + freshnessLabel(lastResult.analyzed_at));
     setText("public-sell-time", formatKstTime(lastResult.analyzed_at));
+    document.querySelectorAll("[data-history-analyzed-at]").forEach(function (element) {
+      element.textContent = formatRelativeTime(element.dataset.historyAnalyzedAt);
+    });
   };
 
   var sanitize = function (data) {
@@ -95,31 +103,115 @@
     return safe;
   };
 
-  var saveResult = function (data) {
+  var isValidStoredResult = function (data) {
+    return !!(
+      data &&
+      typeof data === "object" &&
+      /^[0-9A-Z]{6}$/.test(data.symbol) &&
+      !Number.isNaN(new Date(data.analyzed_at).getTime())
+    );
+  };
+
+  var persistHistory = function () {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, data: sanitize(data) }));
+      window.localStorage.setItem(
+        HISTORY_STORAGE_KEY,
+        JSON.stringify({ version: HISTORY_STORAGE_VERSION, entries: historyResults })
+      );
     } catch (_error) { /* 저장 불가 환경은 결과 표시에 영향 없음 */ }
   };
 
-  var removeStored = function () {
-    try { window.localStorage.removeItem(STORAGE_KEY); } catch (_error) { /* 무시 */ }
+  var removeStoredHistory = function () {
+    try { window.localStorage.removeItem(HISTORY_STORAGE_KEY); } catch (_error) { /* 무시 */ }
   };
 
-  var loadStored = function () {
+  var loadLegacyResult = function () {
     try {
-      var raw = window.localStorage.getItem(STORAGE_KEY);
+      var raw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
       if (!raw) return null;
       var stored = JSON.parse(raw);
-      var data = stored && stored.version === STORAGE_VERSION ? stored.data : null;
-      if (!data || !/^[0-9A-Z]{6}$/.test(data.symbol) || Number.isNaN(new Date(data.analyzed_at).getTime())) {
-        removeStored();
-        return null;
-      }
-      return sanitize(data);
+      return stored && stored.version === 1 && isValidStoredResult(stored.data)
+        ? sanitize(stored.data)
+        : null;
     } catch (_error) {
-      removeStored();
       return null;
+    } finally {
+      try { window.localStorage.removeItem(LEGACY_STORAGE_KEY); } catch (_error) { /* 무시 */ }
     }
+  };
+
+  var loadHistory = function () {
+    try {
+      var raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+      if (raw) {
+        var stored = JSON.parse(raw);
+        if (stored && stored.version === HISTORY_STORAGE_VERSION && Array.isArray(stored.entries)) {
+          historyResults = stored.entries
+            .filter(isValidStoredResult)
+            .slice(0, MAX_HISTORY_RESULTS)
+            .map(sanitize);
+          if (historyResults.length !== stored.entries.length) persistHistory();
+          return;
+        }
+        removeStoredHistory();
+      }
+      var legacy = loadLegacyResult();
+      historyResults = legacy ? [legacy] : [];
+      if (legacy) persistHistory();
+    } catch (_error) {
+      historyResults = [];
+      removeStoredHistory();
+    }
+  };
+
+  var saveToHistory = function (data) {
+    var safe = sanitize(data);
+    historyResults = historyResults.filter(function (entry) {
+      return !(entry.symbol === safe.symbol && entry.analyzed_at === safe.analyzed_at);
+    });
+    historyResults.unshift(safe);
+    historyResults = historyResults.slice(0, MAX_HISTORY_RESULTS);
+    persistHistory();
+    renderHistory();
+  };
+
+  var renderHistory = function () {
+    while (historyList.firstChild) historyList.removeChild(historyList.firstChild);
+    historySection.hidden = historyResults.length === 0;
+    setText("public-sell-history-count", historyResults.length + " / " + MAX_HISTORY_RESULTS);
+
+    historyResults.forEach(function (entry, index) {
+      var item = document.createElement("li");
+      var button = document.createElement("button");
+      var identity = document.createElement("span");
+      var stage = document.createElement("span");
+      var time = document.createElement("span");
+      var relative = document.createElement("span");
+
+      button.type = "button";
+      button.className = "sell-history-item";
+      button.dataset.historyIndex = String(index);
+      button.setAttribute(
+        "aria-label",
+        entry.symbol + " " + (entry.name || "") + ", " + formatKstTime(entry.analyzed_at) + " 분석 보기"
+      );
+      identity.className = "sell-history-identity";
+      identity.textContent = entry.symbol + (entry.name ? " · " + entry.name : "");
+      stage.className = "state-badge " + (STAGE_CLASS[entry.final_stage] || "state-hold");
+      stage.textContent = entry.final_stage_name || "보유 유지";
+      time.className = "sell-history-time";
+      time.textContent = formatKstTime(entry.analyzed_at);
+      relative.className = "sell-history-relative";
+      relative.dataset.historyAnalyzedAt = entry.analyzed_at;
+      relative.textContent = formatRelativeTime(entry.analyzed_at);
+
+      button.appendChild(identity);
+      button.appendChild(stage);
+      button.appendChild(time);
+      button.appendChild(relative);
+      item.appendChild(button);
+      historyList.appendChild(item);
+    });
   };
 
   var renderReasons = function (data) {
@@ -167,10 +259,12 @@
     resultEl.setAttribute("aria-busy", "false");
 
     if (opts.restored) {
-      setStatus("이 브라우저에 저장된 최근 분석을 복원했습니다. 필요하면 다시 분석할 수 있습니다.");
+      setStatus(opts.fromHistory
+        ? "저장된 분석 이력을 열었습니다. 분석 시점을 확인하고 필요하면 다시 분석해 주세요."
+        : "이 브라우저에 저장된 최근 분석을 복원했습니다. 필요하면 다시 분석할 수 있습니다.");
     } else {
       setStatus(lastResult.is_cached ? "서버에 저장된 최근 분석을 불러왔습니다." : "기술지표 분석을 완료했습니다.");
-      saveResult(lastResult);
+      saveToHistory(lastResult);
       resultHeading.focus();
     }
   };
@@ -233,11 +327,21 @@
   };
 
   var init = function () {
-    var stored = loadStored();
-    if (stored) renderResult(stored, { restored: true });
+    loadHistory();
+    renderHistory();
+    if (historyResults.length > 0) renderResult(historyResults[0], { restored: true });
   };
 
   form.addEventListener("submit", submit);
+  historyList.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-history-index]");
+    if (!button || !historyList.contains(button)) return;
+    var selected = historyResults[Number(button.dataset.historyIndex)];
+    if (selected) {
+      renderResult(selected, { restored: true, fromHistory: true });
+      resultHeading.focus();
+    }
+  });
   window.setInterval(updateTime, 30000);
   document.addEventListener("visibilitychange", updateTime);
   document.addEventListener("DOMContentLoaded", init);

@@ -726,6 +726,68 @@ label {
 .state-reduce-2 { background: #fed7aa; color: #9a3412; }
 .state-exit-all { background: #fee2e2; color: #991b1b; }
 
+.sell-history-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-count {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sell-history-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sell-history-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+  width: 100%;
+  min-height: 74px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sell-history-item:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.sell-history-identity {
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.sell-history-time,
+.sell-history-relative {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sell-history-relative {
+  text-align: right;
+}
+
 @media (max-width: 768px) {
   .sell-analysis-controls,
   .sell-result-header {
@@ -744,7 +806,8 @@ label {
   }
 
   .sell-summary-grid,
-  .indicator-grid {
+  .indicator-grid,
+  .sell-history-list {
     grid-template-columns: 1fr;
   }
 }

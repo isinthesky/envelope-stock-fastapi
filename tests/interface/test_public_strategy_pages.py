@@ -207,7 +207,14 @@ def test_public_sell_analysis_page_is_public_only_and_persistent() -> None:
     assert 'id="public-sell-form"' in html
     assert 'aria-live="polite"' in html
     assert "/api/v1/public/strategies/sell-analysis" in js_source
-    assert "publicSellAnalysisResult:v1" in js_source
+    assert 'id="public-sell-history-list"' in html
+    assert 'id="public-sell-history-count"' in html
+    assert "publicSellAnalysisHistory:v2" in js_source
+    assert "publicSellAnalysisResult:v1" in js_source  # v1 단일 결과 migration
+    assert "MAX_HISTORY_RESULTS = 20" in js_source
+    assert "saveToHistory(lastResult)" in js_source
+    assert "renderHistory()" in js_source
+    assert 'data-history-analyzed-at' not in html  # 이력은 안전한 DOM API로 동적 생성
     assert "window.localStorage.setItem" in js_source
     assert "window.localStorage.getItem" in js_source
     assert 'return minutes + "분 전"' in js_source
