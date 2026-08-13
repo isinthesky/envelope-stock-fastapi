@@ -288,6 +288,7 @@ BuyStrategyServiceDep = Annotated["BuyStrategyService", Depends(get_buy_strategy
 
 def get_public_strategy_service(
     strategy_service: StrategyServiceDep,
+    market_data_service: MarketDataServiceDep,
     redis_client: RedisDep,
     universe_repo: StockUniverseRepositoryDep,
 ) -> "PublicStrategyService":
@@ -309,6 +310,7 @@ def get_public_strategy_service(
 
     return PublicStrategyService(
         strategy_service=strategy_service,
+        market_data_service=market_data_service,
         redis_client=redis_client,
         universe_repo=universe_repo,
     )

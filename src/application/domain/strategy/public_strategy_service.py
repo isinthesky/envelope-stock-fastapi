@@ -44,6 +44,7 @@ from src.application.domain.strategy.public_dto import (
     PublicUniverseMode,
 )
 from src.application.domain.strategy.strategy_service import StrategyService
+from src.application.domain.market_data.service import MarketDataService
 from src.settings.config import settings
 
 logger = logging.getLogger(__name__)
@@ -85,10 +86,12 @@ class PublicStrategyService:
         strategy_service: StrategyService,
         redis_client: RedisClient,
         universe_repo: StockUniverseRepository,
+        market_data_service: MarketDataService | None = None,
     ) -> None:
         self._strategy_service = strategy_service
         self._redis = redis_client
         self._universe_repo = universe_repo
+        self._market_data_service = market_data_service
 
     # ==================== 공개 스캔 가용성 ====================
 
@@ -319,6 +322,17 @@ class PublicStrategyService:
                 ) from e
 
             public_result = PublicSellAnalysisDTO.from_internal(result)
+            if public_result.name is None and self._market_data_service is not None:
+                # ETF 전용 운영에서는 일반주식이 stock_universe에 없을 수 있다.
+                # 관리자 분석과 동일하게 KIS 종목정보를 fallback으로 사용하되,
+                # 공개 쿨다운/전역 락 안에서만 호출해 외부 API를 보호한다.
+                try:
+                    public_result.name = await self._market_data_service.get_stock_name(symbol)
+                except Exception:
+                    logger.info(
+                        "[PublicStrategyService] stock name lookup unavailable: symbol=%s",
+                        symbol,
+                    )
             stored = public_result.model_copy(update={"is_cached": False})
             cache_saved = await self._redis.set(
                 cache_key,
@@ -339,7 +353,13 @@ class PublicStrategyService:
         if not cached:
             return None
         try:
-            return PublicSellAnalysisDTO.model_validate(cached)
+            result = PublicSellAnalysisDTO.model_validate(cached)
+            # 공개 대상은 활성 유니버스 밖 일반주식도 포함하므로, 과거 버전이나
+            # 일시적 이름 조회 실패로 생성된 무명 캐시는 완성된 결과로 취급하지 않는다.
+            if result.name is None:
+                await self._redis.delete(cache_key)
+                return None
+            return result
         except Exception:
             logger.warning("[PublicStrategyService] invalid public sell analysis cache discarded")
             await self._redis.delete(cache_key)

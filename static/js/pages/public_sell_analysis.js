@@ -166,6 +166,16 @@
 
   var saveToHistory = function (data) {
     var safe = sanitize(data);
+    // 새 분석에서 종목명이 확인되면 같은 종목의 과거 무명 이력도 보강한다.
+    // 분석 당시의 지표/시각은 그대로 유지하고 표시용 이름만 갱신한다.
+    if (safe.name) {
+      historyResults = historyResults.map(function (entry) {
+        if (entry.symbol !== safe.symbol || entry.name) return entry;
+        var enriched = sanitize(entry);
+        enriched.name = safe.name;
+        return enriched;
+      });
+    }
     historyResults = historyResults.filter(function (entry) {
       return !(entry.symbol === safe.symbol && entry.analyzed_at === safe.analyzed_at);
     });

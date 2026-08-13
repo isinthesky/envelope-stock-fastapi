@@ -201,6 +201,16 @@ class FakeStrategyService:
         return self.sell_result
 
 
+class FakeMarketDataService:
+    def __init__(self, name: str | None = "삼성전자") -> None:
+        self.name = name
+        self.calls: list[str] = []
+
+    async def get_stock_name(self, symbol: str) -> str | None:
+        self.calls.append(symbol)
+        return self.name
+
+
 def _sell_internal_result():
     """PublicSellAnalysisDTO projection에 필요한 내부 결과 표면."""
     return SimpleNamespace(
@@ -245,6 +255,7 @@ def _service(
     redis=None,
     strategy=None,
     universe_repo=None,
+    market_data_service=None,
 ) -> tuple[PublicStrategyService, FakeRedis, FakeStrategyService, FakeUniverseRepo]:
     redis = redis or FakeRedis()
     strategy = strategy or FakeStrategyService()
@@ -254,7 +265,10 @@ def _service(
     universe_repo = universe_repo or FakeUniverseRepo({"ETF": 221})
     return (
         PublicStrategyService(
-            strategy_service=strategy, redis_client=redis, universe_repo=universe_repo
+            strategy_service=strategy,
+            redis_client=redis,
+            universe_repo=universe_repo,
+            market_data_service=market_data_service,
         ),
         redis,
         strategy,
@@ -536,6 +550,35 @@ async def test_public_sell_analysis_uses_fixed_technical_only_parameters() -> No
 
 
 @pytest.mark.asyncio
+async def test_public_sell_analysis_resolves_name_when_symbol_is_absent_from_universe() -> None:
+    strategy = FakeStrategyService()
+    strategy.sell_result.symbol = "307950"
+    strategy.sell_result.name = None
+    market_data = FakeMarketDataService(name="현대오토에버")
+    service, redis, _strategy, _universe = _service(
+        strategy=strategy, market_data_service=market_data
+    )
+
+    result = await service.run_public_sell_analysis("307950", "1.2.3.4")
+
+    assert result.name == "현대오토에버"
+    assert market_data.calls == ["307950"]
+    cached = redis.store[f"{PUBLIC_SELL_ANALYSIS_CACHE_KEY_PREFIX}307950"]
+    assert cached["name"] == "현대오토에버"
+
+
+@pytest.mark.asyncio
+async def test_public_sell_analysis_does_not_fetch_name_when_universe_provided_it() -> None:
+    market_data = FakeMarketDataService()
+    service, _redis, _strategy, _universe = _service(market_data_service=market_data)
+
+    result = await service.run_public_sell_analysis("005930", "1.2.3.4")
+
+    assert result.name == "삼성전자"
+    assert market_data.calls == []
+
+
+@pytest.mark.asyncio
 async def test_public_sell_analysis_cache_hit_bypasses_cooldown_and_strategy() -> None:
     redis = FakeRedis()
     cached = PublicSellAnalysisDTO.from_internal(_sell_internal_result())
@@ -561,6 +604,31 @@ async def test_public_sell_analysis_invalid_cache_is_discarded_and_recomputed() 
     assert result.is_cached is False
     assert len(strategy.calls) == 1
     assert redis.store[cache_key]["symbol"] == "005930"
+
+
+@pytest.mark.asyncio
+async def test_public_sell_analysis_cache_without_name_is_recomputed() -> None:
+    redis = FakeRedis()
+    cached = PublicSellAnalysisDTO.from_internal(_sell_internal_result()).model_copy(
+        update={"name": None}
+    )
+    cache_key = f"{PUBLIC_SELL_ANALYSIS_CACHE_KEY_PREFIX}307950"
+    redis.store[cache_key] = cached.model_dump(mode="json")
+    strategy = FakeStrategyService()
+    strategy.sell_result.symbol = "307950"
+    strategy.sell_result.name = None
+    market_data = FakeMarketDataService(name="현대오토에버")
+    service, _redis, strategy, _universe = _service(
+        redis=redis,
+        strategy=strategy,
+        market_data_service=market_data,
+    )
+
+    result = await service.run_public_sell_analysis("307950", "1.2.3.4")
+
+    assert result.name == "현대오토에버"
+    assert len(strategy.calls) == 1
+    assert redis.store[cache_key]["name"] == "현대오토에버"
 
 
 @pytest.mark.asyncio
