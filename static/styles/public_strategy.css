@@ -346,6 +346,15 @@ label {
 
 /* ==================== 전략 소개 ==================== */
 
+.strategy-heading {
+  margin: 28px 0 4px;
+  font-size: 22px;
+}
+
+.strategy-heading-sell {
+  margin-top: 40px;
+}
+
 .strategy-info {
   background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
   color: #ffffff;
@@ -389,6 +398,80 @@ label {
 .strategy-flow .arrow {
   color: var(--sky);
   font-size: 18px;
+}
+
+.sell-strategy-info {
+  background: linear-gradient(135deg, #312e4f 0%, #713f4d 100%);
+}
+
+.sell-strategy-info h2 {
+  color: #fecdd3;
+}
+
+.sell-strategy-info .config-item .label {
+  color: #fecdd3;
+}
+
+.sell-strategy-flow .plus {
+  color: #fecdd3;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.sell-strategy-flow .step-sell-result {
+  background: rgba(254, 202, 202, 0.2);
+  border: 2px solid #fda4af;
+}
+
+.section-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.strategy-action-link {
+  flex-shrink: 0;
+  padding: 9px 14px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.strategy-action-link:hover {
+  background: var(--accent-strong);
+}
+
+.stage-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.stage-guide-grid article {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.stage-guide-grid article strong {
+  font-size: 14px;
+}
+
+.stage-guide-grid article p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .config-grid {
@@ -789,6 +872,19 @@ label {
 }
 
 @media (max-width: 768px) {
+  .section-heading-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .strategy-action-link {
+    text-align: center;
+  }
+
+  .stage-guide-grid {
+    grid-template-columns: 1fr;
+  }
+
   .sell-analysis-controls,
   .sell-result-header {
     align-items: stretch;

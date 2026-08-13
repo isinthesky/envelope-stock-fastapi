@@ -3,7 +3,8 @@
 {% block title %}전략 소개 - 전략 인사이트{% endblock %}
 
 {% block content %}
-<h1>매수 전략 (골든크로스)</h1>
+<h1>전략 소개</h1>
+<h2 class="strategy-heading">매수 전략 (골든크로스)</h2>
 <p class="page-lead">MA{{ gc_short_ma }}/MA{{ gc_long_ma }} 골든크로스 + Stochastic 눌림목 매수 전략</p>
 {% if gc_regime_filter_enabled %}
 <p class="regime-badge">
@@ -106,5 +107,79 @@
     </table>
   </div>
   <p class="meta-line">ETF 종목은 시가총액/거래량 조건이 완화되어 적용됩니다.</p>
+</section>
+
+<h2 class="strategy-heading strategy-heading-sell">매도 전략 (기술지표 종합)</h2>
+<p class="page-lead">
+  MA 추세 전환과 Stochastic·RSI 과열, 거래량, ADX를 함께 확인해 단계적으로 비중축소 시점을 판단합니다.
+</p>
+
+<section class="strategy-info sell-strategy-info">
+  <h2>전략 개요</h2>
+  <p>
+    단일 지표만으로 즉시 매도하지 않고 <strong>추세·모멘텀·거래량의 신호 강도</strong>를 종합해
+    보유 유지부터 전량 매도 검토까지 단계적으로 분류합니다.
+  </p>
+
+  <div class="strategy-flow sell-strategy-flow" aria-label="매도 전략 판단 흐름">
+    <span class="step">MA 추세<br><small>골든/데드크로스</small></span>
+    <span class="plus" aria-hidden="true">+</span>
+    <span class="step">Stoch·RSI<br><small>과열/하락 교차</small></span>
+    <span class="plus" aria-hidden="true">+</span>
+    <span class="step">거래량·ADX<br><small>매도 압력/추세 강도</small></span>
+    <span class="arrow" aria-hidden="true">→</span>
+    <span class="step step-sell-result">최종 단계<br><small>비중축소 범위</small></span>
+  </div>
+
+  <div class="config-grid">
+    <div class="config-item">
+      <div class="label">이평선</div>
+      <div class="value">MA{{ gc_short_ma }} / MA{{ gc_long_ma }}</div>
+    </div>
+    <div class="config-item">
+      <div class="label">과열 기준</div>
+      <div class="value">Stoch / RSI 70</div>
+    </div>
+    <div class="config-item">
+      <div class="label">거래량</div>
+      <div class="value">20일 평균 대비</div>
+    </div>
+    <div class="config-item">
+      <div class="label">추세 강도</div>
+      <div class="value">ADX / +DI / -DI</div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="sell-stage-heading">
+  <div class="section-heading-row">
+    <div>
+      <h2 id="sell-stage-heading">비중축소 단계</h2>
+      <p class="meta-line">공개 분석은 진입가·보유수량·개인수급 없이 종목의 기술지표만 평가합니다.</p>
+    </div>
+    <a class="strategy-action-link" href="/page/sell-analysis/">종목 분석하기</a>
+  </div>
+  <div class="stage-guide-grid">
+    <article>
+      <span class="state-badge state-hold">보유 유지</span>
+      <strong>뚜렷한 매도 신호 없음</strong>
+      <p>추세와 과열 지표에서 즉각적인 비중축소 근거가 부족한 상태입니다.</p>
+    </article>
+    <article>
+      <span class="state-badge state-reduce-1">1차 비중축소</span>
+      <strong>20~30% 매도 검토</strong>
+      <p>과열, 모멘텀 둔화 또는 거래량 경고가 나타나기 시작한 상태입니다.</p>
+    </article>
+    <article>
+      <span class="state-badge state-reduce-2">2차 비중축소</span>
+      <strong>30~40% 매도 검토</strong>
+      <p>복수의 약세 신호나 강한 하락 추세가 확인되는 단계입니다.</p>
+    </article>
+    <article>
+      <span class="state-badge state-exit-all">전량 매도 검토</span>
+      <strong>위험 신호 최상위</strong>
+      <p>기술지표상 가장 강한 이탈 신호로, 추가 확인이 필요한 상태입니다.</p>
+    </article>
+  </div>
 </section>
 {% endblock %}

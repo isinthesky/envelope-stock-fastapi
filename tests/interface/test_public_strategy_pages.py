@@ -113,6 +113,23 @@ def test_public_layout_uses_isolated_sidebar_storage_key() -> None:
     assert '"sidebarHidden"' not in html
 
 
+def test_public_overview_explains_buy_and_sell_strategies() -> None:
+    client = TestClient(_build_app(), raise_server_exceptions=False)
+
+    html = client.get("/page/").text
+
+    assert "매수 전략 (골든크로스)" in html
+    assert "매도 전략 (기술지표 종합)" in html
+    assert "Stoch / RSI 70" in html
+    assert "거래량·ADX" in html
+    assert "보유 유지" in html
+    assert "1차 비중축소" in html
+    assert "2차 비중축소" in html
+    assert "전량 매도 검토" in html
+    assert 'href="/page/sell-analysis/"' in html
+    assert "진입가·보유수량·개인수급 없이" in html
+
+
 # ==================== 스캔 페이지: capability 기반 렌더링 (플랜 4.1/5단계) ====================
 
 
