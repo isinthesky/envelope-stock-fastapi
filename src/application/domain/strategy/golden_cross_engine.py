@@ -13,13 +13,14 @@ Golden Cross Engine - 골든크로스 전략 실행 엔진
 
 import json
 import logging
-from types import SimpleNamespace
 from datetime import datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.models.strategy import StrategyModel
 from src.adapters.database.models.strategy_signal import SignalStatus, SignalType
 from src.adapters.database.models.strategy_symbol_state import SymbolState
@@ -30,13 +31,12 @@ from src.adapters.database.repositories.strategy_signal_repository import (
 from src.adapters.database.repositories.strategy_symbol_state_repository import (
     StrategySymbolStateRepository,
 )
-from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.external.kis_api.client import KISAPIClient, get_kis_client
 from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.account.service import AccountService
-from src.application.domain.risk.safety_guard import SafetyGuard
 from src.application.domain.order.dto import OrderCreateRequestDTO
 from src.application.domain.order.service import OrderService
+from src.application.domain.risk.safety_guard import SafetyGuard
 from src.application.domain.strategy.dto import (
     GoldenCrossConfigDTO,
     StrategyExecuteResultDTO,
@@ -49,6 +49,7 @@ from src.application.domain.strategy.state_machine import (
     Signal,
 )
 from src.application.domain.strategy.stock_screener import StockScreener
+from src.settings.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,13 @@ class GoldenCrossEngine:
         buy_count = 0
         sell_count = 0
         orders_created = 0
+
+        if not dry_run and not settings.strategy_live_trading_enabled:
+            errors.append("Live trading is disabled by STRATEGY_LIVE_TRADING_ENABLED kill-switch")
+            logger.warning("[GC Engine] Live trading blocked by master kill-switch")
+            return self._create_result(
+                strategy_id, executed_at, dry_run, 0, 0, 0, 0, signals, errors
+            )
 
         try:
             # 1. 전략 조회
@@ -239,19 +247,31 @@ class GoldenCrossEngine:
         Returns:
             StrategySignalDTO | None: 시그널 (발생 시)
         """
-        # 1. OHLCV 데이터 조회
+        # 1. 현재 상태를 먼저 조회한다. 보유 상태는 지표 데이터가 부족해도
+        # 가격 기반 하드스톱을 평가해야 한다.
+        state = await self.symbol_state_repo.get_by_strategy_and_symbol(strategy.id, symbol)
+
+        # 2. OHLCV 데이터 조회
         # 장기 MA(long_period+10) 캔들을 확보하도록 조회 창을 산출(스캐너와 동일 공식).
         # config.lookback_days(달력일)만으로는 거래일 환산 시 부족할 수 있음(예: MA200 → 210 거래일).
-        fetch_days = max(
-            config.lookback_days, int((config.ma_config.long_period + 20) * 1.6)
-        )
+        fetch_days = max(config.lookback_days, int((config.ma_config.long_period + 20) * 1.6))
         min_candles = config.ma_config.long_period + 10
         df = await self._fetch_ohlcv(symbol, fetch_days, min_candles=min_candles)
         if df is None or len(df) < min_candles:
             logger.warning(f"[GC Engine] Insufficient data for {symbol}")
+            if state and state.state == SymbolState.IN_POSITION.value:
+                return await self._process_price_only_position(
+                    strategy=strategy,
+                    symbol=symbol,
+                    state=state,
+                    config=config,
+                    state_machine=state_machine,
+                    safety_guard=safety_guard,
+                    dry_run=dry_run,
+                )
             return None
 
-        # 2. 지표 계산
+        # 3. 지표 계산
         df = TechnicalIndicators.prepare_golden_cross_indicators(
             df,
             short_ma_period=config.ma_config.short_period,
@@ -260,7 +280,7 @@ class GoldenCrossEngine:
             stoch_d_period=config.stochastic_config.d_period,
         )
 
-        # 3. 현재/이전 지표 스냅샷
+        # 4. 현재/이전 지표 스냅샷
         if len(df) < 2:
             return None
 
@@ -270,9 +290,7 @@ class GoldenCrossEngine:
         current_snapshot = self._create_snapshot(current_row)
         prev_snapshot = self._create_snapshot(prev_row)
 
-        # 4. 현재 상태 조회 (없으면 생성)
-        state = await self.symbol_state_repo.get_by_strategy_and_symbol(strategy.id, symbol)
-
+        # 5. 상태가 없으면 생성
         if not state:
             # 초기 상태 결정
             initial_state = state_machine.get_initial_state(current_snapshot)
@@ -293,7 +311,7 @@ class GoldenCrossEngine:
                     state=initial_state.value,
                 )
 
-        # 5. 상태 머신 처리
+        # 6. 상태 머신 처리
         transition = state_machine.process(
             current=current_snapshot,
             prev=prev_snapshot,
@@ -357,6 +375,73 @@ class GoldenCrossEngine:
             symbol=symbol,
             transition=transition,
             current_snapshot=current_snapshot,
+            state=state,
+            config=config,
+            safety_guard=safety_guard,
+            dry_run=dry_run,
+        )
+
+    async def _process_price_only_position(
+        self,
+        *,
+        strategy: StrategyModel,
+        symbol: str,
+        state,
+        config: GoldenCrossConfigDTO,
+        state_machine: GoldenCrossStateMachine,
+        safety_guard: SafetyGuard,
+        dry_run: bool,
+    ) -> StrategySignalDTO | None:
+        """지표 부족 시 보유 포지션의 가격 손절만 안전하게 평가한다."""
+        price_df = await self._fetch_ohlcv(symbol, days=10, min_candles=1)
+        if price_df is None or price_df.empty:
+            logger.error(
+                f"[GC Engine] No current price for in-position symbol {symbol}; "
+                "price stop cannot be evaluated"
+            )
+            return None
+
+        row = price_df.iloc[-1]
+        timestamp = (
+            row["timestamp"].to_pydatetime()
+            if hasattr(row["timestamp"], "to_pydatetime")
+            else row["timestamp"]
+        )
+        current_price = Decimal(str(row["close"]))
+        transition = state_machine.process_price_stop(
+            current_price=current_price,
+            entry_price=state.entry_price,
+            highest_price=state.highest_price,
+        )
+
+        if transition is None:
+            current_highest = max(
+                value
+                for value in (state.entry_price, state.highest_price, current_price)
+                if value is not None
+            )
+            if not dry_run and current_highest != state.highest_price:
+                await self.symbol_state_repo.update_highest_price(
+                    strategy_id=strategy.id,
+                    symbol=symbol,
+                    highest_price=current_highest,
+                )
+            return None
+
+        price_snapshot = IndicatorSnapshot(
+            timestamp=timestamp,
+            close=current_price,
+            ma_short=Decimal("0"),
+            ma_long=Decimal("0"),
+            stoch_k=0.0,
+            stoch_d=0.0,
+        )
+        logger.warning(f"[GC Engine] Price-only stop triggered for {symbol} @ {current_price}")
+        return await self._handle_signal(
+            strategy=strategy,
+            symbol=symbol,
+            transition=transition,
+            current_snapshot=price_snapshot,
             state=state,
             config=config,
             safety_guard=safety_guard,
@@ -446,7 +531,9 @@ class GoldenCrossEngine:
         )
 
         # SafetyGuard 체크
-        can_trade, block_reason, block_message = safety_guard.can_trade()
+        can_trade, _, block_message = safety_guard.can_trade(
+            is_risk_reducing=signal_type == SignalType.SELL
+        )
         if not can_trade:
             logger.warning(f"[GC Engine] SafetyGuard blocked: {block_message}")
             await self.signal_repo.update_execution(
@@ -707,6 +794,7 @@ class GoldenCrossEngine:
             ma_long=Decimal(str(row["ma_long"])) if pd.notna(row["ma_long"]) else Decimal("0"),
             stoch_k=float(row["stoch_k"]) if pd.notna(row["stoch_k"]) else 50.0,
             stoch_d=float(row["stoch_d"]) if pd.notna(row["stoch_d"]) else 50.0,
+            atr=(Decimal(str(row["atr"])) if "atr" in row.index and pd.notna(row["atr"]) else None),
         )
 
     def _parse_config(self, strategy: StrategyModel) -> GoldenCrossConfigDTO:

@@ -301,6 +301,7 @@ const normalizeSellReasons = (item) => {
 
 const getStageDisplayName = (stage) => {
   const stageNames = {
+    INSUFFICIENT_DATA: '데이터 부족',
     HOLD: '보유 유지',
     REDUCE_1: '1차 비중 축소',
     REDUCE_2: '2차 비중 축소',
@@ -310,6 +311,9 @@ const getStageDisplayName = (stage) => {
 };
 
 const resolveDisplayStage = (item) => {
+  if (item?.analysis_status === 'INSUFFICIENT_DATA' || item?.sell_phase === 'INSUFFICIENT_DATA') {
+    return item?.sell_stage === 'EXIT_ALL' ? 'EXIT_ALL' : 'INSUFFICIENT_DATA';
+  }
   if (item?.final_stage) return item.final_stage;
   if (item?.sell_stage) return item.sell_stage;
 
@@ -323,6 +327,7 @@ const resolveDisplayStage = (item) => {
 };
 
 const getPhaseDisplayName = (phase, phaseName) => {
+  if (phase === 'INSUFFICIENT_DATA') return '데이터 부족';
   const phaseNumbers = {
     'PHASE_1': 1, 'PHASE_2': 2, 'PHASE_3': 3, 'PHASE_4': 4, 'PHASE_5': 5
   };
@@ -612,6 +617,8 @@ const saveToHistory = async (data) => {
       minus_di: data.minus_di,
       is_strong_uptrend: data.is_strong_uptrend,
       overbought_sell_blocked: data.overbought_sell_blocked,
+      entry_price: data.entry_price,
+      highest_price: data.highest_price,
       is_active: true
     };
 
@@ -760,7 +767,10 @@ const refreshHistory = async (forceRefresh = false) => {
       updateLastRefreshLabel(refreshData, false);
       loadPortfolioCashPlan();
 
-      alert(`${updatedCount}개 종목 갱신 완료`);
+      const errors = result.data.errors || [];
+      alert(errors.length
+        ? `${updatedCount}개 종목 상태 갱신 완료\n데이터 부족/실패 ${errors.length}개`
+        : `${updatedCount}개 종목 갱신 완료`);
     } else {
       const errorMsg = result.message || result.error || '알 수 없는 오류';
       alert(`갱신 실패: ${errorMsg}`);
@@ -978,7 +988,7 @@ const displayResult = (data) => {
           <div class="value">${formatNumber(data.current_price)}</div>
         </div>
         <div class="indicator-card">
-          <div class="label">MA55 / MA165</div>
+          <div class="label">MA${safeNum(window.SELL_STRATEGY_CONFIG?.shortMaPeriod)} / MA${safeNum(window.SELL_STRATEGY_CONFIG?.longMaPeriod)}</div>
           <div class="value">${formatNumber(data.ma_short)} / ${formatNumber(data.ma_long)}</div>
           <span class="status ${maStatus}">${data.is_death_cross ? '데드크로스' : '골든크로스'}</span>
         </div>

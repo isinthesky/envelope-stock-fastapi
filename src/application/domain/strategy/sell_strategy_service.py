@@ -32,6 +32,12 @@ from src.application.domain.strategy.dto import (
     SellStageEnum,
 )
 from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
+from src.application.domain.strategy.risk_contract import (
+    DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+    effective_peak_price,
+    is_peak_drawdown_stop_triggered,
+    peak_drawdown_ratio,
+)
 from src.application.domain.strategy.sell_rule_research_service import SellPeakRuleResearchService
 from src.application.domain.strategy.sell_score_rules import (
     ScoreRule,
@@ -638,7 +644,9 @@ class SellStrategyService:
         # RSI 계산 추가
         close_prices = df["close"].tolist()
         rsi_value = TechnicalIndicators.calculate_rsi(close_prices, period=14)
-        df["rsi"] = rsi_value if rsi_value is not None else 50.0
+        if rsi_value is None:
+            raise StrategyError(f"{symbol}: RSI 산출에 필요한 데이터 부족")
+        df["rsi"] = rsi_value
 
         # 2-1. 거래량 지표 계산 (ATR 포함)
         atr_value = self._calculate_atr(df, period=14)
@@ -662,9 +670,11 @@ class SellStrategyService:
         ctx.is_stoch_dead_cross = bool(stoch_data.get("is_stoch_dead_cross", False))
         ctx.stoch_cross_type = stoch_data.get("stoch_cross_type")
 
-        ctx.stoch_k = ctx.stoch_k_raw if ctx.stoch_k_raw is not None else 50
-        ctx.stoch_d = ctx.stoch_d_raw if ctx.stoch_d_raw is not None else 50
-        ctx.rsi = ctx.rsi_raw if ctx.rsi_raw is not None else 50
+        if ctx.stoch_k_raw is None or ctx.stoch_d_raw is None or ctx.rsi_raw is None:
+            raise StrategyError(f"{symbol}: 매도 지표 산출에 필요한 데이터 부족")
+        ctx.stoch_k = ctx.stoch_k_raw
+        ctx.stoch_d = ctx.stoch_d_raw
+        ctx.rsi = ctx.rsi_raw
 
         # === New: Compute simple sell for comparison/hybrid ===
         ctx.simple_sell_info = self.compute_simple_sell_signal(
@@ -771,13 +781,20 @@ class SellStrategyService:
         ctx.dynamic_rsi = rsi_overbought
         ctx.is_stop_loss_triggered = False
         ctx.is_take_profit_triggered = False
+        ctx.drawdown_from_high = peak_drawdown_ratio(
+            current_price=ctx.close,
+            entry_price=entry_price,
+            highest_price=highest_price,
+        )
+        ctx.is_stop_loss_triggered = is_peak_drawdown_stop_triggered(
+            current_price=ctx.close,
+            entry_price=entry_price,
+            highest_price=highest_price,
+            stop_ratio=DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+        )
 
         if entry_price is not None and entry_price > 0:
             ctx.profit_ratio = (ctx.close - entry_price) / entry_price
-
-            # 긴급 손절 체크
-            if ctx.profit_ratio <= self.dynamic_config.emergency_stop_ratio:
-                ctx.is_stop_loss_triggered = True
 
             # 익절 목표 체크
             if ctx.profit_ratio >= self.dynamic_config.high_profit_threshold:
@@ -821,6 +838,7 @@ class SellStrategyService:
             dynamic_rsi_threshold=ctx.dynamic_rsi,
             name=name,
             market=market,
+            is_stop_loss_triggered=ctx.is_stop_loss_triggered,
         )
         # 오버레이 단계강화는 아래 최종 단계(final_stage)에 '최대 1회'만 적용한다.
         # 여기(rule stage)서 중복 적용하면 end-to-end 2단계 상승이 되어 문서/테스트
@@ -870,10 +888,6 @@ class SellStrategyService:
             risk_combo_peak=bool(ctx.overlay_signals.get("risk_combo_peak", False)),
             risk_combo_extreme=bool(ctx.overlay_signals.get("risk_combo_extreme", False)),
         )
-
-        ctx.drawdown_from_high = None
-        if highest_price is not None and highest_price > 0:
-            ctx.drawdown_from_high = (highest_price - ctx.close) / highest_price
 
         final_stage = self.determine_final_stage(
             rule_stage=ctx.sell_stage,
@@ -950,6 +964,7 @@ class SellStrategyService:
             rsi_overbought=ctx.dynamic_rsi,
             ma_gap_ratio=ctx.ma_gap_ratio,
             profit_ratio=ctx.profit_ratio,
+            drawdown_from_high=ctx.drawdown_from_high,
             is_stop_loss_triggered=ctx.is_stop_loss_triggered,
             is_take_profit_triggered=ctx.is_take_profit_triggered,
         )
@@ -1006,6 +1021,11 @@ class SellStrategyService:
         market_credit_data = ctx.market_credit_data
         sell_score_result = ctx.sell_score_result
 
+        effective_highest = effective_peak_price(
+            current_price=ctx.close,
+            entry_price=entry_price,
+            highest_price=highest_price,
+        )
         return SellSignalAnalysisDTO(
             symbol=symbol,
             name=name,
@@ -1048,7 +1068,9 @@ class SellStrategyService:
             is_stop_loss_triggered=ctx.is_stop_loss_triggered,
             is_take_profit_triggered=ctx.is_take_profit_triggered,
             # 트레일링 스탑 관련
-            highest_price=Decimal(str(highest_price)) if highest_price else None,
+            highest_price=(
+                Decimal(str(effective_highest)) if effective_highest is not None else None
+            ),
             drawdown_from_high=(
                 round(ctx.drawdown_from_high, 4) if ctx.drawdown_from_high is not None else None
             ),
@@ -1603,6 +1625,7 @@ class SellStrategyService:
         rsi_overbought: float,
         ma_gap_ratio: float,
         profit_ratio: float | None = None,
+        drawdown_from_high: float | None = None,
         is_stop_loss_triggered: bool = False,
         is_take_profit_triggered: bool = False,
     ) -> list[str]:
@@ -1615,8 +1638,11 @@ class SellStrategyService:
         sell_reasons: list[str] = []
 
         # 긴급 손절 (최우선)
-        if is_stop_loss_triggered and profit_ratio is not None:
-            sell_reasons.append(f"손절 라인 도달 (수익률 {profit_ratio * 100:.1f}% <= -7%)")
+        if is_stop_loss_triggered:
+            drawdown_text = (
+                f"{drawdown_from_high * 100:.1f}%" if drawdown_from_high is not None else "15% 이상"
+            )
+            sell_reasons.append(f"손절 라인 도달 (보유 중 최고가 대비 {drawdown_text} 하락)")
             return sell_reasons
 
         # 데드크로스
@@ -1863,12 +1889,13 @@ class SellStrategyService:
         dynamic_rsi_threshold: float = 70.0,
         name: str | None = None,
         market: str | None = None,
+        is_stop_loss_triggered: bool = False,
     ) -> tuple[SellStageEnum, list[str]]:
         """
         비중축소 Stage 결정 (기존 Phase와 별도)
 
         우선순위:
-        1. 긴급 손절 (profit_ratio <= -7%) → EXIT_ALL
+        1. 최고가 대비 15% 손절 → EXIT_ALL
         2. 전량 청산 (데드크로스 + 거래량 급증) → EXIT_ALL
         3. 추세 붕괴 (데드크로스 + 극심한 과열) → EXIT_ALL
         4. sharp v1 수익 보호 (다중 상단 경고 정렬) → REDUCE
@@ -1884,8 +1911,8 @@ class SellStrategyService:
         reasons: list[str] = []
 
         # === 1순위: 긴급 손절 (최우선) ===
-        if profit_ratio is not None and profit_ratio <= -0.07:
-            reasons.append(f"긴급 손절 (수익률 {profit_ratio * 100:.1f}%)")
+        if is_stop_loss_triggered:
+            reasons.append("가격 손절 (보유 중 최고가 대비 15% 하락)")
             return SellStageEnum.EXIT_ALL, reasons
 
         # === 2순위: 추세 붕괴 - 전량 청산 ===
@@ -2018,12 +2045,20 @@ class SellStrategyService:
                 reasons.append(f"RSI 과매수 상태 (RSI={rsi:.1f}) — 하락 시작 미확인 (매도 보류)")
         # 참고: RSI < 70이면 이 블록 스킵
 
-        # 2. 기계적 손절 (#7): 진입가 하드 손절 + 장기추세(장기 MA) 이탈.
-        #    기존 '20일 고점 -15%' 고아 규칙 제거 — 85% 트레일링과 중복/오작동(회복장 조기청산).
-        if entry_price and current_price < entry_price * (1 - settings.sell_hard_stop_pct):
+        # 2. 기계적 손절 (#7): 보유 중 최고가 대비 하드 손절 + 장기추세 이탈.
+        if is_peak_drawdown_stop_triggered(
+            current_price=current_price,
+            entry_price=entry_price,
+            highest_price=highest_price,
+            stop_ratio=DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+        ):
             should_sell = True
-            dd = (entry_price - current_price) / entry_price
-            reasons.append(f"하드 손절: 진입가 대비 {dd:.1%} 하락")
+            dd = peak_drawdown_ratio(
+                current_price=current_price,
+                entry_price=entry_price,
+                highest_price=highest_price,
+            )
+            reasons.append(f"하드 손절: 보유 중 최고가 대비 {dd:.1%} 하락")
         if "ma_long" in df.columns and len(df) >= 1:
             ma_long_last = df["ma_long"].iloc[-1]
             if (
@@ -2119,3 +2154,20 @@ class SellStrategyService:
             "simple": simple,
             "hybrid_stage": final_stage,
         }
+
+    async def load_latest_close(self, symbol: str, *, force_refresh: bool = False) -> float:
+        """기술 지표 산출과 분리해 긴급 손절용 최신 종가를 확보한다."""
+        frame = await self._get_data_loader().load_ohlcv_dataframe(
+            symbol=symbol,
+            days=10,
+            interval="1d",
+            min_candles=1,
+            force_refresh=force_refresh,
+        )
+        if frame is None or frame.empty or "close" not in frame.columns:
+            raise StrategyError(f"{symbol}: 최신 가격 데이터 부족")
+        ordered = frame.sort_values("timestamp") if "timestamp" in frame.columns else frame
+        close = float(ordered.iloc[-1]["close"])
+        if close <= 0:
+            raise StrategyError(f"{symbol}: 최신 가격이 올바르지 않음")
+        return close

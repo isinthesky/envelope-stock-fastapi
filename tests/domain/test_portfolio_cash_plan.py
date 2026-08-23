@@ -1,5 +1,8 @@
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from src.application.domain.strategy.strategy_service import StrategyService
 
@@ -123,3 +126,130 @@ def test_build_portfolio_cash_plan_clamps_non_negative_urgency_for_hold_items() 
     assert result.actions[0].symbol == "HOLD"
     assert result.actions[0].urgency_score == 0.0
     assert result.market_risk_score == 0.0
+
+
+def test_insufficient_data_is_not_presented_as_hold() -> None:
+    service = StrategyService(session=None)
+    histories = [
+        SimpleNamespace(
+            symbol="NEW",
+            name="New Listing",
+            market="KOSPI",
+            sell_phase="INSUFFICIENT_DATA",
+            sell_reasons=["기술 지표 산출에 필요한 데이터 부족"],
+            entry_price=Decimal("100"),
+            highest_price=Decimal("102"),
+            current_price=Decimal("98"),
+        ),
+    ]
+
+    result = service.build_portfolio_cash_plan(histories)
+
+    action = result.actions[0]
+    assert action.analysis_status == "INSUFFICIENT_DATA"
+    assert action.sell_stage == "INSUFFICIENT_DATA"
+    assert action.action == "분석 보류"
+    assert action.suggested_sell_ratio == 0.0
+
+
+def test_emergency_stop_precedes_insufficient_indicator_data() -> None:
+    service = StrategyService(session=None)
+    histories = [
+        SimpleNamespace(
+            symbol="LOSS",
+            name="Large Loss",
+            market="KOSPI",
+            sell_phase="INSUFFICIENT_DATA",
+            sell_reasons=["기술 지표 산출에 필요한 데이터 부족"],
+            entry_price=Decimal("100"),
+            highest_price=Decimal("120"),
+            current_price=Decimal("102"),
+        ),
+    ]
+
+    result = service.build_portfolio_cash_plan(histories)
+
+    action = result.actions[0]
+    assert action.analysis_status == "INSUFFICIENT_DATA"
+    assert action.sell_stage == "EXIT_ALL"
+    assert action.action == "전량 현금화"
+    assert action.suggested_sell_ratio == 1.0
+    assert any("최고가 대비 15% 손절" in reason for reason in action.reasons)
+
+
+def _cash_plan_history() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=1,
+        symbol="LOSS",
+        name="Loss",
+        entry_price=Decimal("100"),
+        highest_price=Decimal("120"),
+        current_price=Decimal("110"),
+        sell_reasons="[]",
+        is_death_cross=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cash_plan_uses_latest_close_when_full_analysis_fails() -> None:
+    model = _cash_plan_history()
+    repo = SimpleNamespace(
+        get_by_type=AsyncMock(return_value=[model]),
+        raise_highest_price=AsyncMock(),
+    )
+    service = StrategyService(analysis_repo=repo)
+    service._universe_repo = lambda session: SimpleNamespace(
+        get_by_symbol=AsyncMock(return_value=None)
+    )
+
+    with patch(
+        "src.application.domain.strategy.sell_strategy_service.SellStrategyService"
+    ) as sell_cls:
+        sell = sell_cls.return_value
+        sell.analyze_sell_signal = AsyncMock(side_effect=RuntimeError("indicators failed"))
+        sell.load_latest_close = AsyncMock(return_value=100.0)
+
+        result = await service.get_portfolio_cash_plan.__wrapped__(service, None)
+
+    assert result.actions[0].sell_stage == "EXIT_ALL"
+    assert result.actions[0].profit_ratio == 0.0
+    repo.raise_highest_price.assert_awaited_once_with(1, Decimal("120.0"), session=None)
+
+
+@pytest.mark.asyncio
+async def test_cash_plan_persists_new_live_peak_atomically() -> None:
+    model = _cash_plan_history()
+    repo = SimpleNamespace(
+        get_by_type=AsyncMock(return_value=[model]),
+        raise_highest_price=AsyncMock(),
+    )
+    service = StrategyService(analysis_repo=repo)
+    service._universe_repo = lambda session: SimpleNamespace(
+        get_by_symbol=AsyncMock(return_value=None)
+    )
+    live = SimpleNamespace(
+        symbol="LOSS",
+        name="Loss",
+        final_stage="HOLD",
+        sell_stage="HOLD",
+        sell_stage_reasons=[],
+        sell_reasons=[],
+        entry_price=Decimal("100"),
+        highest_price=Decimal("140"),
+        current_price=Decimal("140"),
+        is_death_cross=False,
+        is_volume_sell_signal=False,
+        is_volume_spike=False,
+        is_volume_peak=False,
+        overbought_sell_blocked=False,
+        volume_ratio=1.0,
+    )
+
+    with patch(
+        "src.application.domain.strategy.sell_strategy_service.SellStrategyService"
+    ) as sell_cls:
+        sell_cls.return_value.analyze_sell_signal = AsyncMock(return_value=live)
+
+        await service.get_portfolio_cash_plan.__wrapped__(service, None)
+
+    repo.raise_highest_price.assert_awaited_once_with(1, Decimal("140"), session=None)

@@ -165,7 +165,7 @@
 <!-- 탭 3: 백테스트 / 룰셋 -->
 <div id="panel-research" class="sell-panel" role="tabpanel" aria-label="백테스트 / 룰셋" hidden>
   <section class="universe-backtest-section">
-    <h2>유니버스 백테스트 (공격형 매도 v1)</h2>
+    <h2>유니버스 백테스트 (공격형 중단기 스윙 매도 v3)</h2>
     <p>현재 종목 유니버스를 대상으로 골든크로스 진입 + 공격형 중단기 스윙 매도 규칙의 승률/수익률을 집계합니다.</p>
     <div class="row">
       <label>시장</label>
@@ -268,6 +268,10 @@
 {% endblock %}
 
 {% block extra_scripts %}
+  window.SELL_STRATEGY_CONFIG = {
+    shortMaPeriod: {{ gc_short_ma }},
+    longMaPeriod: {{ gc_long_ma }}
+  };
   // 매도 전략 탭 (관심사 분리): in-page show/hide + WAI-ARIA roving tabindex
   const sellTabs = Array.from(document.querySelectorAll(".sell-tab"));
   const sellPanels = Array.from(document.querySelectorAll(".sell-panel"));

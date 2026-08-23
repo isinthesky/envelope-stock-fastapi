@@ -9,6 +9,7 @@ config는 코드에서 관리하며 유저에게 노출하지 않는다.
 from dataclasses import dataclass, field
 
 from src.application.domain.strategy.dto import GoldenCrossConfigDTO
+from src.application.domain.strategy.risk_contract import DEFAULT_PEAK_DRAWDOWN_STOP_RATIO
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ STRATEGY_PRESETS: dict[str, StrategyPreset] = {
     "gc_aggressive": StrategyPreset(
         preset_id="gc_aggressive",
         name="골든크로스 공격형",
-        description="넓은 MA갭 허용, 높은 손절/익절 비율. 변동성이 큰 종목에 적합.",
+        description="넓은 MA갭 허용, 높은 익절 비율. 변동성이 큰 종목에 적합.",
         strategy_type="golden_cross",
         config=GoldenCrossConfigDTO(
             stochastic_config={
@@ -53,7 +54,7 @@ STRATEGY_PRESETS: dict[str, StrategyPreset] = {
             },
             risk_config={
                 "use_stop_loss": True,
-                "stop_loss_ratio": -0.10,
+                "stop_loss_ratio": -DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
                 "use_take_profit": True,
                 "take_profit_ratio": 0.30,
                 "use_trailing_stop": True,
@@ -76,7 +77,7 @@ STRATEGY_PRESETS: dict[str, StrategyPreset] = {
     "gc_conservative": StrategyPreset(
         preset_id="gc_conservative",
         name="골든크로스 보수형",
-        description="좁은 MA갭, 빠른 손절, 모멘텀 전환 필수. 안전한 진입을 선호하는 투자자용.",
+        description="좁은 MA갭, 모멘텀 전환 필수. 안전한 진입을 선호하는 투자자용.",
         strategy_type="golden_cross",
         config=GoldenCrossConfigDTO(
             stochastic_config={
@@ -90,7 +91,7 @@ STRATEGY_PRESETS: dict[str, StrategyPreset] = {
             },
             risk_config={
                 "use_stop_loss": True,
-                "stop_loss_ratio": -0.05,
+                "stop_loss_ratio": -DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
                 "use_take_profit": True,
                 "take_profit_ratio": 0.15,
                 "use_trailing_stop": True,

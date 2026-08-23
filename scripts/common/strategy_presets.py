@@ -9,7 +9,8 @@ Strategy Presets - 전략 설정 프리셋 모듈
 from decimal import Decimal
 
 from src.application.domain.backtest.dto import BacktestConfigDTO
-from src.application.domain.strategy.dto import GoldenCrossConfigDTO
+from src.application.domain.strategy.dto import GoldenCrossConfigDTO, GoldenCrossMAConfig
+from src.application.domain.strategy.risk_contract import DEFAULT_PEAK_DRAWDOWN_STOP_RATIO
 
 
 class StrategyPresets:
@@ -28,17 +29,15 @@ class StrategyPresets:
 
         - MA55 / MA165 (약 3개월 / 8개월)
         - Stochastic: 14, 3, 3
-        - 손절: -5%, 익절: +10%
+        - 최고가 손절: -15%, 익절: +10%
         """
         return GoldenCrossConfigDTO(
-            short_ma_period=55,
-            long_ma_period=165,
-            stochastic_k=14,
-            stochastic_d=3,
-            stochastic_smooth=3,
-            stop_loss_ratio=-0.05,
-            take_profit_ratio=0.10,
-            allocation_ratio=0.1,
+            ma_config=GoldenCrossMAConfig(short_period=55, long_period=165),
+            risk_config={
+                "stop_loss_ratio": -DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+                "take_profit_ratio": 0.10,
+            },
+            position={"allocation_ratio": 0.1},
         )
 
     @staticmethod
@@ -50,14 +49,12 @@ class StrategyPresets:
         - 빠른 신호, 잦은 거래
         """
         return GoldenCrossConfigDTO(
-            short_ma_period=20,
-            long_ma_period=60,
-            stochastic_k=14,
-            stochastic_d=3,
-            stochastic_smooth=3,
-            stop_loss_ratio=-0.03,
-            take_profit_ratio=0.07,
-            allocation_ratio=0.08,
+            ma_config=GoldenCrossMAConfig(short_period=20, long_period=60),
+            risk_config={
+                "stop_loss_ratio": -DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+                "take_profit_ratio": 0.07,
+            },
+            position={"allocation_ratio": 0.08},
         )
 
     @staticmethod
@@ -69,14 +66,12 @@ class StrategyPresets:
         - 안정적, 장기 투자
         """
         return GoldenCrossConfigDTO(
-            short_ma_period=60,
-            long_ma_period=200,
-            stochastic_k=14,
-            stochastic_d=3,
-            stochastic_smooth=3,
-            stop_loss_ratio=-0.07,
-            take_profit_ratio=0.15,
-            allocation_ratio=0.1,
+            ma_config=GoldenCrossMAConfig(short_period=60, long_period=200),
+            risk_config={
+                "stop_loss_ratio": -DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+                "take_profit_ratio": 0.15,
+            },
+            position={"allocation_ratio": 0.1},
         )
 
     # ==================== 백테스트 설정 ====================

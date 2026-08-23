@@ -31,7 +31,15 @@ MEMO_ROW = "MEMO-BROADCAST-1"
 RAW_ACTIVE_SYMBOLS = [RAW_PLAIN, RAW_PADDED, MEMO_ROW]
 
 
-def _make_history_model(model_id: int, raw_symbol: str, analysis_type: str, name=None):
+def _make_history_model(
+    model_id: int,
+    raw_symbol: str,
+    analysis_type: str,
+    name=None,
+    *,
+    entry_price: Decimal | None = None,
+    highest_price: Decimal | None = None,
+):
     """_history_to_dto가 요구하는 속성을 갖춘 AnalysisHistoryModel 대역"""
     return SimpleNamespace(
         id=model_id,
@@ -53,7 +61,8 @@ def _make_history_model(model_id: int, raw_symbol: str, analysis_type: str, name
         sell_phase="NONE",
         sell_reasons=None,
         analyzed_at=datetime(2026, 7, 20, 9, 30),
-        entry_price=None,
+        entry_price=entry_price,
+        highest_price=highest_price,
         note=None,
         is_active=True,
         candle_count=200,
@@ -95,21 +104,29 @@ def _make_sell_result():
         market_credit_label=None,
         is_market_credit_overheated=None,
         candle_count=200,
+        highest_price=Decimal("72000"),
     )
 
 
 def _make_history_repo(active_symbols: list[str], models_by_raw: dict):
     """AnalysisHistoryRepository 대역 (DI로 서비스에 주입)"""
     models_by_id = {m.id: m for m in models_by_raw.values()}
+
+    async def raise_highest_price(history_id, candidate, *args, **kwargs):
+        _ = args, kwargs
+        model = models_by_id[history_id]
+        if model.highest_price is None or candidate > model.highest_price:
+            model.highest_price = candidate
+        return model
+
     return SimpleNamespace(
         get_active_symbols=AsyncMock(return_value=list(active_symbols)),
         get_latest_by_symbol=AsyncMock(
             side_effect=lambda symbol, *a, **k: models_by_raw.get(symbol)
         ),
         update_by_id=AsyncMock(return_value=None),
-        get_by_id=AsyncMock(
-            side_effect=lambda history_id, *a, **k: models_by_id.get(history_id)
-        ),
+        raise_highest_price=AsyncMock(side_effect=raise_highest_price),
+        get_by_id=AsyncMock(side_effect=lambda history_id, *a, **k: models_by_id.get(history_id)),
     )
 
 
@@ -168,6 +185,8 @@ async def test_sell_refresh_uses_raw_for_db_and_stripped_for_external():
     analyze_calls = [c.kwargs for c in sell_service.analyze_sell_signal.await_args_list]
     assert [c["symbol"] for c in analyze_calls] == [STRIPPED, STRIPPED]
     assert all(c["force_refresh"] is True for c in analyze_calls)
+    assert all(c["entry_price"] is None for c in analyze_calls)
+    assert all(c["highest_price"] is None for c in analyze_calls)
 
     # 3) 두 행 모두 갱신 경로 통과 (메모 행 제외)
     update_calls = history_repo.update_by_id.await_args_list
@@ -209,16 +228,12 @@ async def test_buy_refresh_uses_raw_for_db_and_stripped_for_scan():
 
     with (
         patch.object(strategy_service_module, "StockUniverseRepository") as universe_cls,
-        patch(
-            "src.application.domain.strategy.buy_strategy_service.BuyStrategyService"
-        ) as buy_cls,
+        patch("src.application.domain.strategy.buy_strategy_service.BuyStrategyService") as buy_cls,
     ):
         universe_repo = universe_cls.return_value
         universe_repo.get_by_symbol = AsyncMock(return_value=None)
         buy_service = buy_cls.return_value
-        buy_service.scan_symbols = AsyncMock(
-            return_value=SimpleNamespace(stocks=[stock_data])
-        )
+        buy_service.scan_symbols = AsyncMock(return_value=SimpleNamespace(stocks=[stock_data]))
 
         result = await service.refresh_analysis_history(session, "buy")
 
@@ -252,9 +267,7 @@ async def test_buy_refresh_uses_raw_for_db_and_stripped_for_scan():
 @pytest.mark.asyncio
 async def test_refresh_with_only_memo_rows_returns_early_with_error():
     """메모 행만 있으면 루프 진입 없이 조기 반환한다."""
-    history_repo = _make_history_repo(
-        ["MEMO-BROADCAST-1", "HALLOWEEN-STRAT"], models_by_raw={}
-    )
+    history_repo = _make_history_repo(["MEMO-BROADCAST-1", "HALLOWEEN-STRAT"], models_by_raw={})
     service, session = _make_service(history_repo)
 
     with (
@@ -298,9 +311,62 @@ async def test_sell_refresh_error_labels_use_raw_repr():
         sell_service.analyze_sell_signal = AsyncMock(
             side_effect=[_make_sell_result(), RuntimeError("boom")]
         )
+        sell_service.load_latest_close = AsyncMock(return_value=70000.0)
 
         result = await service.refresh_analysis_history(session, "sell")
 
-    assert result.updated_count == 1
+    # 실패 행도 INSUFFICIENT_DATA 상태로 영속 갱신되므로 처리 건수에 포함한다.
+    assert result.updated_count == 2
     # repr 이스케이프로 공백 변형 행이 그대로 식별된다
     assert result.errors == [f"{RAW_PADDED!r}: boom"]
+
+
+@pytest.mark.asyncio
+async def test_sell_refresh_passes_entry_price_and_persists_insufficient_data_state():
+    """진입가는 재분석에 전달하고, 실패는 HOLD가 아닌 데이터 부족 상태로 남긴다."""
+    model = _make_history_model(
+        21,
+        RAW_PLAIN,
+        "sell",
+        name="삼성전자",
+        entry_price=Decimal("100000"),
+        highest_price=Decimal("120000"),
+    )
+    # 저장 가격은 -8.3%지만 오늘 최신가는 -16.7%: 실패 시에도 당일 손절을 보존한다.
+    model.current_price = Decimal("110000")
+    history_repo = _make_history_repo([RAW_PLAIN], {RAW_PLAIN: model})
+    service, session = _make_service(history_repo)
+
+    async def update_model(_id, **kwargs):
+        for key, value in kwargs.items():
+            if key != "session":
+                setattr(model, key, value)
+
+    history_repo.update_by_id.side_effect = update_model
+
+    with (
+        patch.object(strategy_service_module, "StockUniverseRepository") as universe_cls,
+        patch(
+            "src.application.domain.strategy.sell_strategy_service.SellStrategyService"
+        ) as sell_cls,
+    ):
+        universe_cls.return_value.get_by_symbol = AsyncMock(return_value=None)
+        sell_service = sell_cls.return_value
+        sell_service.analyze_sell_signal = AsyncMock(side_effect=RuntimeError("candles missing"))
+        sell_service.load_latest_close = AsyncMock(return_value=100000.0)
+
+        result = await service.refresh_analysis_history(session, "sell")
+
+    sell_service.analyze_sell_signal.assert_awaited_once_with(
+        symbol=RAW_PLAIN,
+        entry_price=100000.0,
+        highest_price=120000.0,
+        force_refresh=True,
+    )
+    assert model.sell_phase == "INSUFFICIENT_DATA"
+    assert model.current_price == Decimal("100000")
+    assert result.updated_count == 1
+    assert result.items[0].analysis_status == "INSUFFICIENT_DATA"
+    assert result.items[0].sell_stage == "EXIT_ALL"
+    assert result.items[0].sell_stage_name == "전량 청산"
+    assert result.errors == [f"{RAW_PLAIN!r}: candles missing"]

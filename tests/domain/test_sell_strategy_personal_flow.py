@@ -1,6 +1,8 @@
 import pandas as pd
 import pytest
 
+from src.application.common.exceptions import StrategyError
+from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.strategy.dto import SellPhaseEnum, SellScoreResultDTO, SellStageEnum
 from src.application.domain.strategy.sell_strategy_service import SellStrategyService
 from src.settings.sell_score_settings import SellScoreSettings
@@ -76,6 +78,23 @@ def _stub_neutral_sell_dependencies(
 
 async def _async_none():
     return None
+
+
+@pytest.mark.asyncio
+async def test_missing_rsi_is_not_replaced_with_neutral_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SellStrategyService(session=None)
+    monkeypatch.setattr(service, "_get_data_loader", lambda: _DummySellSignalDataLoader())
+    monkeypatch.setattr(TechnicalIndicators, "calculate_rsi", lambda *args, **kwargs: None)
+
+    with pytest.raises(StrategyError, match="RSI 산출에 필요한 데이터 부족"):
+        await service._load_analysis_context(
+            symbol="005930",
+            entry_price=None,
+            highest_price=None,
+            force_refresh=False,
+        )
 
 
 def test_personal_flow_overheated_when_recent_buying_is_concentrated() -> None:
@@ -272,6 +291,49 @@ async def test_analyze_sell_signal_reflects_trailing_stop_in_final_stage(
     assert result.final_ratio_min == 1.0
     assert result.final_ratio_max == 1.0
     assert any("트레일링 스탑 발동" in reason for reason in result.sell_stage_reasons)
+
+
+async def test_peak_drawdown_stop_exits_even_when_position_is_profitable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SellStrategyService(session=None)
+    _stub_neutral_sell_dependencies(service, monkeypatch)
+
+    result = await service.analyze_sell_signal(
+        symbol="005930",
+        entry_price=90.0,
+        highest_price=120.0,
+        use_scoring=False,
+    )
+
+    assert result.profit_ratio == pytest.approx(0.1111, abs=0.0001)
+    assert result.drawdown_from_high == pytest.approx(0.1667, abs=0.0001)
+    assert result.is_stop_loss_triggered is True
+    assert result.final_stage == SellStageEnum.EXIT_ALL
+    assert any("최고가 대비 15%" in reason for reason in result.sell_stage_reasons)
+
+
+async def test_analysis_returns_monotonically_updated_highest_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SellStrategyService(session=None)
+    _stub_neutral_sell_dependencies(service, monkeypatch)
+
+    new_high = await service.analyze_sell_signal(
+        symbol="005930",
+        entry_price=90.0,
+        highest_price=95.0,
+        use_scoring=False,
+    )
+    after_pullback = await service.analyze_sell_signal(
+        symbol="005930",
+        entry_price=90.0,
+        highest_price=float(new_high.highest_price),
+        use_scoring=False,
+    )
+
+    assert new_high.highest_price == 100
+    assert after_pullback.highest_price == 100
 
 
 async def test_overlay_stage_upgrade_applied_at_most_once_end_to_end(

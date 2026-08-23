@@ -17,13 +17,13 @@ from src.application.domain.backtest.dto import (
     DailyStatsDTO,
     TradeDTO,
 )
-from src.application.domain.backtest.order_manager import BacktestOrderManager
-from src.application.domain.backtest.position_manager import Position, PositionManager
-from src.application.domain.backtest.result_builder import build_backtest_result
 from src.application.domain.backtest.generators import (
     BaseSignalGenerator,
     create_signal_generator,
 )
+from src.application.domain.backtest.order_manager import BacktestOrderManager
+from src.application.domain.backtest.position_manager import Position, PositionManager
+from src.application.domain.backtest.result_builder import build_backtest_result
 from src.application.domain.strategy.dto import StrategyConfigDTO
 from src.application.domain.strategy.strategy_contract import GoldenCrossRiskExitReason
 
@@ -278,9 +278,9 @@ class BacktestEngine:
         breakeven_activation = self.strategy_params.get("breakeven_activation", 0.06)
         max_hold_days = self.strategy_params.get("max_hold_days", 60)
 
-        if risk_config.use_atr_trailing_stop:
+        if risk_config.use_atr_stop_loss or risk_config.use_atr_trailing_stop:
             current_atr = self._calculate_current_atr()
-            if current_atr:
+            if current_atr is not None:
                 self.position_manager.update_position_atr(self.symbol, current_atr)
 
         for position in list(self.position_manager.get_positions(self.symbol)):

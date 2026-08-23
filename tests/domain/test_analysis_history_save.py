@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -33,9 +34,13 @@ class _FakeAnalysisRepo:
             is_stoch_overbought=kwargs.get("is_stoch_overbought"),
             is_rsi_overbought=kwargs.get("is_rsi_overbought"),
             sell_phase=kwargs.get("sell_phase"),
+            sell_stage=kwargs.get("sell_stage"),
+            sell_ratio_min=kwargs.get("sell_ratio_min"),
+            sell_ratio_max=kwargs.get("sell_ratio_max"),
             sell_reasons=kwargs.get("sell_reasons"),
             analyzed_at=kwargs["analyzed_at"],
             entry_price=kwargs.get("entry_price"),
+            highest_price=kwargs.get("highest_price"),
             note=kwargs.get("note"),
             is_active=kwargs.get("is_active"),
             candle_count=kwargs.get("candle_count"),
@@ -55,8 +60,12 @@ async def test_save_analysis_history_persists_entry_price_note_and_candle_count(
         name="삼성전자",
         current_price=Decimal("65000"),
         sell_phase="PHASE_4",
+        sell_stage="REDUCE_2",
+        sell_ratio_min=0.3,
+        sell_ratio_max=0.4,
         sell_reasons=["데드크로스 발생"],
         entry_price=Decimal("70000"),
+        highest_price=Decimal("72000"),
         note="regression",
         is_active=True,
         candle_count=300,
@@ -66,11 +75,57 @@ async def test_save_analysis_history_persists_entry_price_note_and_candle_count(
 
     assert repo.create_kwargs is not None
     assert repo.create_kwargs["entry_price"] == Decimal("70000")
+    assert repo.create_kwargs["highest_price"] == Decimal("72000")
+    assert repo.create_kwargs["sell_stage"] == "REDUCE_2"
+    assert repo.create_kwargs["sell_ratio_min"] == 0.3
+    assert repo.create_kwargs["sell_ratio_max"] == 0.4
     assert repo.create_kwargs["note"] == "regression"
     assert repo.create_kwargs["candle_count"] == 300
     assert result.entry_price == Decimal("70000")
+    assert result.highest_price == Decimal("72000")
     assert result.note == "regression"
     assert result.candle_count == 300
+
+
+@pytest.mark.asyncio
+async def test_sell_history_initializes_peak_when_client_omits_it() -> None:
+    repo = _FakeAnalysisRepo()
+    service = StrategyService(analysis_repo=repo)
+    dto = AnalysisHistoryCreateDTO(
+        analysis_type="sell",
+        symbol="005930",
+        current_price=Decimal("65000"),
+        entry_price=Decimal("70000"),
+    )
+
+    result = await service.save_analysis_history.__wrapped__(service, None, dto)
+
+    assert repo.create_kwargs["highest_price"] == Decimal("70000.0")
+    assert result.highest_price == Decimal("70000.0")
+
+
+@pytest.mark.asyncio
+async def test_entry_price_increase_atomically_raises_peak() -> None:
+    existing = SimpleNamespace(
+        current_price=Decimal("65"),
+        highest_price=Decimal("72"),
+    )
+    repo = SimpleNamespace(
+        get_by_id=AsyncMock(side_effect=[existing, existing]),
+        update_by_id=AsyncMock(),
+        raise_highest_price=AsyncMock(),
+    )
+    service = StrategyService(analysis_repo=repo)
+    service._history_to_dto = lambda model, sell_result=None: model
+
+    await service.update_analysis_history.__wrapped__(
+        service,
+        None,
+        1,
+        entry_price=Decimal("80"),
+    )
+
+    repo.raise_highest_price.assert_awaited_once_with(1, Decimal("80.0"), session=None)
 
 
 def test_history_to_dto_includes_candle_count_without_sell_result() -> None:
@@ -97,6 +152,7 @@ def test_history_to_dto_includes_candle_count_without_sell_result() -> None:
         sell_reasons='["데드크로스 발생"]',
         analyzed_at=now,
         entry_price=Decimal("70000"),
+        highest_price=Decimal("72000"),
         note="dto regression",
         is_active=True,
         candle_count=300,
@@ -108,4 +164,5 @@ def test_history_to_dto_includes_candle_count_without_sell_result() -> None:
 
     assert result.candle_count == 300
     assert result.entry_price == Decimal("70000")
+    assert result.highest_price == Decimal("72000")
     assert result.note == "dto regression"

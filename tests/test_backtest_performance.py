@@ -19,6 +19,9 @@ from src.application.domain.strategy.dto import (
     RiskManagementConfig,
     StrategyConfigDTO,
 )
+from src.application.domain.strategy.risk_contract import (
+    DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+)
 
 
 class TestBacktestPerformance:
@@ -31,7 +34,7 @@ class TestBacktestPerformance:
             position=PositionConfig(allocation_ratio=0.1, max_position_count=1),
             risk_management=RiskManagementConfig(
                 use_stop_loss=True,
-                stop_loss_ratio=-0.05,
+                stop_loss_ratio=-DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
                 use_take_profit=True,
                 take_profit_ratio=0.10,
                 use_trailing_stop=False,
@@ -260,13 +263,15 @@ class TestBacktestPerformance:
 
         print("\n[트렌드별 성능 비교] 100일 데이터")
         for trend, stats in results.items():
-            print(f"  {trend:10s}: {stats['time']:.3f}초, "
-                  f"거래 {stats['trades']:2d}회, "
-                  f"수익률 {stats['return']:+6.2f}%")
+            print(
+                f"  {trend:10s}: {stats['time']:.3f}초, "
+                f"거래 {stats['trades']:2d}회, "
+                f"수익률 {stats['return']:+6.2f}%"
+            )
 
         # 모든 트렌드에서 1초 이내 처리
         for trend, stats in results.items():
-            assert stats['time'] < 1.0, f"{trend} trend too slow"
+            assert stats["time"] < 1.0, f"{trend} trend too slow"
 
     async def test_memory_efficiency(self):
         """메모리 효율성 테스트"""
@@ -296,7 +301,7 @@ class TestBacktestPerformance:
         snapshot_end = tracemalloc.take_snapshot()
 
         # 메모리 차이 계산
-        top_stats = snapshot_end.compare_to(snapshot_start, 'lineno')
+        top_stats = snapshot_end.compare_to(snapshot_start, "lineno")
         total_memory = sum(stat.size_diff for stat in top_stats)
 
         tracemalloc.stop()
@@ -307,8 +312,9 @@ class TestBacktestPerformance:
         print(f"  - 일평균 메모리: {total_memory / 365 / 1024:.2f} KB")
 
         # 메모리 효율성 검증 (365일 백테스트가 100MB 이하)
-        assert total_memory < 100 * 1024 * 1024, \
-            f"Too much memory used: {total_memory / 1024 / 1024:.2f}MB"
+        assert (
+            total_memory < 100 * 1024 * 1024
+        ), f"Too much memory used: {total_memory / 1024 / 1024:.2f}MB"
 
     async def test_concurrent_backtests(self):
         """동시 백테스트 실행 성능 테스트"""
@@ -340,8 +346,10 @@ class TestBacktestPerformance:
         print(f"  - 총 처리 시간: {elapsed:.3f}초")
         print(f"  - 종목당 평균: {elapsed/3:.3f}초")
         for i, result in enumerate(results):
-            print(f"  - 종목{i+1}: 거래 {result.total_trades}회, "
-                  f"수익률 {result.total_return:+.2f}%")
+            print(
+                f"  - 종목{i+1}: 거래 {result.total_trades}회, "
+                f"수익률 {result.total_return:+.2f}%"
+            )
 
         # 동시 실행이 순차 실행보다 효율적인지 확인
         # (완벽한 병렬화는 아니지만 어느 정도 이득이 있어야 함)

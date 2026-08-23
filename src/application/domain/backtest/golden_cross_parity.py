@@ -109,6 +109,7 @@ class GoldenCrossParityReplay:
             ma_long=Decimal(str(row["ma_long"])) if pd.notna(row["ma_long"]) else Decimal("0"),
             stoch_k=float(row["stoch_k"]) if pd.notna(row["stoch_k"]) else 50.0,
             stoch_d=float(row["stoch_d"]) if pd.notna(row["stoch_d"]) else 50.0,
+            atr=(Decimal(str(row["atr"])) if "atr" in row.index and pd.notna(row["atr"]) else None),
         )
 
     # ==================== 시그널 스케줄(SSOT) ====================

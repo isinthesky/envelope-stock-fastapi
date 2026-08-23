@@ -110,7 +110,7 @@ async def run(n_symbols: int, window: int, rsi_th: float, drop_pct: float, lookb
                     )
                     if sig["should_sell"] or t == len(df) - 1:
                         closed.append((cl[t] - entry_p) / entry_p)
-                        pos = (t, entry_p, high) if False else None
+                        pos = None
 
         wins = sum(1 for p in closed if p > 0)
         return {

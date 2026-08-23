@@ -36,7 +36,7 @@ flowchart LR
 | 12:20 → 12:30 | NotificationScheduler | 매도 리스크 갱신 → 매도 알림 |
 | **15:35** | StrategyScheduler | **활성 골든크로스 전략 실주문 실행 (`dry_run=False`)** |
 
-> ⚠️ 15:35 실주문은 `strategies` 테이블에 **활성 전략이 있을 때만** 발생합니다. 현재는 활성 전략이 없어 안전하지만 **kill-switch가 없습니다.**
+> ⚠️ 15:35 실주문은 활성 전략이 있고 `STRATEGY_LIVE_TRADING_ENABLED=true`일 때만 발생합니다. 마스터 스위치 기본값은 `false`이며 검증 전에는 변경하지 않습니다.
 
 ---
 

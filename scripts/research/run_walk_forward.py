@@ -52,11 +52,12 @@ from src.application.domain.backtest.walk_forward_windows import generate_rollin
 from src.application.domain.strategy.dto import (
     GoldenCrossConfigDTO,
     GoldenCrossMAConfig,
+    GoldenCrossRiskConfig,
     MAGapConfig,
     StochasticConfig,
 )
 
-REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
+REPORTS_DIR = Path(__file__).resolve().parents[2] / "reports"
 
 
 # ==================== 후보 그리드 ====================
@@ -103,6 +104,77 @@ def build_candidates(
             "loose_entry", oversold=30.0, recovery=25.0, max_gap=8.0, regime_filter=regime_filter
         ),
     ]
+
+
+def build_exit_ablation_candidates() -> list[WalkForwardCandidate]:
+    """E1 winner-capping 규칙을 한 번에 하나씩 제거한 사전 정의 후보군."""
+    base = GoldenCrossConfigDTO(ma_config=GoldenCrossMAConfig(short_period=55, long_period=165))
+    return [
+        WalkForwardCandidate("exit_baseline", base),
+        WalkForwardCandidate(
+            "no_fixed_take_profit",
+            base.model_copy(
+                update={
+                    "risk_config": base.risk_config.model_copy(update={"use_take_profit": False})
+                }
+            ),
+        ),
+        WalkForwardCandidate(
+            "no_trailing_stop",
+            base.model_copy(
+                update={
+                    "risk_config": base.risk_config.model_copy(update={"use_trailing_stop": False})
+                }
+            ),
+        ),
+        WalkForwardCandidate(
+            "max_hold_180d",
+            base.model_copy(
+                update={
+                    "risk_config": GoldenCrossRiskConfig(
+                        **{
+                            **base.risk_config.model_dump(),
+                            "max_hold_days": 180,
+                        }
+                    )
+                }
+            ),
+        ),
+        WalkForwardCandidate(
+            "atr_dynamic_stop_2x",
+            base.model_copy(
+                update={
+                    "risk_config": base.risk_config.model_copy(
+                        update={"use_atr_stop_loss": True, "atr_stop_loss_multiplier": 2.0}
+                    )
+                }
+            ),
+        ),
+        WalkForwardCandidate(
+            "atr_trailing_2x",
+            base.model_copy(
+                update={
+                    "risk_config": base.risk_config.model_copy(
+                        update={
+                            "use_atr_trailing_stop": True,
+                            "atr_trailing_multiplier": 2.0,
+                        }
+                    )
+                }
+            ),
+        ),
+    ]
+
+
+def _load_sector_map(path: str | None) -> dict[str, str]:
+    if path is None:
+        return {}
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not all(
+        isinstance(symbol, str) and isinstance(sector, str) for symbol, sector in raw.items()
+    ):
+        raise SystemExit("--sector-map must be a JSON object: {symbol: sector}")
+    return raw
 
 
 # A/B 진입 국면 필터 변형: 무필터 vs MA200 vs ADX vs MA200+ADX
@@ -233,10 +305,16 @@ async def run(args) -> None:
         flush=True,
     )
 
-    candidates = build_candidates()
+    candidates = (
+        build_exit_ablation_candidates()
+        if args.experiment == "exit-ablation"
+        else build_candidates()
+    )
     constraints = PortfolioConstraints(
         max_positions=args.max_positions,
         allocation_ratio=args.alloc,  # None이면 config 값 사용
+        max_sector_weight=args.max_sector_weight,
+        sector_map=_load_sector_map(args.sector_map),
     )
     backtest_config = BacktestConfigDTO(
         execution_timing="same_close",  # 라이브 15:35 종가주문 정합
@@ -288,6 +366,8 @@ async def run(args) -> None:
                 "constraints": {
                     "max_positions": args.max_positions,
                     "allocation_ratio": args.alloc,
+                    "max_sector_weight": args.max_sector_weight,
+                    "sector_map": args.sector_map,
                 },
                 "use_tax": not args.no_tax,
                 "oos": report.oos,
@@ -524,6 +604,85 @@ async def run_regime_ab(args) -> None:
     print(f"[wf-ab] json: {json_path}", flush=True)
 
 
+async def run_sector_cap_ab(args) -> None:
+    """동일 OOS folds에서 섹터 캡 OFF/ON의 Sharpe·MDD를 직접 비교한다."""
+    sector_map = _load_sector_map(args.sector_map)
+    if not sector_map:
+        raise SystemExit("--sector-cap-ab requires a non-empty --sector-map JSON")
+    if not 0 < args.max_sector_weight < 1:
+        raise SystemExit("--sector-cap-ab requires 0 < --max-sector-weight < 1")
+
+    start = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc)
+    end = datetime.fromisoformat(args.end).replace(tzinfo=timezone.utc)
+    symbols = _resolve_symbols(args)
+    panels, bench_df = await _load_panels(symbols, args.benchmark, start, end)
+    if not panels or bench_df.empty:
+        raise SystemExit("패널/벤치마크 데이터가 비었습니다(P1 backfill 확인).")
+    trading_days = sorted({ts.date() for ts in bench_df["timestamp"]})
+    windows = generate_rolling_windows(
+        trading_days,
+        train_size=args.train,
+        test_size=args.test,
+        step=args.step,
+        embargo=args.embargo,
+    )
+    candidates = (
+        build_exit_ablation_candidates()
+        if args.experiment == "exit-ablation"
+        else build_candidates()
+    )
+    backtest_config = BacktestConfigDTO(execution_timing="same_close", use_tax=not args.no_tax)
+    results = []
+    for label, cap in (("off", 1.0), ("on", args.max_sector_weight)):
+        report = WalkForwardRunner(
+            candidates,
+            constraints=PortfolioConstraints(
+                max_positions=args.max_positions,
+                allocation_ratio=args.alloc,
+                max_sector_weight=cap,
+                sector_map=sector_map,
+            ),
+            backtest_config=backtest_config,
+            benchmark=bench_df,
+        ).run(panels, trading_days, windows)
+        results.append({"variant": label, "cap": cap, "oos": report.oos, "stats": report.stats})
+
+    baseline, capped = results
+    comparison = {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "sector_map": args.sector_map,
+        "variants": results,
+        "delta": {
+            "sharpe": capped["oos"]["sharpe"] - baseline["oos"]["sharpe"],
+            "mdd_pct_point": capped["oos"]["mdd"] - baseline["oos"]["mdd"],
+            "total_return_pct_point": (
+                capped["oos"]["total_return"] - baseline["oos"]["total_return"]
+            ),
+        },
+    }
+    REPORTS_DIR.mkdir(exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    json_path = REPORTS_DIR / f"walk_forward_sector_cap_ab_{stamp}.json"
+    md_path = REPORTS_DIR / f"walk_forward_sector_cap_ab_{stamp}.md"
+    json_path.write_text(json.dumps(comparison, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(
+        "# Walk-Forward Sector Cap A/B\n\n"
+        "| Variant | Cap | Return% | Sharpe | MDD% |\n"
+        "|---|---:|---:|---:|---:|\n"
+        + "\n".join(
+            f"| {row['variant']} | {row['cap']} | {row['oos']['total_return']} | "
+            f"{row['oos']['sharpe']} | {row['oos']['mdd']} |"
+            for row in results
+        )
+        + "\n\n"
+        + f"Delta Sharpe: {comparison['delta']['sharpe']}; "
+        + f"Delta MDD: {comparison['delta']['mdd_pct_point']}%p\n",
+        encoding="utf-8",
+    )
+    print(f"[sector-ab] md: {md_path}")
+    print(f"[sector-ab] json: {json_path}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--coverage", type=str, default=None)
@@ -537,6 +696,24 @@ def main() -> None:
     ap.add_argument("--embargo", type=int, default=5)
     ap.add_argument("--max-positions", type=int, default=5)
     ap.add_argument("--alloc", type=float, default=None)
+    ap.add_argument(
+        "--experiment",
+        choices=("entry-grid", "exit-ablation"),
+        default="entry-grid",
+        help="exit-ablation은 고정익절/트레일링/최대보유 규칙의 E1 knock-out 후보를 검증",
+    )
+    ap.add_argument(
+        "--max-sector-weight",
+        type=float,
+        default=1.0,
+        help="단일 섹터 최대 비중. 1.0은 비활성, 예: 0.30",
+    )
+    ap.add_argument(
+        "--sector-map",
+        type=str,
+        default=None,
+        help="symbol->sector JSON 파일. 섹터 캡 활성화 시 필수",
+    )
     ap.add_argument("--no-tax", action="store_true")
     ap.add_argument(
         "--regime-ab",
@@ -544,8 +721,16 @@ def main() -> None:
         help="진입 국면 필터 A/B 비교(none/ma200/adx/ma200_adx) 실행 — "
         "표준 리포트 대신 walk_forward_regime_ab_*.{json,md} 생성",
     )
+    ap.add_argument(
+        "--sector-cap-ab",
+        action="store_true",
+        help="동일 OOS folds에서 섹터 캡 OFF/ON 비교 리포트 생성",
+    )
     args = ap.parse_args()
-    asyncio.run(run_regime_ab(args) if args.regime_ab else run(args))
+    if args.regime_ab and args.sector_cap_ab:
+        raise SystemExit("--regime-ab and --sector-cap-ab cannot be combined")
+    target = run_sector_cap_ab if args.sector_cap_ab else run_regime_ab if args.regime_ab else run
+    asyncio.run(target(args))
 
 
 if __name__ == "__main__":

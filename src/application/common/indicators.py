@@ -232,15 +232,27 @@ class TechnicalIndicators:
 
         # 볼린저 밴드 포지션 (-1: 하단, 0: 중간, 1: 상단)
         if current_price >= bb_middle:
-            bb_position = (current_price - bb_middle) / (bb_upper - bb_middle) if bb_upper != bb_middle else 0
+            bb_position = (
+                (current_price - bb_middle) / (bb_upper - bb_middle) if bb_upper != bb_middle else 0
+            )
         else:
-            bb_position = (current_price - bb_middle) / (bb_middle - bb_lower) if bb_middle != bb_lower else 0
+            bb_position = (
+                (current_price - bb_middle) / (bb_middle - bb_lower) if bb_middle != bb_lower else 0
+            )
 
         # 엔벨로프 포지션
         if current_price >= env_middle:
-            env_position = (current_price - env_middle) / (env_upper - env_middle) if env_upper != env_middle else 0
+            env_position = (
+                (current_price - env_middle) / (env_upper - env_middle)
+                if env_upper != env_middle
+                else 0
+            )
         else:
-            env_position = (current_price - env_middle) / (env_middle - env_lower) if env_middle != env_lower else 0
+            env_position = (
+                (current_price - env_middle) / (env_middle - env_lower)
+                if env_middle != env_lower
+                else 0
+            )
 
         return {
             "bb_position": max(-2.0, min(2.0, bb_position)),  # -2 ~ 2 범위로 제한
@@ -314,9 +326,7 @@ class TechnicalIndicators:
         return stoch_k.iloc[-1], stoch_d.iloc[-1]
 
     @staticmethod
-    def detect_golden_cross(
-        short_ma: pd.Series, long_ma: pd.Series
-    ) -> pd.Series:
+    def detect_golden_cross(short_ma: pd.Series, long_ma: pd.Series) -> pd.Series:
         """
         골든크로스 감지 (단기 MA가 장기 MA를 상향 돌파)
 
@@ -336,9 +346,7 @@ class TechnicalIndicators:
         return golden_cross
 
     @staticmethod
-    def detect_dead_cross(
-        short_ma: pd.Series, long_ma: pd.Series
-    ) -> pd.Series:
+    def detect_dead_cross(short_ma: pd.Series, long_ma: pd.Series) -> pd.Series:
         """
         데드크로스 감지 (단기 MA가 장기 MA를 하향 돌파)
 
@@ -366,6 +374,7 @@ class TechnicalIndicators:
         stoch_d_period: int = 3,
         rsi_period: int = 14,
         include_rsi: bool = False,
+        atr_period: int = 14,
     ) -> pd.DataFrame:
         """
         골든크로스 전략에 필요한 모든 지표 계산
@@ -399,6 +408,18 @@ class TechnicalIndicators:
         result_df["stoch_k"] = stoch_k
         result_df["stoch_d"] = stoch_d
 
+        # ATR ablation/live parity용 단순 이동평균 True Range.
+        previous_close = result_df["close"].shift(1)
+        true_range = pd.concat(
+            [
+                result_df["high"] - result_df["low"],
+                (result_df["high"] - previous_close).abs(),
+                (result_df["low"] - previous_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        result_df["atr"] = true_range.rolling(window=atr_period).mean()
+
         # 골든크로스/데드크로스 상태 및 시그널
         result_df["is_gc_active"] = result_df["ma_short"] > result_df["ma_long"]
         result_df["gc_signal"] = TechnicalIndicators.detect_golden_cross(
@@ -409,9 +430,7 @@ class TechnicalIndicators:
         )
 
         if include_rsi:
-            result_df["rsi"] = TechnicalIndicators.calculate_rsi_series(
-                result_df, rsi_period
-            )
+            result_df["rsi"] = TechnicalIndicators.calculate_rsi_series(result_df, rsi_period)
 
         return result_df
 
@@ -436,7 +455,11 @@ class TechnicalIndicators:
         Returns:
             float | None: ATR 값 (데이터 부족 시 None)
         """
-        if len(high_prices) < period + 1 or len(low_prices) < period + 1 or len(close_prices) < period + 1:
+        if (
+            len(high_prices) < period + 1
+            or len(low_prices) < period + 1
+            or len(close_prices) < period + 1
+        ):
             return None
 
         true_ranges = []
@@ -446,11 +469,7 @@ class TechnicalIndicators:
             prev_close = close_prices[i - 1]
 
             # True Range = max(고가-저가, |고가-전일종가|, |저가-전일종가|)
-            tr = max(
-                high - low,
-                abs(high - prev_close),
-                abs(low - prev_close)
-            )
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
             true_ranges.append(tr)
 
         if len(true_ranges) < period:
@@ -829,16 +848,19 @@ class TechnicalIndicators:
             return False
         return adx > adx_threshold and minus_di > plus_di
 
-
     @staticmethod
-    def is_market_fear_by_bollinger(closes: list[float], period: int = 20, std_mult: float = 2.0) -> bool:
+    def is_market_fear_by_bollinger(
+        closes: list[float], period: int = 20, std_mult: float = 2.0
+    ) -> bool:
         """
         시장 공포 필터 (BB 20,2 하단 이탈 + 밴드폭 확대)
         추천 조합: KOSPI (또는 proxy) 가 볼린저 하단을 뚫고 변동성이 확대되는 구간
         """
         if len(closes) < 25:
             return False
-        bb = TechnicalIndicators.calculate_bollinger_bands(closes[-period-1:], period=period, std_multiplier=std_mult)
+        bb = TechnicalIndicators.calculate_bollinger_bands(
+            closes[-period - 1 :], period=period, std_multiplier=std_mult
+        )
         if bb["lower"] is None:
             return False
         close = closes[-1]
@@ -853,7 +875,9 @@ class TechnicalIndicators:
             start = j - period + 1  # index j에서 끝나는 period-길이 윈도우의 시작
             w = closes[start : j + 1] if len(closes) + start >= 0 else []
             if len(w) == period:
-                b = TechnicalIndicators.calculate_bollinger_bands(w, period=period, std_multiplier=std_mult)
+                b = TechnicalIndicators.calculate_bollinger_bands(
+                    w, period=period, std_multiplier=std_mult
+                )
                 if b["middle"]:
                     prev_bws.append((b["upper"] - b["lower"]) / b["middle"])
         avg_prev = sum(prev_bws) / len(prev_bws) if prev_bws else bw

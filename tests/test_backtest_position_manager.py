@@ -21,7 +21,7 @@ class TestPosition:
             quantity=10,
             entry_price=Decimal("70000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=1
+            trade_id=1,
         )
 
     def test_position_creation(self):
@@ -76,7 +76,7 @@ class TestPositionManager:
             quantity=10,
             entry_price=Decimal("70000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=1
+            trade_id=1,
         )
 
         assert self.manager.has_position("005930")
@@ -94,7 +94,7 @@ class TestPositionManager:
             quantity=10,
             entry_price=Decimal("70000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=1
+            trade_id=1,
         )
 
         # 포지션 청산
@@ -116,21 +116,23 @@ class TestPositionManager:
             quantity=10,
             entry_price=Decimal("70000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=1
+            trade_id=1,
         )
         self.manager.open_position(
             symbol="000660",
             quantity=5,
             entry_price=Decimal("100000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=2
+            trade_id=2,
         )
 
         # 평가액 계산
-        total_value = self.manager.update_positions({
-            "005930": Decimal("75000"),  # +5000 * 10 = +50000
-            "000660": Decimal("110000")  # +10000 * 5 = +50000
-        })
+        total_value = self.manager.update_positions(
+            {
+                "005930": Decimal("75000"),  # +5000 * 10 = +50000
+                "000660": Decimal("110000"),  # +10000 * 5 = +50000
+            }
+        )
 
         # 75000*10 + 110000*5 = 750000 + 550000 = 1300000
         assert total_value == Decimal("1300000")
@@ -146,15 +148,15 @@ class TestPositionManager:
             quantity=10,
             entry_price=Decimal("70000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=1
+            trade_id=1,
         )
 
-        # 손절 발동 (진입가 70000, 현재가 67000 = -4.29%)
+        # 고정 손절 발동 (고점 70000 대비 정확히 -15%)
         position = self.manager.get_position("005930")
         assert position is not None
         is_stop_loss = self.manager.check_stop_loss(
             position=position,
-            current_price=Decimal("67000"),
+            current_price=Decimal("59500"),
             stop_loss_ratio=-0.03,
         )
         assert is_stop_loss is True
@@ -162,7 +164,7 @@ class TestPositionManager:
         # 손절 미발동
         is_stop_loss = self.manager.check_stop_loss(
             position=position,
-            current_price=Decimal("69000"),
+            current_price=Decimal("59501"),
             stop_loss_ratio=-0.03,
         )
         assert is_stop_loss is False
@@ -174,7 +176,7 @@ class TestPositionManager:
             quantity=10,
             entry_price=Decimal("70000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=1
+            trade_id=1,
         )
 
         # 익절 발동 (진입가 70000, 현재가 74000 = +5.71%)
@@ -202,7 +204,7 @@ class TestPositionManager:
             quantity=10,
             entry_price=Decimal("70000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=1
+            trade_id=1,
         )
 
         # 최고가 업데이트
@@ -233,14 +235,14 @@ class TestPositionManager:
             quantity=10,
             entry_price=Decimal("70000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=1
+            trade_id=1,
         )
         self.manager.open_position(
             symbol="000660",
             quantity=5,
             entry_price=Decimal("100000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=2
+            trade_id=2,
         )
 
         positions = self.manager.get_all_positions()
@@ -255,14 +257,14 @@ class TestPositionManager:
             quantity=10,
             entry_price=Decimal("70000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=1
+            trade_id=1,
         )
         self.manager.open_position(
             symbol="000660",
             quantity=5,
             entry_price=Decimal("100000"),
             entry_date=datetime(2024, 1, 1),
-            trade_id=2
+            trade_id=2,
         )
 
         self.manager.clear_all_positions()

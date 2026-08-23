@@ -8,6 +8,11 @@ Position Manager - 포지션 관리자
 from datetime import datetime
 from decimal import Decimal
 
+from src.application.domain.strategy.risk_contract import (
+    DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+    is_peak_drawdown_stop_triggered,
+)
+
 
 class Position:
     """개별 lot 포지션 정보"""
@@ -115,7 +120,7 @@ class PositionManager:
         return min(p.entry_date for p in lots)
 
     def update_positions(self, current_prices: dict[str, Decimal]) -> Decimal:
-        total_value = Decimal('0')
+        total_value = Decimal("0")
         for symbol, lots in self.positions.items():
             current_price = current_prices.get(symbol)
             if current_price is None:
@@ -125,13 +130,25 @@ class PositionManager:
                 total_value += current_price * position.quantity
         return total_value
 
-    def check_stop_loss(self, position: Position, current_price: Decimal, stop_loss_ratio: float) -> bool:
-        return position.get_unrealized_profit_rate(current_price) <= stop_loss_ratio
+    def check_stop_loss(
+        self, position: Position, current_price: Decimal, stop_loss_ratio: float
+    ) -> bool:
+        _ = stop_loss_ratio  # 레거시 호출 호환: 운영 고점 손절 기준은 고정 15%다.
+        return is_peak_drawdown_stop_triggered(
+            current_price=current_price,
+            entry_price=position.entry_price,
+            highest_price=position.highest_price,
+            stop_ratio=DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+        )
 
-    def check_take_profit(self, position: Position, current_price: Decimal, take_profit_ratio: float) -> bool:
+    def check_take_profit(
+        self, position: Position, current_price: Decimal, take_profit_ratio: float
+    ) -> bool:
         return position.get_unrealized_profit_rate(current_price) >= take_profit_ratio
 
-    def check_trailing_stop(self, position: Position, current_price: Decimal, trailing_stop_ratio: float) -> bool:
+    def check_trailing_stop(
+        self, position: Position, current_price: Decimal, trailing_stop_ratio: float
+    ) -> bool:
         decline_rate = float((current_price - position.highest_price) / position.highest_price)
         return decline_rate <= -trailing_stop_ratio
 
@@ -143,14 +160,19 @@ class PositionManager:
     def check_max_hold_days(self, position: Position, date: datetime, max_hold_days: int) -> bool:
         return (date - position.entry_date).days >= max_hold_days
 
-    def check_atr_stop_loss(self, position: Position, current_price: Decimal, atr_multiplier: float = 2.0) -> bool:
-        if position.entry_atr is None:
+    def check_atr_stop_loss(
+        self, position: Position, current_price: Decimal, atr_multiplier: float = 2.0
+    ) -> bool:
+        atr = position.current_atr if position.current_atr is not None else position.entry_atr
+        if atr is None:
             return False
-        stop_price = float(position.entry_price) - (position.entry_atr * atr_multiplier)
+        stop_price = float(position.entry_price) - (atr * atr_multiplier)
         return float(current_price) <= stop_price
 
-    def check_atr_trailing_stop(self, position: Position, current_price: Decimal, atr_multiplier: float = 2.0) -> bool:
-        atr = position.current_atr or position.entry_atr
+    def check_atr_trailing_stop(
+        self, position: Position, current_price: Decimal, atr_multiplier: float = 2.0
+    ) -> bool:
+        atr = position.current_atr if position.current_atr is not None else position.entry_atr
         if atr is None:
             return False
         stop_price = float(position.highest_price) - (atr * atr_multiplier)

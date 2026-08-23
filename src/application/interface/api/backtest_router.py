@@ -29,6 +29,7 @@ from src.application.domain.backtest.service import BacktestService
 from src.application.domain.market_data.service import MarketDataService
 from src.application.domain.strategy.buy_strategy_service import BuyStrategyService
 from src.application.domain.strategy.dto import StrategyConfigDTO
+from src.application.domain.strategy.risk_contract import DEFAULT_PEAK_DRAWDOWN_STOP_RATIO
 from src.settings.config import settings
 
 router = APIRouter(prefix="/api/v1/backtest", tags=["Backtest"])
@@ -178,7 +179,7 @@ async def run_universe_golden_cross_backtest(
     def build_strategy_config() -> StrategyConfigDTO:
         strategy_config = StrategyConfigDTO()
         strategy_config.risk_management.use_stop_loss = True
-        strategy_config.risk_management.stop_loss_ratio = -0.05
+        strategy_config.risk_management.stop_loss_ratio = -DEFAULT_PEAK_DRAWDOWN_STOP_RATIO
         strategy_config.risk_management.use_take_profit = False
         strategy_config.risk_management.take_profit_ratio = None
         strategy_config.risk_management.use_trailing_stop = True
@@ -247,7 +248,7 @@ async def run_universe_golden_cross_backtest(
     config_summary = {
         "label": "공격형 중단기 스윙 매도 v3",
         "universe_count": len(symbols),
-        "stop_loss": -0.05,
+        "peak_drawdown_stop": -DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
         "breakeven_activation": base_strategy_params["breakeven_activation"],
         "partial_take_profit_1": base_strategy_params["partial_take_profit_1"],
         "partial_take_profit_2": base_strategy_params["partial_take_profit_2"],

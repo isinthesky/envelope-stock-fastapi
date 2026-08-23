@@ -14,7 +14,6 @@ from src.application.domain.strategy.state_machine import (
 )
 from src.application.domain.strategy.strategy_contract import GoldenCrossRiskExitReason
 
-
 ENTRY_DATE = datetime(2024, 1, 1)
 SYMBOL = "005930"
 
@@ -166,9 +165,9 @@ async def test_backtest_trailing_stop_exit_reason_matches_live_after_activation(
     [
         (
             GoldenCrossRiskExitReason.STOP_LOSS.value,
-            Decimal("92"),
+            Decimal("85"),
             lambda config: setattr(config.risk_management, "use_stop_loss", True)
-            or setattr(config.risk_management, "stop_loss_ratio", -0.07),
+            or setattr(config.risk_management, "stop_loss_ratio", -0.15),
         ),
         (
             GoldenCrossRiskExitReason.TAKE_PROFIT.value,
@@ -185,7 +184,7 @@ async def test_backtest_exit_reason_matches_live_for_stop_loss_and_take_profit(
 ):
     # Given: live and backtest configs share the same stop/take-profit threshold.
     live_config = GoldenCrossConfigDTO()
-    live_config.risk_config.stop_loss_ratio = -0.07
+    live_config.risk_config.stop_loss_ratio = -0.15
     live_config.risk_config.take_profit_ratio = 0.20
     live_transition = GoldenCrossStateMachine(live_config).process(
         current=_snapshot(datetime(2024, 1, 2), current_price),

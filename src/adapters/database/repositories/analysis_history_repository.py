@@ -7,9 +7,10 @@ Analysis History Repository - 분석 이력 데이터 접근 계층
 - 기존 패턴: 하위 호환을 위해 생성자에서 session 받는 것도 지원
 """
 
+from decimal import Decimal
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.analysis_history import AnalysisHistoryModel
@@ -56,9 +57,11 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
             Sequence[AnalysisHistoryModel]: 분석 이력 목록
         """
         db = self._get_session(session)
-        stmt = select(self.model).where(
-            self.model.analysis_type == analysis_type
-        ).order_by(self.model.analyzed_at.desc())
+        stmt = (
+            select(self.model)
+            .where(self.model.analysis_type == analysis_type)
+            .order_by(self.model.analyzed_at.desc())
+        )
 
         if is_active is not None:
             stmt = stmt.where(self.model.is_active == is_active)
@@ -81,10 +84,14 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
             list[str]: 활성 추적 중인 종목 코드 목록
         """
         db = self._get_session(session)
-        stmt = select(self.model.symbol).where(
-            self.model.analysis_type == analysis_type,
-            self.model.is_active == True,  # noqa: E712
-        ).distinct()
+        stmt = (
+            select(self.model.symbol)
+            .where(
+                self.model.analysis_type == analysis_type,
+                self.model.is_active == True,  # noqa: E712
+            )
+            .distinct()
+        )
         result = await db.execute(stmt)
         return list(result.scalars().all())
 
@@ -108,10 +115,7 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
             .distinct()
         )
         result = await db.execute(stmt)
-        return [
-            {"symbol": row[0], "name": row[1], "market": row[2]}
-            for row in result.all()
-        ]
+        return [{"symbol": row[0], "name": row[1], "market": row[2]} for row in result.all()]
 
     async def get_by_symbol(
         self,
@@ -133,9 +137,11 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
             Sequence[AnalysisHistoryModel]: 분석 이력 목록
         """
         db = self._get_session(session)
-        stmt = select(self.model).where(
-            self.model.symbol == symbol
-        ).order_by(self.model.analyzed_at.desc())
+        stmt = (
+            select(self.model)
+            .where(self.model.symbol == symbol)
+            .order_by(self.model.analyzed_at.desc())
+        )
 
         if analysis_type is not None:
             stmt = stmt.where(self.model.analysis_type == analysis_type)
@@ -170,7 +176,9 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
         ]
         if is_active is not None:
             conditions.append(self.model.is_active == is_active)
-        stmt = select(self.model).where(*conditions).order_by(self.model.analyzed_at.desc()).limit(1)
+        stmt = (
+            select(self.model).where(*conditions).order_by(self.model.analyzed_at.desc()).limit(1)
+        )
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -189,6 +197,27 @@ class AnalysisHistoryRepository(BaseRepository[AnalysisHistoryModel], Pagination
             AnalysisHistoryModel | None: 업데이트된 모델 또는 None
         """
         return await self.update_by_id(id, session=session, is_active=is_active)
+
+    async def raise_highest_price(
+        self,
+        id: int,
+        candidate: Decimal,
+        session: AsyncSession | None = None,
+    ) -> AnalysisHistoryModel | None:
+        """DB 원자 연산으로 보유 고점이 절대 낮아지지 않게 갱신한다."""
+        db = self._get_session(session)
+        stmt = (
+            update(self.model)
+            .where(self.model.id == id)
+            .values(
+                highest_price=func.greatest(
+                    func.coalesce(self.model.highest_price, candidate), candidate
+                )
+            )
+            .returning(self.model)
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def count_by_type(
         self,

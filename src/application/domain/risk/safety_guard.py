@@ -49,6 +49,7 @@ class TradingDayStats:
     def total_pnl(self) -> Decimal:
         return self.realized_pnl + self.unrealized_pnl
 
+
 @dataclass
 class AccountState:
     """계좌 상태"""
@@ -103,7 +104,19 @@ class SafetyGuard:
 
         self.daily_pnl_history: list[tuple[date, Decimal]] = []
 
-    def can_trade(self) -> tuple[bool, TradingBlockReason | None, str | None]:
+    def can_trade(
+        self, *, is_risk_reducing: bool = False
+    ) -> tuple[bool, TradingBlockReason | None, str | None]:
+        """거래 허용 여부를 반환한다.
+
+        보유 포지션을 줄이는 SELL은 손실·횟수·시장·포지션 한도로 막지 않는다.
+        이 가드들은 신규/추가 위험 노출을 제한하기 위한 것이며, 청산을 차단하면
+        오히려 계좌 위험이 커지기 때문이다. 실주문 전체 중단은 별도 마스터
+        킬스위치가 담당한다.
+        """
+        if is_risk_reducing:
+            return (True, None, None)
+
         stats = self._get_today_stats()
         limits: RiskLimitConfigDTO = self.config.risk_limits
         sizing: PositionSizingConfigDTO = self.config.position_sizing
@@ -231,9 +244,7 @@ class SafetyGuard:
         _ = symbol
         sizing = self.config.position_sizing
         max_position_amount = self.initial_capital * Decimal(str(sizing.max_position_ratio))
-        max_daily_amount = self.initial_capital * Decimal(
-            str(sizing.max_daily_investment_ratio)
-        )
+        max_daily_amount = self.initial_capital * Decimal(str(sizing.max_daily_investment_ratio))
         remaining_daily_amount = max(max_daily_amount - self.account.total_invested, Decimal("0"))
         amount = min(max_position_amount, self.account.available_cash, remaining_daily_amount)
         if current_price <= 0 or amount <= 0:
@@ -277,8 +288,7 @@ class SafetyGuard:
                 "position_value": float(self.account.position_value),
                 "position_count": self.account.position_count,
                 "positions": {
-                    symbol: float(amount)
-                    for symbol, amount in self.account.positions.items()
+                    symbol: float(amount) for symbol, amount in self.account.positions.items()
                 },
             },
             "daily_stats": {
@@ -299,9 +309,7 @@ class SafetyGuard:
             "limits": {
                 "max_daily_trades": self.config.risk_limits.max_daily_trades,
                 "max_consecutive_losses": self.config.risk_limits.max_consecutive_losses,
-                "max_concurrent_positions": (
-                    self.config.position_sizing.max_concurrent_positions
-                ),
+                "max_concurrent_positions": (self.config.position_sizing.max_concurrent_positions),
                 "max_position_ratio": self.config.position_sizing.max_position_ratio,
                 "max_daily_investment_ratio": (
                     self.config.position_sizing.max_daily_investment_ratio

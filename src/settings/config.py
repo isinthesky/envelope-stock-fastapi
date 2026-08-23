@@ -584,9 +584,6 @@ class Settings(BaseSettings):
         default=False,
         description="[#8 defer] 매도에 시장 레짐 반영(기본 OFF). 하드 손절은 이 값과 무관하게 항상 적용",
     )
-    sell_hard_stop_pct: float = Field(
-        default=0.15, ge=0.05, le=0.40, description="[#7] 진입가 대비 하드 손절 비율"
-    )
     sell_trend_stop_pct: float = Field(
         default=0.15, ge=0.05, le=0.40, description="[#7] 장기추세(MA165) 대비 이탈 손절 비율"
     )
@@ -604,6 +601,10 @@ class Settings(BaseSettings):
         description="전략 실행(실주문) job 전용 misfire_grace_time(초). "
         "기본 300 대신 90초로 지각 실주문을 차단. "
         "APScheduler는 0/None을 misfire_grace_time로 허용하지 않으므로 최소 1",
+    )
+    strategy_live_trading_enabled: bool = Field(
+        default=False,
+        description="골든크로스 실주문 마스터 스위치. False면 dry-run만 허용",
     )
     universe_refresh_hour: int = Field(
         default=8, ge=0, le=23, description="유니버스 갱신(B-1) 시각(시, KST). 월~금"

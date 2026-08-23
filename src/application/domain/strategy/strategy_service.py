@@ -63,6 +63,10 @@ from src.application.domain.strategy.dto import (
     SymbolStateDTO,
     SymbolStateListDTO,
 )
+from src.application.domain.strategy.risk_contract import (
+    DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+    effective_peak_price,
+)
 from src.application.domain.strategy.symbol_validation import split_valid_symbol_pairs
 from src.settings.config import settings
 
@@ -96,8 +100,8 @@ class StrategyService:
             session: AsyncSession (기존 패턴: 하위 호환)
         """
         # 새 패턴: Repository가 DI로 주입된 경우
-        if strategy_repo is not None:
-            self.strategy_repo = strategy_repo
+        if strategy_repo is not None or analysis_repo is not None:
+            self.strategy_repo = strategy_repo or StrategyRepository()
             self.analysis_repo = analysis_repo
             self._session = None
         # 기존 패턴: session으로 Repository 생성 (하위 호환)
@@ -827,6 +831,16 @@ class StrategyService:
         if dto.sell_reasons:
             sell_reasons_json = json.dumps(dto.sell_reasons, ensure_ascii=False)
 
+        effective_highest = (
+            effective_peak_price(
+                current_price=dto.current_price,
+                entry_price=dto.entry_price,
+                highest_price=dto.highest_price,
+            )
+            if dto.analysis_type == "sell"
+            else None
+        )
+
         model = await history_repo.create(
             session=session,
             analysis_type=dto.analysis_type,
@@ -845,9 +859,15 @@ class StrategyService:
             is_stoch_overbought=dto.is_stoch_overbought,
             is_rsi_overbought=dto.is_rsi_overbought,
             sell_phase=dto.sell_phase,
+            sell_stage=dto.sell_stage,
+            sell_ratio_min=dto.sell_ratio_min,
+            sell_ratio_max=dto.sell_ratio_max,
             sell_reasons=sell_reasons_json,
             analyzed_at=datetime.now(),
             entry_price=dto.entry_price,
+            highest_price=(
+                Decimal(str(effective_highest)) if effective_highest is not None else None
+            ),
             note=dto.note,
             is_active=dto.is_active if dto.is_active is not None else True,
             candle_count=dto.candle_count,
@@ -918,6 +938,7 @@ class StrategyService:
         session: AsyncSession,
         history_id: int,
         entry_price: Decimal | None = None,
+        highest_price: Decimal | None = None,
         note: str | None = None,
     ) -> AnalysisHistoryDTO:
         """분석 이력 업데이트 (진입가, 메모)"""
@@ -930,8 +951,23 @@ class StrategyService:
 
         # 업데이트할 필드 준비
         update_kwargs = {}
+        peak_candidate: Decimal | None = None
         if entry_price is not None:
             update_kwargs["entry_price"] = entry_price
+            effective = effective_peak_price(
+                current_price=existing.current_price,
+                entry_price=entry_price,
+                highest_price=getattr(existing, "highest_price", None),
+            )
+            if effective is not None:
+                peak_candidate = Decimal(str(effective))
+        if highest_price is not None:
+            existing_peak = getattr(existing, "highest_price", None)
+            if existing_peak is not None and highest_price < existing_peak:
+                raise StrategyError("highest_price cannot be decreased")
+            peak_candidate = max(peak_candidate or highest_price, highest_price)
+        if peak_candidate is not None:
+            await history_repo.raise_highest_price(history_id, peak_candidate, session=session)
         if note is not None:
             update_kwargs["note"] = note
 
@@ -999,10 +1035,21 @@ class StrategyService:
                 live = await sell_service.analyze_sell_signal(
                     symbol=model.symbol,
                     entry_price=float(model.entry_price) if model.entry_price is not None else None,
+                    highest_price=(
+                        float(getattr(model, "highest_price"))
+                        if getattr(model, "highest_price", None) is not None
+                        else None
+                    ),
                     force_refresh=True,
                     name=resolved_name,
                     market=resolved_market,
                 )
+                if live.highest_price is not None:
+                    await history_repo.raise_highest_price(
+                        model.id,
+                        live.highest_price,
+                        session=session,
+                    )
                 enriched_histories.append(
                     SimpleNamespace(
                         symbol=live.symbol,
@@ -1016,6 +1063,7 @@ class StrategyService:
                         final_stage=live.final_stage,
                         sell_reasons=live.sell_stage_reasons or live.sell_reasons,
                         entry_price=live.entry_price,
+                        highest_price=live.highest_price,
                         current_price=live.current_price,
                         is_death_cross=live.is_death_cross,
                         is_volume_sell_signal=live.is_volume_sell_signal,
@@ -1026,15 +1074,43 @@ class StrategyService:
                     )
                 )
             except Exception:
+                try:
+                    fallback_close = await sell_service.load_latest_close(
+                        model.symbol, force_refresh=True
+                    )
+                except Exception:
+                    fallback_close = float(model.current_price)
+                fallback_highest = effective_peak_price(
+                    current_price=fallback_close,
+                    entry_price=model.entry_price,
+                    highest_price=getattr(model, "highest_price", None),
+                )
+                fallback_stage = self._insufficient_data_stage(
+                    entry_price=model.entry_price,
+                    highest_price=getattr(model, "highest_price", None),
+                    current_price=fallback_close,
+                )
+                if fallback_highest is not None:
+                    await history_repo.raise_highest_price(
+                        model.id,
+                        Decimal(str(fallback_highest)),
+                        session=session,
+                    )
                 enriched_histories.append(
                     SimpleNamespace(
                         symbol=model.symbol,
                         name=resolved_name,
                         market=resolved_market,
-                        sell_stage="HOLD",
-                        sell_reasons=json.loads(model.sell_reasons) if model.sell_reasons else [],
+                        sell_phase="INSUFFICIENT_DATA",
+                        analysis_status="INSUFFICIENT_DATA",
+                        sell_stage=fallback_stage,
+                        sell_reasons=self._decode_sell_reasons(model.sell_reasons)
+                        + ["최신 기술 지표 분석 실패: 데이터 점검 필요"],
                         entry_price=model.entry_price,
-                        current_price=model.current_price,
+                        highest_price=(
+                            Decimal(str(fallback_highest)) if fallback_highest is not None else None
+                        ),
+                        current_price=Decimal(str(fallback_close)),
                         is_death_cross=model.is_death_cross,
                         is_volume_sell_signal=False,
                         is_volume_spike=False,
@@ -1083,10 +1159,18 @@ class StrategyService:
 
         # 종목명 조회를 위한 유니버스 레포지토리
         universe_repo = self._universe_repo(session)
+        sell_service = None
+        if analysis_type == "sell":
+            from src.application.domain.strategy.sell_strategy_service import (
+                SellStrategyService,
+            )
+
+            sell_service = SellStrategyService(session)
 
         for db_symbol, symbol in symbol_pairs:
             # DB 행 조회/갱신에는 원본(raw) 값, KIS/유니버스 등 외부·정규화 조회에는
             # stripped 값(symbol)을 사용한다.
+            latest = None
             try:
                 # 종목명 조회 (DB에 없는 경우)
                 stock_name = None
@@ -1106,15 +1190,22 @@ class StrategyService:
                             pass
 
                 if analysis_type == "sell":
-                    # SellStrategyService는 별도 세션 사용 (내부에서 처리)
-                    from src.application.domain.strategy.sell_strategy_service import (
-                        SellStrategyService,
-                    )
-
-                    sell_service = SellStrategyService(session)
+                    assert sell_service is not None
                     # force_refresh=True로 최신 데이터 요청
                     sell_result = await sell_service.analyze_sell_signal(
-                        symbol=symbol, force_refresh=True
+                        symbol=symbol,
+                        entry_price=(
+                            float(latest.entry_price)
+                            if latest is not None and latest.entry_price is not None
+                            else None
+                        ),
+                        highest_price=(
+                            float(getattr(latest, "highest_price"))
+                            if latest is not None
+                            and getattr(latest, "highest_price", None) is not None
+                            else None
+                        ),
+                        force_refresh=True,
                     )
                     sell_reasons_json = json.dumps(sell_result.sell_reasons, ensure_ascii=False)
 
@@ -1131,6 +1222,13 @@ class StrategyService:
                             "is_stoch_overbought": sell_result.is_stoch_overbought,
                             "is_rsi_overbought": sell_result.is_rsi_overbought,
                             "sell_phase": sell_result.sell_phase,
+                            "sell_stage": (
+                                sell_result.final_stage.value
+                                if hasattr(sell_result.final_stage, "value")
+                                else sell_result.final_stage or sell_result.sell_stage
+                            ),
+                            "sell_ratio_min": sell_result.final_ratio_min,
+                            "sell_ratio_max": sell_result.final_ratio_max,
                             "sell_reasons": sell_reasons_json,
                             "analyzed_at": datetime.now(),
                         }
@@ -1138,6 +1236,12 @@ class StrategyService:
                             update_kwargs["name"] = stock_name
 
                         await history_repo.update_by_id(latest.id, session=session, **update_kwargs)
+                        if sell_result.highest_price is not None:
+                            await history_repo.raise_highest_price(
+                                latest.id,
+                                sell_result.highest_price,
+                                session=session,
+                            )
                         updated = await history_repo.get_by_id(latest.id, session=session)
                         if updated:
                             # sell_result를 전달하여 실시간 지표(ADX, Volume 등) 포함
@@ -1183,6 +1287,51 @@ class StrategyService:
                 error_msg = f"{db_symbol!r}: {str(e)}"
                 logger.warning(f"[Refresh] Error: {error_msg}")
                 errors.append(error_msg)
+                if analysis_type == "sell" and latest:
+                    try:
+                        latest_close = await sell_service.load_latest_close(
+                            symbol, force_refresh=True
+                        )
+                        effective_highest = effective_peak_price(
+                            current_price=latest_close,
+                            entry_price=latest.entry_price,
+                            highest_price=getattr(latest, "highest_price", None),
+                        )
+                        failure_reasons = json.dumps(
+                            ["기술 지표 산출에 필요한 데이터 부족", str(e)],
+                            ensure_ascii=False,
+                        )
+                        failure_stage = self._insufficient_data_stage(
+                            entry_price=latest.entry_price,
+                            highest_price=getattr(latest, "highest_price", None),
+                            current_price=latest_close,
+                        )
+                        await history_repo.update_by_id(
+                            latest.id,
+                            session=session,
+                            sell_phase="INSUFFICIENT_DATA",
+                            sell_stage=failure_stage,
+                            sell_ratio_min=1.0 if failure_stage == "EXIT_ALL" else 0.0,
+                            sell_ratio_max=1.0 if failure_stage == "EXIT_ALL" else 0.0,
+                            sell_reasons=failure_reasons,
+                            current_price=Decimal(str(latest_close)),
+                            analyzed_at=datetime.now(),
+                        )
+                        if effective_highest is not None:
+                            await history_repo.raise_highest_price(
+                                latest.id,
+                                Decimal(str(effective_highest)),
+                                session=session,
+                            )
+                        updated = await history_repo.get_by_id(latest.id, session=session)
+                        if updated:
+                            updated_items.append(self._history_to_dto(updated))
+                    except Exception as persist_error:
+                        persist_error_msg = (
+                            f"{db_symbol!r}: insufficient-data 상태 저장 실패: " f"{persist_error}"
+                        )
+                        logger.warning(f"[Refresh] Error: {persist_error_msg}")
+                        errors.append(persist_error_msg)
 
         return AnalysisHistoryRefreshResultDTO(
             updated_count=len(updated_items),
@@ -1209,6 +1358,7 @@ class StrategyService:
         # Phase 정보 조회
         sell_phase = model.sell_phase or "NONE"
         phase_info = SELL_PHASE_INFO.get(sell_phase, SELL_PHASE_INFO["NONE"])
+        analysis_status = "INSUFFICIENT_DATA" if sell_phase == "INSUFFICIENT_DATA" else "READY"
 
         # 기본 DTO 필드
         dto_kwargs = {
@@ -1217,6 +1367,7 @@ class StrategyService:
             "symbol": model.symbol,
             "name": model.name,
             "current_price": model.current_price,
+            "analysis_status": analysis_status,
             "ma_short": model.ma_short,
             "ma_long": model.ma_long,
             "ma_gap_ratio": model.ma_gap_ratio,
@@ -1232,14 +1383,43 @@ class StrategyService:
             "sell_phase_name": phase_info["name"],
             "sell_phase_action": phase_info["action"],
             "sell_reasons": sell_reasons,
+            "sell_stage": getattr(model, "sell_stage", None),
+            "sell_ratio_min": getattr(model, "sell_ratio_min", None),
+            "sell_ratio_max": getattr(model, "sell_ratio_max", None),
             "analyzed_at": model.analyzed_at,
             "entry_price": model.entry_price,
+            "highest_price": getattr(model, "highest_price", None),
             "note": model.note,
             "is_active": model.is_active,
             "candle_count": model.candle_count,
             "created_at": model.created_at,
             "updated_at": model.updated_at,
         }
+
+        persisted_stage = getattr(model, "sell_stage", None)
+        if persisted_stage in SELL_STAGE_INFO:
+            persisted_stage_info = SELL_STAGE_INFO[persisted_stage]
+            dto_kwargs.update(
+                {
+                    "sell_stage_name": persisted_stage_info["name"],
+                }
+            )
+
+        if analysis_status == "INSUFFICIENT_DATA":
+            stage_value = self._insufficient_data_stage(
+                entry_price=model.entry_price,
+                highest_price=getattr(model, "highest_price", None),
+                current_price=model.current_price,
+            )
+            stage_info = SELL_STAGE_INFO[stage_value]
+            dto_kwargs.update(
+                {
+                    "sell_stage": stage_value,
+                    "sell_stage_name": stage_info["name"],
+                    "sell_ratio_min": 1.0 if stage_value == "EXIT_ALL" else 0.0,
+                    "sell_ratio_max": 1.0 if stage_value == "EXIT_ALL" else 0.0,
+                }
+            )
 
         # sell_result가 있으면 실시간 지표 추가 (DB에 없는 필드들)
         if sell_result is not None:
@@ -1276,6 +1456,34 @@ class StrategyService:
             )
 
         return AnalysisHistoryDTO(**dto_kwargs)
+
+    @staticmethod
+    def _decode_sell_reasons(raw_reasons) -> list[str]:
+        if not raw_reasons:
+            return []
+        if isinstance(raw_reasons, list):
+            return [str(reason) for reason in raw_reasons]
+        try:
+            decoded = json.loads(raw_reasons)
+            return decoded if isinstance(decoded, list) else [str(decoded)]
+        except (json.JSONDecodeError, TypeError):
+            return [str(raw_reasons)]
+
+    @staticmethod
+    def _insufficient_data_stage(*, entry_price, highest_price, current_price) -> str:
+        """지표 부족 시에도 가격 기반 긴급 손절을 HOLD보다 먼저 보존한다."""
+        from src.application.domain.strategy.risk_contract import (
+            is_peak_drawdown_stop_triggered,
+        )
+
+        if is_peak_drawdown_stop_triggered(
+            current_price=current_price,
+            entry_price=entry_price,
+            highest_price=highest_price,
+            stop_ratio=DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+        ):
+            return "EXIT_ALL"
+        return "INSUFFICIENT_DATA"
 
     # ==================== Sell Signal Helper Methods ====================
 

@@ -11,8 +11,8 @@ from typing import Literal
 from pydantic import ConfigDict, Field, field_validator
 
 from src.application.common.dto import BaseDTO
+from src.application.domain.strategy.risk_contract import DEFAULT_PEAK_DRAWDOWN_STOP_RATIO
 from src.settings.config import settings
-
 
 # ==================== Strategy Type Enum ====================
 
@@ -34,7 +34,10 @@ class RiskManagementConfig(BaseDTO):
 
     use_stop_loss: bool = Field(default=False, description="손절 사용 여부")
     stop_loss_ratio: float | None = Field(
-        default=None, description="손절 비율 (예: -0.03 = -3%)", ge=-0.2, le=0.0
+        default=-DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+        description="보유 중 최고가 대비 손절 비율 (기본 -15%)",
+        ge=-0.2,
+        le=0.0,
     )
     use_take_profit: bool = Field(default=False, description="익절 사용 여부")
     take_profit_ratio: float | None = Field(
@@ -61,10 +64,17 @@ class RiskManagementConfig(BaseDTO):
     )
     atr_period: int = Field(default=14, description="ATR 계산 기간", ge=5, le=50)
 
+    model_config = ConfigDict(validate_assignment=True)
+
+    @field_validator("stop_loss_ratio", mode="before")
+    @classmethod
+    def normalize_peak_stop_ratio(cls, value: float | None) -> float:
+        _ = value
+        return -DEFAULT_PEAK_DRAWDOWN_STOP_RATIO
+
 
 class BaseStrategyConfig(BaseDTO):
     """기본 전략 설정"""
-
 
 
 class StrategyConfigDTO(BaseStrategyConfig):
@@ -151,16 +161,18 @@ class DynamicSellThresholdConfig(BaseDTO):
     loss_stoch: float = Field(default=75.0, description="손실 시 Stoch 임계값")
     loss_rsi: float = Field(default=75.0, description="손실 시 RSI 임계값")
 
-    # 긴급 손절 (수익률 <= -7%)
-    emergency_stop_ratio: float = Field(default=-0.07, description="긴급 손절 기준")
-
 
 class GoldenCrossRiskConfig(BaseDTO):
     """골든크로스 리스크 관리 설정"""
 
     # 손절/익절
     use_stop_loss: bool = Field(default=True, description="손절 사용 여부")
-    stop_loss_ratio: float = Field(default=-0.07, description="손절 비율", ge=-0.20, le=0.0)
+    stop_loss_ratio: float = Field(
+        default=-DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+        description="보유 중 최고가 대비 손절 비율",
+        ge=-0.20,
+        le=0.0,
+    )
     use_take_profit: bool = Field(default=True, description="익절 사용 여부")
     take_profit_ratio: float = Field(default=0.20, description="익절 비율", ge=0.05, le=0.50)
 
@@ -172,6 +184,10 @@ class GoldenCrossRiskConfig(BaseDTO):
     trailing_stop_distance: float = Field(
         default=0.07, description="트레일링 거리", ge=0.03, le=0.15
     )
+    use_atr_stop_loss: bool = Field(default=False, description="현재 ATR 기반 진입가 손절 사용")
+    atr_stop_loss_multiplier: float = Field(default=2.0, ge=0.5, le=5.0)
+    use_atr_trailing_stop: bool = Field(default=False, description="ATR 고점 추적 손절 사용")
+    atr_trailing_multiplier: float = Field(default=2.0, ge=0.5, le=5.0)
 
     # 보유 기간
     max_hold_days: int = Field(default=60, description="최대 보유 기간 (일)", ge=10, le=180)
@@ -181,6 +197,14 @@ class GoldenCrossRiskConfig(BaseDTO):
         default_factory=DynamicSellThresholdConfig,
         description="수익률 기반 동적 매도 임계값",
     )
+
+    model_config = ConfigDict(validate_assignment=True)
+
+    @field_validator("stop_loss_ratio", mode="before")
+    @classmethod
+    def normalize_peak_stop_ratio(cls, value: float) -> float:
+        _ = value
+        return -DEFAULT_PEAK_DRAWDOWN_STOP_RATIO
 
 
 class MAGapConfig(BaseDTO):
@@ -546,7 +570,7 @@ class GoldenCrossScanItemDTO(BaseDTO):
     symbol: str = Field(description="종목코드")
     name: str = Field(description="종목명")
     market: str = Field(description="시장 구분")
-    current_price: Decimal = Field(description="현재가")
+    current_price: Decimal = Field(gt=0, description="현재가")
 
     # 업종(섹터) 정보
     sector_name: str | None = Field(default=None, description="섹터명")
@@ -719,6 +743,7 @@ PHASE_TO_STAGE_MAP: dict[SellPhaseEnum, SellStageEnum] = {
 
 
 SELL_PHASE_INFO: dict[str, dict[str, str]] = {
+    "INSUFFICIENT_DATA": {"name": "데이터 부족", "action": "분석 보류 및 데이터 점검"},
     "NONE": {"name": "보유 유지", "action": "현 상태 유지"},
     "PHASE_1": {"name": "수익 보호", "action": "부분 익절 고려 (50%)"},
     "PHASE_2": {"name": "매도 준비", "action": "트레일링 스탑 활성화 권장"},
@@ -729,6 +754,7 @@ SELL_PHASE_INFO: dict[str, dict[str, str]] = {
 
 
 SELL_STAGE_INFO: dict[str, dict[str, str]] = {
+    "INSUFFICIENT_DATA": {"name": "데이터 부족", "action": "분석 보류", "ratio": "-"},
     "HOLD": {"name": "보유 유지", "action": "현 상태 유지", "ratio": "0%"},
     "REDUCE_1": {"name": "1차 비중 축소", "action": "20~30% 매도 고려", "ratio": "20~30%"},
     "REDUCE_2": {"name": "2차 비중 축소", "action": "30~40% 매도 권장", "ratio": "30~40%"},
@@ -754,13 +780,16 @@ class SellSignalAnalysisDTO(BaseDTO):
     name: str | None = Field(default=None, description="종목명")
     current_price: Decimal = Field(description="현재가")
     analyzed_at: datetime = Field(description="분석 시각")
+    analysis_status: str = Field(default="READY", description="분석 상태 (READY/INSUFFICIENT_DATA)")
 
     # 이동평균 지표
     ma_short: Decimal = Field(description="단기 MA (55일)")
     ma_long: Decimal = Field(description="장기 MA (165일)")
     ma_gap_ratio: float = Field(description="MA 갭 비율 (%)")
     is_death_cross: bool = Field(description="데드크로스 여부 (단기 MA < 장기 MA)")
-    is_gc_active: bool = Field(default=False, description="골든크로스 활성 여부 (단기 MA > 장기 MA)")
+    is_gc_active: bool = Field(
+        default=False, description="골든크로스 활성 여부 (단기 MA > 장기 MA)"
+    )
 
     # Stochastic 지표
     stoch_k: float = Field(description="Stochastic %K")
@@ -924,6 +953,7 @@ class AnalysisHistoryDTO(BaseDTO):
     symbol: str = Field(description="종목코드")
     name: str | None = Field(default=None, description="종목명")
     current_price: Decimal = Field(description="현재가")
+    analysis_status: str = Field(default="READY", description="분석 상태 (READY/INSUFFICIENT_DATA)")
 
     # 공통 지표
     ma_short: Decimal | None = Field(default=None, description="단기 MA (55일)")
@@ -977,7 +1007,8 @@ class AnalysisHistoryDTO(BaseDTO):
 
     # 메타데이터
     analyzed_at: datetime = Field(description="분석 시각")
-    entry_price: Decimal | None = Field(default=None, description="진입가 (수익률 계산용)")
+    entry_price: Decimal | None = Field(default=None, gt=0, description="진입가 (수익률 계산용)")
+    highest_price: Decimal | None = Field(default=None, gt=0, description="보유 중 최고가")
     note: str | None = Field(default=None, description="사용자 메모")
     is_active: bool = Field(description="활성 추적 여부")
     candle_count: int | None = Field(default=None, description="분석에 사용된 캔들 수")
@@ -998,7 +1029,7 @@ class AnalysisHistoryCreateDTO(BaseDTO):
     analysis_type: str = Field(description="분석 유형 (buy/sell)")
     symbol: str = Field(description="종목코드")
     name: str | None = Field(default=None, description="종목명")
-    current_price: Decimal = Field(description="현재가")
+    current_price: Decimal = Field(gt=0, description="현재가")
 
     # 공통 지표
     ma_short: Decimal | None = Field(default=None, description="단기 MA")
@@ -1037,7 +1068,8 @@ class AnalysisHistoryCreateDTO(BaseDTO):
     overbought_sell_blocked: bool | None = Field(default=None, description="과매수 매도 차단 여부")
 
     # 메타데이터 (analyzed_at은 서버에서 자동 설정)
-    entry_price: Decimal | None = Field(default=None, description="진입가 (수익률 계산용)")
+    entry_price: Decimal | None = Field(default=None, gt=0, description="진입가 (수익률 계산용)")
+    highest_price: Decimal | None = Field(default=None, gt=0, description="보유 중 최고가")
     note: str | None = Field(default=None, description="사용자 메모")
     is_active: bool = Field(default=True, description="활성 추적 여부")
     candle_count: int | None = Field(default=None, description="분석에 사용된 캔들 수")
@@ -1046,7 +1078,8 @@ class AnalysisHistoryCreateDTO(BaseDTO):
 class AnalysisHistoryUpdateDTO(BaseDTO):
     """분석 이력 업데이트 요청 DTO"""
 
-    entry_price: Decimal | None = Field(default=None, description="진입가 (수익률 계산용)")
+    entry_price: Decimal | None = Field(default=None, gt=0, description="진입가 (수익률 계산용)")
+    highest_price: Decimal | None = Field(default=None, gt=0, description="보유 중 최고가")
     note: str | None = Field(default=None, description="사용자 메모")
 
 
@@ -1066,6 +1099,7 @@ class PortfolioCashActionDTO(BaseDTO):
     priority: int = Field(description="우선순위 (1이 가장 높음)")
     action: str = Field(description="권장 행동")
     sell_stage: str = Field(description="매도 단계")
+    analysis_status: str = Field(default="READY", description="분석 상태 (READY/INSUFFICIENT_DATA)")
     suggested_sell_ratio: float = Field(description="권장 매도 비중", ge=0.0, le=1.0)
     urgency_score: float = Field(description="긴급도 점수", ge=0.0)
     profit_ratio: float | None = Field(default=None, description="현재 수익률")

@@ -26,6 +26,7 @@
 
 .stage-badge { padding: 8px 14px; border-radius: 8px; font-weight: 600; font-size: 13px; }
 .stage-HOLD { background: #dcfce7; color: #166534; }
+.stage-INSUFFICIENT_DATA { background: #e2e8f0; color: #475569; }
 .stage-REDUCE_1 { background: #fef3c7; color: #92400e; }
 .stage-REDUCE_2 { background: #fed7aa; color: #c2410c; }
 .stage-EXIT_ALL { background: #dc2626; color: #fff; }

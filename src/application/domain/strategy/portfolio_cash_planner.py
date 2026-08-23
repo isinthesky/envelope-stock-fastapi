@@ -9,10 +9,8 @@ urgency 점수/비중 맵/과열 임계값/노트는 원본과 100% 동일하게
 import json
 from datetime import datetime
 
-from src.application.domain.strategy.dto import (
-    PortfolioCashActionDTO,
-    PortfolioCashPlanDTO,
-)
+from src.application.domain.strategy.dto import PortfolioCashActionDTO, PortfolioCashPlanDTO
+from src.application.domain.strategy.risk_contract import is_peak_drawdown_stop_triggered
 
 
 class PortfolioCashPlanner:
@@ -33,6 +31,11 @@ class PortfolioCashPlanner:
         winner_priority_count = 0
 
         for item in histories:
+            analysis_status = getattr(item, "analysis_status", None) or (
+                "INSUFFICIENT_DATA"
+                if getattr(item, "sell_phase", None) == "INSUFFICIENT_DATA"
+                else "READY"
+            )
             sell_stage = getattr(item, "sell_stage", None) or "HOLD"
             final_stage = getattr(item, "final_stage", None) or sell_stage
             if hasattr(final_stage, "value"):
@@ -54,11 +57,24 @@ class PortfolioCashPlanner:
             profit_ratio = None
             entry_price = getattr(item, "entry_price", None)
             current_price = getattr(item, "current_price", None)
+            highest_price = getattr(item, "highest_price", None)
             if entry_price and current_price:
                 try:
                     profit_ratio = float((current_price - entry_price) / entry_price)
                 except Exception:
                     profit_ratio = None
+
+            if analysis_status == "INSUFFICIENT_DATA":
+                if current_price is not None and is_peak_drawdown_stop_triggered(
+                    current_price=current_price,
+                    entry_price=entry_price,
+                    highest_price=highest_price,
+                ):
+                    final_stage = "EXIT_ALL"
+                    sell_reasons.append("최고가 대비 15% 손절 우선 (지표 데이터 부족)")
+                else:
+                    final_stage = "INSUFFICIENT_DATA"
+                    sell_reasons.append("기술 지표 데이터 부족으로 매도 단계 판정 보류")
 
             score = 0.0
             reasons = list(sell_reasons)
@@ -106,6 +122,7 @@ class PortfolioCashPlanner:
                 reasons.append("ETF/레버리지 계열은 회전이 빨라 선제 축소")
 
             suggested_ratio = {
+                "INSUFFICIENT_DATA": 0.0,
                 "HOLD": 0.0,
                 "REDUCE_1": 0.25,
                 "REDUCE_2": 0.50,
@@ -134,7 +151,7 @@ class PortfolioCashPlanner:
             elif score >= 60 and suggested_ratio < 0.50:
                 suggested_ratio = max(suggested_ratio, 0.50)
 
-            action = "보유 유지"
+            action = "분석 보류" if final_stage == "INSUFFICIENT_DATA" else "보유 유지"
             if suggested_ratio >= 1.0:
                 action = "전량 현금화"
             elif suggested_ratio >= 0.50:
@@ -165,6 +182,7 @@ class PortfolioCashPlanner:
                     priority=0,
                     action=action,
                     sell_stage=final_stage,
+                    analysis_status=analysis_status,
                     suggested_sell_ratio=round(suggested_ratio, 2),
                     urgency_score=round(non_negative_score, 2),
                     profit_ratio=round(profit_ratio, 4) if profit_ratio is not None else None,

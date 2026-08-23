@@ -10,7 +10,11 @@ from src.adapters.database.models.strategy_signal import SignalStatus, SignalTyp
 from src.adapters.database.models.strategy_symbol_state import SymbolState
 from src.application.domain.strategy.dto import GoldenCrossConfigDTO, GoldenCrossMAConfig
 from src.application.domain.strategy.golden_cross_engine import GoldenCrossEngine
-from src.application.domain.strategy.state_machine import Signal, StateTransition
+from src.application.domain.strategy.state_machine import (
+    GoldenCrossStateMachine,
+    Signal,
+    StateTransition,
+)
 
 # 합성데이터(180행)에 맞춘 소형 MA로 고정 — 엔진의 데이터 충분성 가드
 # (len(df) < long_period+10)를 settings 기본값(라이브 200)과 무관하게 통과시킨다.
@@ -194,6 +198,55 @@ async def test_dry_run_signal_returns_skipped_dto_without_persisting(
     assert result.prev_state == SymbolState.READY_TO_BUY.value
     assert result.new_state == SymbolState.IN_POSITION.value
     assert state_repo.write_count == 0
+
+
+@pytest.mark.asyncio
+async def test_price_stop_is_evaluated_when_indicator_history_is_insufficient():
+    """지표 캔들이 부족해도 보유 종목의 고점 -15% 가격 손절은 평가한다."""
+    state = SimpleNamespace(
+        state=SymbolState.IN_POSITION.value,
+        gc_date=None,
+        pullback_date=None,
+        entry_price=Decimal("100"),
+        entry_date=datetime(2024, 1, 1),
+        highest_price=Decimal("120"),
+        trailing_stop_activated=True,
+    )
+    engine = GoldenCrossEngine(session=SimpleNamespace(), kis_client=SimpleNamespace())
+    engine.symbol_state_repo = _RecordingSymbolStateRepo(state=state)
+    price_only = pd.DataFrame(
+        {
+            "timestamp": [pd.Timestamp("2024-03-01")],
+            "close": [Decimal("102")],
+        }
+    )
+    engine._fetch_ohlcv = AsyncMock(side_effect=[None, price_only])
+
+    result = await engine._process_symbol(
+        strategy=SimpleNamespace(id=1),
+        symbol="005930",
+        config=_TEST_CONFIG,
+        state_machine=GoldenCrossStateMachine(_TEST_CONFIG),
+        safety_guard=SimpleNamespace(),
+        dry_run=True,
+    )
+
+    assert result is not None
+    assert result.signal_type == SignalType.SELL.value
+    assert result.note == "stop_loss"
+
+
+@pytest.mark.asyncio
+async def test_live_execution_is_blocked_by_default_kill_switch():
+    engine = GoldenCrossEngine(session=SimpleNamespace(), kis_client=SimpleNamespace())
+    engine.strategy_repo = SimpleNamespace(
+        get_by_id=AsyncMock(side_effect=AssertionError("kill-switch must run first"))
+    )
+
+    result = await engine.execute(strategy_id=1, dry_run=False)
+
+    assert result.orders_created == 0
+    assert "STRATEGY_LIVE_TRADING_ENABLED" in result.errors[0]
 
 
 class _SignalRepoWithHistory:

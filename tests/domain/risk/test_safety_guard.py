@@ -3,14 +3,15 @@
 Safety Guard 유닛 테스트
 """
 
-import pytest
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from src.application.domain.risk.dto import (
-    SafetyGuardConfigDTO,
     PositionSizingConfigDTO,
     RiskLimitConfigDTO,
+    SafetyGuardConfigDTO,
 )
 from src.application.domain.risk.safety_guard import SafetyGuard, TradingBlockReason
 
@@ -67,6 +68,20 @@ class TestSafetyGuard:
         assert can_trade is False
         assert reason == TradingBlockReason.DAILY_LOSS_LIMIT
 
+    def test_risk_reducing_sell_bypasses_loss_guard(self, safety_guard):
+        """손실 한도는 포지션 청산을 막아 위험을 키우면 안 된다."""
+        safety_guard.record_trade_result(
+            symbol="005930",
+            is_win=False,
+            realized_pnl=Decimal("-300000"),
+        )
+
+        can_trade, reason, message = safety_guard.can_trade(is_risk_reducing=True)
+
+        assert can_trade is True
+        assert reason is None
+        assert message is None
+
     def test_max_daily_trades_block(self, safety_guard):
         """일일 거래 횟수 한도 차단"""
         # 3회 거래 기록
@@ -96,7 +111,10 @@ class TestSafetyGuard:
 
         assert can_trade is False
         # 거래 횟수 한도 또는 연속 손실 중 하나
-        assert reason in [TradingBlockReason.CONSECUTIVE_LOSSES, TradingBlockReason.MAX_TRADES_REACHED]
+        assert reason in [
+            TradingBlockReason.CONSECUTIVE_LOSSES,
+            TradingBlockReason.MAX_TRADES_REACHED,
+        ]
 
     def test_consecutive_losses_reset_on_profit(self, safety_guard):
         """수익 발생 시 연속 손실 카운터 리셋"""

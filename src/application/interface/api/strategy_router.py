@@ -15,23 +15,19 @@ from datetime import datetime
 
 from fastapi import APIRouter, Query, Request, status
 
-from src.application.common.exceptions import ServiceUnavailableError
-
 from src.adapters.external.kofia_client import get_kofia_client
 from src.adapters.external.naver.stock_client import get_naver_stock_client
 from src.adapters.external.telegram import get_telegram_notifier
-
 from src.application.common.dependencies import (
     AdminAccessDep,
     BuyStrategyServiceDep,
     DatabaseSession,
     MarketDataServiceDep,
     StrategyServiceDep,
-    StrategySymbolStateRepositoryDep,
-    StockUniverseRepositoryDep,
     verify_admin_access,
 )
 from src.application.common.dto import ResponseDTO
+from src.application.common.exceptions import ServiceUnavailableError
 from src.application.domain.strategy.dto import (
     AnalysisHistoryCreateDTO,
     AnalysisHistoryDTO,
@@ -39,23 +35,23 @@ from src.application.domain.strategy.dto import (
     AnalysisHistoryRefreshResultDTO,
     AnalysisHistoryUpdateDTO,
     GoldenCrossConfigDTO,
-    GoldenCrossScanListDTO,
     GoldenCrossRecommendationDTO,
+    GoldenCrossScanListDTO,
     PortfolioCashPlanDTO,
     PresetActivateRequestDTO,
     SellSignalAnalysisDTO,
     SignalListDTO,
     SignalStatisticsDTO,
     StockUniverseListDTO,
-    StrategyPresetListDTO,
-    UniverseRefreshResultDTO,
     StrategyCreateRequestDTO,
     StrategyDetailResponseDTO,
     StrategyExecuteRequestDTO,
     StrategyExecuteResultDTO,
     StrategyListResponseDTO,
+    StrategyPresetListDTO,
     StrategyUpdateRequestDTO,
     SymbolStateListDTO,
+    UniverseRefreshResultDTO,
 )
 from src.application.domain.strategy.sell_risk_backfill_service import SellRiskBackfillService
 from src.application.domain.strategy.sell_rule_research_service import SellPeakRuleResearchService
@@ -401,8 +397,6 @@ async def analyze_sell_signal(
     symbol: str,
     service: StrategyServiceDep,
     market_data_service: MarketDataServiceDep,
-    state_repo: StrategySymbolStateRepositoryDep,
-    universe_repo: StockUniverseRepositoryDep,
     stoch_overbought: float = Query(
         default=70.0, ge=50.0, le=90.0, description="Stochastic 과매수 임계값"
     ),
@@ -445,20 +439,19 @@ async def analyze_sell_signal(
     highest_price: float | None = None
     trailing_stop_activated: bool = False
 
-    if strategy_id is not None and entry_price is None:
+    if strategy_id is not None:
         try:
-            # NOTE: state_repo는 DI로 주입받고, @transaction이 없으므로 session 없이 조회
-            # Repository는 _get_session에서 session 없으면 에러 발생
-            # 여기서는 단순 조회이므로 새 session으로 조회 필요 - 서비스 메서드로 위임 권장
-            # 임시 해결: get_by_strategy_and_symbol이 session 없이 동작하도록 adapter 패턴 유지
             state = await service.get_symbol_state_for_sell_signal(strategy_id, symbol)
-            if state and state.get("entry_price"):
-                entry_price = state["entry_price"]
+            if state:
+                if entry_price is None and state.get("entry_price"):
+                    entry_price = state["entry_price"]
                 if state.get("highest_price"):
                     highest_price = state["highest_price"]
                 trailing_stop_activated = state.get("trailing_stop_activated", False)
-        except Exception:
-            pass  # 조회 실패 시 무시
+        except Exception as exc:
+            raise ServiceUnavailableError(
+                f"Failed to load persisted position state for strategy {strategy_id}"
+            ) from exc
 
     result = await service.analyze_sell_signal(
         symbol=symbol,
@@ -622,6 +615,7 @@ async def update_analysis_history(
     history = await service.update_analysis_history(
         history_id=history_id,
         entry_price=request.entry_price,
+        highest_price=request.highest_price,
         note=request.note,
     )
     return ResponseDTO.success_response(history, "Analysis history updated successfully")

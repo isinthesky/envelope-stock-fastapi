@@ -26,9 +26,13 @@ from src.adapters.database.models.strategy_symbol_state import SymbolState
 from src.application.domain.strategy.dto import (
     GoldenCrossConfigDTO,
 )
+from src.application.domain.strategy.risk_contract import (
+    DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+    is_peak_drawdown_stop_triggered,
+)
 from src.application.domain.strategy.strategy_contract import (
-    GoldenCrossScanContext,
     GoldenCrossRiskExitReason,
+    GoldenCrossScanContext,
     GoldenCrossStrategyContract,
     GoldenCrossTradeSignal,
     GoldenCrossTransitionReason,
@@ -53,6 +57,7 @@ class IndicatorSnapshot:
     ma_long: Decimal
     stoch_k: float
     stoch_d: float
+    atr: Decimal | None = None
 
     @property
     def is_gc_active(self) -> bool:
@@ -147,6 +152,27 @@ class GoldenCrossStateMachine:
             reason=GoldenCrossTransitionReason.UNKNOWN_STATE_RESET.value,
         )
 
+    def process_price_stop(
+        self,
+        *,
+        current_price: Decimal,
+        entry_price: Decimal | None,
+        highest_price: Decimal | None,
+    ) -> StateTransition | None:
+        """지표 없이 평가 가능한 가격 손절만 판정한다."""
+        if self.risk_config.use_stop_loss and is_peak_drawdown_stop_triggered(
+            current_price=current_price,
+            entry_price=entry_price,
+            highest_price=highest_price,
+            stop_ratio=DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+        ):
+            return StateTransition(
+                new_state=SymbolState.WAITING_FOR_GC,
+                signal=Signal.SELL,
+                reason=GoldenCrossRiskExitReason.STOP_LOSS.value,
+            )
+        return None
+
     def _process_waiting_for_gc(
         self, current: IndicatorSnapshot, prev: IndicatorSnapshot
     ) -> StateTransition:
@@ -155,9 +181,7 @@ class GoldenCrossStateMachine:
 
         조건: 전일 단기 MA <= 장기 MA AND 금일 단기 MA > 장기 MA
         """
-        is_golden_cross = (
-            prev.ma_short <= prev.ma_long and current.ma_short > current.ma_long
-        )
+        is_golden_cross = prev.ma_short <= prev.ma_long and current.ma_short > current.ma_long
 
         if is_golden_cross:
             return StateTransition(
@@ -286,7 +310,29 @@ class GoldenCrossStateMachine:
         4. 트레일링 스탑
         5. 최대 보유 기간 초과
         """
-        # 1. 데드크로스 체크
+        # 1. 가격 기반 손절은 지표와 무관하게 최우선 평가한다.
+        price_stop = self.process_price_stop(
+            current_price=current.close,
+            entry_price=entry_price,
+            highest_price=highest_price,
+        )
+        if price_stop is not None:
+            return price_stop
+
+        if (
+            self.risk_config.use_atr_stop_loss
+            and entry_price is not None
+            and current.atr is not None
+            and current.close
+            <= entry_price - current.atr * Decimal(str(self.risk_config.atr_stop_loss_multiplier))
+        ):
+            return StateTransition(
+                new_state=SymbolState.WAITING_FOR_GC,
+                signal=Signal.SELL,
+                reason=GoldenCrossRiskExitReason.STOP_LOSS.value,
+            )
+
+        # 2. 데드크로스 체크
         if not current.is_gc_active:
             return StateTransition(
                 new_state=SymbolState.WAITING_FOR_GC,
@@ -297,15 +343,6 @@ class GoldenCrossStateMachine:
         # 수익률 계산
         if entry_price and entry_price > 0:
             pnl_ratio = float((current.close - entry_price) / entry_price)
-
-            # 2. 손절 체크
-            if self.risk_config.use_stop_loss:
-                if pnl_ratio <= self.risk_config.stop_loss_ratio:
-                    return StateTransition(
-                        new_state=SymbolState.WAITING_FOR_GC,
-                        signal=Signal.SELL,
-                        reason=GoldenCrossRiskExitReason.STOP_LOSS.value,
-                    )
 
             # 3. 익절 체크
             if self.risk_config.use_take_profit:
@@ -332,6 +369,21 @@ class GoldenCrossStateMachine:
                             signal=Signal.SELL,
                             reason=GoldenCrossRiskExitReason.TRAILING_STOP.value,
                         )
+
+            if (
+                self.risk_config.use_atr_trailing_stop
+                and highest_price
+                and highest_price > 0
+                and current.atr is not None
+                and current.close
+                <= highest_price
+                - current.atr * Decimal(str(self.risk_config.atr_trailing_multiplier))
+            ):
+                return StateTransition(
+                    new_state=SymbolState.WAITING_FOR_GC,
+                    signal=Signal.SELL,
+                    reason=GoldenCrossRiskExitReason.TRAILING_STOP.value,
+                )
 
         # 5. 최대 보유 기간 체크
         if entry_date:
@@ -363,5 +415,3 @@ class GoldenCrossStateMachine:
             return SymbolState.WAITING_FOR_PULLBACK
 
         return SymbolState.WAITING_FOR_GC
-
-

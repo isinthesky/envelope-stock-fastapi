@@ -185,11 +185,11 @@ http://localhost:${API_PORT:-10131}/ops
 docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -e PYTHONPATH=/work -e UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv kis-strategy-alert-server-api uv run pytest tests/ -q
 ```
 
-현재 확인값: `490 passed, 13 skipped`.
+현재 확인값: `731 passed, 13 skipped`.
 
 ## 알려진 함정
 
-- ⚠️ 전략을 활성으로 등록하면 월~금 `15:35` `StrategyScheduler._execute_strategies_job`가 활성 `golden_cross` 전략을 `dry_run=False`로 실행해 실주문할 수 있다. 명시적 kill-switch는 없다.
+- ⚠️ 월~금 `15:35` 활성 `golden_cross` 전략 실행은 `STRATEGY_LIVE_TRADING_ENABLED=true`일 때만 실주문한다. 기본값은 `false`이며 운영 검증과 명시적 승인 뒤에만 켠다.
 - ⚠️ `analysis_history`의 종목코드 칸에는 `MEMO-BROADCAST-1` 같은 메모 행을 넣지 않는다. 파이프라인이 `^[0-9A-Z]{6}$`로 자동 필터하지만, 종목코드 칸은 종목코드 전용이다.
 - ⚠️ 실운영 `KIS_API_RATE_LIMIT=8`은 KIS 실전 한도 `20/s`의 40%로 설정한 보수값이다. `EGW00201`은 `0.5 → 1.0 → 2.0`초 지수 백오프로 최대 3회 재시도한다.
 - ⚠️ 알림은 `09:20/11:20/12:20/14:20` 데이터 갱신 뒤 `09:30/11:30/12:30/14:30`에 전송한다. 20분 내 성공 갱신이 없으면 조용히 skip하고, 동일 시그니처는 6시간 동안 중복 차단한다.

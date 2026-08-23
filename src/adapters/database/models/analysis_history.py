@@ -40,18 +40,12 @@ class AnalysisHistoryModel(Base, BaseModel):
         String(20), nullable=False, index=True, comment="분석 유형 (buy/sell)"
     )
 
-    symbol: Mapped[str] = mapped_column(
-        String(20), nullable=False, index=True, comment="종목코드"
-    )
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True, comment="종목코드")
 
-    name: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, comment="종목명"
-    )
+    name: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="종목명")
 
     # ==================== 가격 정보 ====================
-    current_price: Mapped[Decimal] = mapped_column(
-        Numeric(18, 2), nullable=False, comment="현재가"
-    )
+    current_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, comment="현재가")
 
     # ==================== 공통 지표 ====================
     ma_short: Mapped[Decimal | None] = mapped_column(
@@ -76,7 +70,9 @@ class AnalysisHistoryModel(Base, BaseModel):
 
     # ==================== 매수 분석용 (골든크로스) ====================
     gc_state: Mapped[str | None] = mapped_column(
-        String(30), nullable=True, comment="골든크로스 상태 (NOT_GC, GC_ACTIVE, WAITING_FOR_PULLBACK, READY_TO_BUY)"
+        String(30),
+        nullable=True,
+        comment="골든크로스 상태 (NOT_GC, GC_ACTIVE, WAITING_FOR_PULLBACK, READY_TO_BUY)",
     )
 
     is_gc_active: Mapped[bool | None] = mapped_column(
@@ -84,9 +80,7 @@ class AnalysisHistoryModel(Base, BaseModel):
     )
 
     # ==================== 매도 분석용 ====================
-    rsi: Mapped[Decimal | None] = mapped_column(
-        Numeric(8, 4), nullable=True, comment="RSI (14일)"
-    )
+    rsi: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True, comment="RSI (14일)")
 
     is_death_cross: Mapped[bool | None] = mapped_column(
         Boolean, nullable=True, comment="데드크로스 여부 (단기 MA < 장기 MA)"
@@ -104,6 +98,18 @@ class AnalysisHistoryModel(Base, BaseModel):
         String(20), nullable=True, comment="매도 Phase (NONE, PHASE_1~5)"
     )
 
+    sell_stage: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, comment="최종 매도 Stage"
+    )
+
+    sell_ratio_min: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 4), nullable=True, comment="최종 최소 권장 매도 비율"
+    )
+
+    sell_ratio_max: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 4), nullable=True, comment="최종 최대 권장 매도 비율"
+    )
+
     sell_reasons: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="매도 근거 (JSON array)"
     )
@@ -117,9 +123,11 @@ class AnalysisHistoryModel(Base, BaseModel):
         Numeric(18, 2), nullable=True, comment="진입가 (수익률 계산용)"
     )
 
-    note: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="사용자 메모"
+    highest_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 2), nullable=True, comment="보유 중 최고가 (고점 대비 손절 계산용)"
     )
+
+    note: Mapped[str | None] = mapped_column(Text, nullable=True, comment="사용자 메모")
 
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, comment="활성 추적 여부"

@@ -16,6 +16,9 @@ from src.application.domain.strategy.dto import (
     RiskManagementConfig,
     StrategyConfigDTO,
 )
+from src.application.domain.strategy.risk_contract import (
+    DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+)
 
 
 class TestBacktestEngine:
@@ -28,7 +31,7 @@ class TestBacktestEngine:
             position=PositionConfig(allocation_ratio=0.1, max_position_count=1),
             risk_management=RiskManagementConfig(
                 use_stop_loss=True,
-                stop_loss_ratio=-0.05,
+                stop_loss_ratio=-DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
                 use_take_profit=True,
                 take_profit_ratio=0.10,
                 use_trailing_stop=False,
@@ -162,7 +165,7 @@ class TestBacktestEngine:
             }
         )
 
-        # 손절 비율 -5%로 설정
+        # 보유 중 최고가 대비 -15% 손절 기준 사용
         result = await self.engine.run(
             data=data,
             start_date=datetime(2024, 1, 1),
@@ -170,9 +173,7 @@ class TestBacktestEngine:
         )
 
         # 손절 거래 확인
-        stop_loss_trades = [
-            t for t in result.trades if t.exit_reason == "stop_loss"
-        ]
+        stop_loss_trades = [t for t in result.trades if t.exit_reason == "stop_loss"]
 
         # 결과 검증 (손절이 발동했을 수도 있음)
         assert result.total_trades >= 0
@@ -203,9 +204,7 @@ class TestBacktestEngine:
         )
 
         # 익절 거래 확인
-        take_profit_trades = [
-            t for t in result.trades if t.exit_reason == "take_profit"
-        ]
+        take_profit_trades = [t for t in result.trades if t.exit_reason == "take_profit"]
 
         # 결과 검증
         assert result.total_trades >= 0
