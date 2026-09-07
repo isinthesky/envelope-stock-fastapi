@@ -143,7 +143,7 @@ docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -
 - ⚠️ `force_refresh=True`를 남발하지 않는다. KIS 토큰은 1일 1회 발급 원칙이다.
 - `docker compose build`와 `docker compose up -d --build`는 `kis_token_cache` named volume을 유지하므로 토큰 재발급 없이 안전하다.
   마운트 경로는 실행 사용자의 `HOME`이 결정한다: 현재 배포본(root)은 `/root/KIS/config`, 컨테이너 하드닝 적용 후(비루트 `uid 10001`)는 `/home/appuser/KIS/config`.
-- 컨테이너 하드닝(비루트 `uid 10001` 실행, Redis 비밀번호 필수, DB/Redis 로컬 전용 바인딩)은 2026-09-08 기준 **파일 변경만 완료된 미배포 상태**다. 절차는 `README.md`의 「컨테이너 하드닝 적용 절차」를 따른다.
+- 컨테이너 하드닝(비루트 `uid 10001` 실행, Redis 비밀번호 필수, DB/Redis 로컬 전용 바인딩)은 2026-09-08에 **배포 완료**됐다. 컨테이너 안에서 `uv run`은 실패하므로 `/app/.venv/bin/<cmd>`를 직접 실행한다. 롤백 절차는 `README.md`의 「컨테이너 하드닝 적용 절차」를 따른다.
 - 하드닝 적용 후 api 컨테이너 안에서 `uv run ...` 은 `/app/.venv` 쓰기 때문에 실패한다. `/app/.venv/bin/python` 또는 `/app/.venv/bin/<cmd>` 를 직접 쓰거나 `docker compose exec --user root api ...` 를 사용한다.
 - 전체 테스트의 현재 확인값은 `790 passed, 13 skipped`다(2026-09-08 실측).
 - `/ops`, `/api/v1/ops/summary`, `/api/v1/ops/notification-scheduler-status`는 구현되어 있으며 `AdminAccessDep`로 보호된다.

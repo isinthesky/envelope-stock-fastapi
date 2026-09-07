@@ -124,11 +124,22 @@ TELEGRAM_CHAT_ID=...
 curl -fsS http://localhost:${API_PORT:-10131}/health
 ```
 
-### 3) 컨테이너 하드닝 적용 절차 (2026-09-08 기준 **미적용**)
+### 3) 컨테이너 하드닝 적용 절차 (2026-09-08 **적용 완료**)
 
 `Dockerfile`(비루트 `uid 10001`), `docker-compose.yml`(Redis 비밀번호 필수화, DB/Redis 로컬 전용 바인딩,
-토큰 볼륨 경로 변경), `.dockerignore`는 **파일 변경만 완료된 상태**입니다.
-아직 재빌드하지 않았으므로 **실행 중인 컨테이너는 변경 전 이미지(root, `/root/KIS/config`)** 입니다.
+토큰 볼륨 경로 변경), `.dockerignore`가 **2026-09-08에 배포 완료**됐습니다.
+아래 절차는 재적용·재현·롤백용으로 보존합니다.
+
+적용 시 실측 결과:
+
+| 항목 | 결과 |
+|---|---|
+| api 실행 사용자 | `uid=10001(appuser)`, `HOME=/home/appuser` |
+| redis 실행 사용자 | `uid=999(redis)` (공식 entrypoint의 `gosu` 강등 보존) |
+| 토큰 캐시 | 파일 35개 mtime·해시 **전부 불변** — 재발급 없음(2회차 재기동으로 확정) |
+| `/health` | `database/redis: connected`, `kis_api: authenticated` |
+| Redis 인증 | 비밀번호 없이 `NOAUTH Authentication required` |
+| 포트 | postgres/redis `127.0.0.1` 전용, api `0.0.0.0`(공개 포털) |
 
 ⚠️ KIS 토큰은 **1일 1회 발급 원칙**입니다. 아래 절차는 장 마감 후 또는 주말에 1회만 수행하고,
 `force_refresh=True`를 임의로 추가하지 않습니다. 재기동 1회차에는 프로세스 시작 시각 기준 토큰 파일이
@@ -284,9 +295,10 @@ docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -
 
 현재 확인값: `790 passed, 13 skipped` (2026-09-08 실측, 이전 베이스라인 `731 passed, 13 skipped`).
 
-> 컨테이너 하드닝 적용 후에는 이 이미지도 비루트(`uid 10001`)로 실행됩니다.
-> Docker Desktop이 bind mount 소유권을 컨테이너 uid로 매핑하므로 위 명령은 그대로 동작하며,
-> 권한 오류가 나면 `--user root` 를 추가하세요.
+> 이 이미지는 비루트(`uid 10001`)로 실행되지만 위 명령은 **`--user root` 없이 그대로 동작합니다**
+> (2026-09-08 실측: 794 passed). `UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv`가 venv를 쓰기 가능한
+> `/tmp` 아래로 돌리므로 `uv run`이 `/app/.venv` 쓰기를 시도하지 않기 때문입니다.
+> 이 환경변수를 빼면 비루트에서 실패합니다.
 
 ## 알려진 함정
 
@@ -296,7 +308,7 @@ docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -
 - ⚠️ 실운영 `KIS_API_RATE_LIMIT=8`은 KIS 실전 한도 `20/s`의 40%로 설정한 보수값이다. `EGW00201`은 `0.5 → 1.0 → 2.0`초 지수 백오프로 최대 3회 재시도한다.
 - ⚠️ 알림은 `09:20/11:20/12:20/14:20` 데이터 갱신 뒤 `09:30/11:30/12:30/14:30`에 전송한다. 20분 내 성공 갱신이 없으면 조용히 skip하고, 동일 시그니처는 6시간 동안 중복 차단한다.
 - ⚠️ 매도 판단 엔진은 3벌(E1 실주문 / E2 화면·API·텔레그램 분석 / E3 백테스트)이고 규칙이 서로 다르다. 각 화면 상단의 엔진 배지로 출처를 확인한다. 상세는 `docs/sell-strategy.md` §1, 화면↔엔진 매핑은 `docs/buy-sell-usage-guide.md` §2.
-- ⚠️ 컨테이너 하드닝(비루트 실행 · Redis 비밀번호 필수 · DB/Redis 로컬 전용 바인딩)은 **파일 변경만 완료된 미배포 상태**다(2026-09-08). 적용 전에는 「컨테이너 하드닝 적용 절차」의 순서를 반드시 지킨다.
+- ⚠️ 컨테이너 하드닝(비루트 `uid 10001` 실행 · Redis 비밀번호 필수 · DB/Redis `127.0.0.1` 전용 바인딩)은 2026-09-08에 **적용 완료**됐다. 컨테이너 안에서 `uv run`은 `/app/.venv` 쓰기 실패로 죽으므로 `/app/.venv/bin/<cmd>`를 직접 실행한다(단 위 호스트 테스트 명령은 `UV_PROJECT_ENVIRONMENT`가 `/tmp`를 가리켜 그대로 동작한다). 되돌리려면 「컨테이너 하드닝 적용 절차」의 롤백 순서를 지킨다.
 
 ## 알려진 한계
 
