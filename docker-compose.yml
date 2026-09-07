@@ -10,8 +10,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-kis_trading}
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    # DB_BIND_HOST 기본값 127.0.0.1 = 호스트 로컬 전용(LAN 노출 차단).
+    # 다른 기기에서 직접 붙어야 하면 .env 에 DB_BIND_HOST=0.0.0.0 을 설정한다.
     ports:
-      - "${POSTGRES_PORT:-5434}:5432"
+      - "${DB_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5434}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -27,11 +29,29 @@ services:
   redis:
     image: redis:7-alpine
     container_name: kis-strategy-alert-redis
+    # ⚠️ REDIS_PASSWORD 는 필수다. 비어 있으면 이 컨테이너는 기동을 거부한다(아래 command).
+    #    파싱 시점(`${VAR:?}`)이 아니라 **런타임**에 실패시키는 이유: 파싱 시점에 막으면
+    #    ps/logs/down/config 등 롤백·관측 명령까지 전부 불가능해진다.
+    #    비밀번호는 REDIS_URL 에 그대로 삽입되므로 @ : / % 등 URL 예약문자를 쓰지 말 것
+    #    (생성 예: openssl rand -hex 24).
     environment:
-      REDISCLI_AUTH: ${REDIS_PASSWORD}
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -c
+      - |
+        if [ -z "$$REDIS_PASSWORD" ]; then
+          echo "FATAL: REDIS_PASSWORD 가 비어 있습니다. 인증 없는 Redis 기동을 거부합니다." >&2
+          echo "       .env 에 REDIS_PASSWORD 를 설정하세요 (예: openssl rand -hex 24)." >&2
+          exit 1
+        fi
+        # 공식 entrypoint 를 재진입시킨다. 직접 `exec redis-server` 하면 $1 이 sh 가 되어
+        # entrypoint 의 `/data` chown + `gosu redis`(uid 999) 권한 강등 분기를 건너뛰고
+        # redis 가 root 로 돌아간다(하드닝 취지에 역행).
+        exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass "$$REDIS_PASSWORD"
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${DB_BIND_HOST:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -52,17 +72,33 @@ services:
     environment:
       # Database (컨테이너 내부 네트워크)
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-kis_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kis_trading}
-      # Redis
-      REDIS_URL: redis://${REDIS_PASSWORD:+:$REDIS_PASSWORD@}redis:6379/0
+      # Redis (비밀번호 필수. 특수문자 사용 시 URL 인코딩 필요 → hex/base62 권장)
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # App settings
       ENV: ${ENV:-development}
       DEBUG: ${DEBUG:-false}
       HOST: 0.0.0.0
       PORT: "8000"
+    # api 는 공개 포털을 겸하므로 의도적으로 0.0.0.0 바인딩을 유지한다(postgres/redis 와 비대칭).
     ports:
       - "${API_PORT:-10131}:8000"
+    security_opt:
+      - no-new-privileges:true
     volumes:
-      - kis_token_cache:/root/KIS/config  # KIS API 토큰 캐시 (1일 1회 발급 원칙 유지)
+      # ⚠️ 비루트(uid 10001) 실행이므로 HOME(/home/appuser) 아래로 마운트한다.
+      #    볼륨 이름은 그대로 유지 → 기존 토큰 파일이 보존되고 재발급이 발생하지 않는다.
+      #    [적용 절차] 재기동 **전에** 아래 chown 을 1회만 수행할 것(데이터 복사 없음):
+      #      docker compose stop api
+      #      docker run --rm -v kis-strategy-alert-server_kis_token_cache:/data alpine \
+      #        sh -c 'chown -R 10001:10001 /data && chmod 700 /data'
+      #      docker compose up -d --build
+      #    [검증] docker exec kis-strategy-alert-server sh -c \
+      #      'touch /home/appuser/KIS/config/.wtest && rm /home/appuser/KIS/config/.wtest && echo WRITABLE'
+      #      → WRITABLE 이 안 나오면 토큰 재발급이 조용히 반복되므로 즉시 롤백한다.
+      #    [롤백] git checkout -- docker-compose.yml Dockerfile 을 먼저 하고,
+      #      docker run --rm -v kis-strategy-alert-server_kis_token_cache:/data alpine chown -R 0:0 /data
+      #      후 docker compose up -d --build.
+      - kis_token_cache:/home/appuser/KIS/config  # KIS API 토큰 캐시 (1일 1회 발급 원칙 유지)
       - ./reports:/app/reports  # walk-forward 검증 리포트 공유 (CLI 생성 ↔ API read-only 노출)
     networks:
       - kis-network
@@ -88,7 +124,8 @@ services:
       dockerfile: Dockerfile.test
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-kis_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kis_trading}
-      REDIS_URL: redis://${REDIS_PASSWORD:+:$REDIS_PASSWORD@}redis:6379/0
+      # test 서비스는 env_file 이 없어 settings 기본값을 못 쓰므로 URL 에 비밀번호가 반드시 있어야 한다.
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # Settings currently accepts development/staging/production only.
       ENV: development
       DEBUG: "false"

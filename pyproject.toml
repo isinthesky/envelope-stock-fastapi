@@ -36,8 +36,10 @@ dependencies = [
     "pydantic-settings>=2.5.0",
 
     # 보안 및 인증
-    "python-jose[cryptography]>=3.3.0",
-    "passlib[bcrypt]>=1.7.4",
+    # pycryptodome: KIS 웹소켓 실시간 체결통보 AES 복호화에 실사용
+    # (adapters/external/websocket/kis_websocket.py). 제거 금지.
+    # python-jose / passlib 는 2026-09-08 제거 — JWT 인증은 구현된 적 없는
+    # 예정 기능이었고 관리자 인증은 IP allowlist 기반이다.
     "pycryptodome>=3.20.0",
 
     # 환경 설정
