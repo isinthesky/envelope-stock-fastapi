@@ -147,10 +147,10 @@ def test_public_overview_uses_canonical_buy_state_labels() -> None:
 
     html = client.get("/page/").text
 
-    assert 'K &lt; 30<br><small>매수 준비</small>' in html
-    assert '회복 일부<br><small>매수 관심</small>' in html
+    assert "K &lt; 30<br><small>매수 준비</small>" in html
+    assert "회복 일부<br><small>매수 관심</small>" in html
     assert "최근 과매도 이후 K 상승 또는 K&gt;D" in html
-    assert 'K &lt; 30<br><small>매수 관심</small>' not in html
+    assert "K &lt; 30<br><small>매수 관심</small>" not in html
 
 
 # ==================== 스캔 페이지: capability 기반 렌더링 (플랜 4.1/5단계) ====================
@@ -266,7 +266,7 @@ def test_public_sell_analysis_page_is_public_only_and_persistent() -> None:
     assert "saveToHistory(lastResult)" in js_source
     assert "entry.symbol !== safe.symbol || entry.name" in js_source
     assert "renderHistory()" in js_source
-    assert 'data-history-analyzed-at' not in html  # 이력은 안전한 DOM API로 동적 생성
+    assert "data-history-analyzed-at" not in html  # 이력은 안전한 DOM API로 동적 생성
     assert "window.localStorage.setItem" in js_source
     assert "window.localStorage.getItem" in js_source
     assert 'return minutes + "분 전"' in js_source
@@ -283,3 +283,22 @@ def test_public_sell_analysis_page_is_public_only_and_persistent() -> None:
         "backtest",
     ]:
         assert marker not in combined
+
+
+def test_public_pages_label_analysis_engine_and_deny_order_execution() -> None:
+    """공개 매도 화면은 분석 엔진(E2) 출처를 밝히고 주문 미실행을 고지한다."""
+    client = TestClient(_build_app(), raise_server_exceptions=False)
+
+    for path in ("/page/", "/page/sell-analysis/"):
+        html = client.get(path).text
+        assert "분석 엔진 E2" in html, path
+        assert "어떤 주문도 실행하지 않습니다" in html, path
+        # 배지 문구가 공개 화면 금지 마커를 새로 유입시키지 않는다
+        for marker in FORBIDDEN_MARKERS:
+            assert marker not in html, f"{path} leaks {marker!r}"
+
+    css_source = (REPO_ROOT / "static" / "styles" / "public_strategy.css").read_text(
+        encoding="utf-8"
+    )
+    assert "p.engine-note" in css_source
+    assert ".engine-e2" in css_source

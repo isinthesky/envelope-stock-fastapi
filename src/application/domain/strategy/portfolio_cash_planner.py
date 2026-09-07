@@ -10,7 +10,10 @@ import json
 from datetime import datetime
 
 from src.application.domain.strategy.dto import PortfolioCashActionDTO, PortfolioCashPlanDTO
-from src.application.domain.strategy.risk_contract import is_peak_drawdown_stop_triggered
+from src.application.domain.strategy.risk_contract import (
+    DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
+    is_peak_drawdown_stop_triggered,
+)
 
 
 class PortfolioCashPlanner:
@@ -71,7 +74,9 @@ class PortfolioCashPlanner:
                     highest_price=highest_price,
                 ):
                     final_stage = "EXIT_ALL"
-                    sell_reasons.append("최고가 대비 15% 손절 우선 (지표 데이터 부족)")
+                    sell_reasons.append(
+                        f"최고가 대비 {DEFAULT_PEAK_DRAWDOWN_STOP_RATIO:.0%} 손절 우선 (지표 데이터 부족)"
+                    )
                 else:
                     final_stage = "INSUFFICIENT_DATA"
                     sell_reasons.append("기술 지표 데이터 부족으로 매도 단계 판정 보류")

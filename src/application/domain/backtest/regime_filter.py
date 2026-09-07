@@ -50,9 +50,25 @@ def _row_date(ts: Any) -> date:
 def wilder_adx_series(df: pd.DataFrame, period: int) -> pd.Series:
     """Wilder ADX 시리즈(행 정렬 기준). high/low/close 컬럼 필요.
 
-    TechnicalIndicators.calculate_adx와 동일한 Wilder 평활(ewm alpha=1/period)을
-    사용하되, 마지막 1값이 아니라 **전 구간 시리즈**를 반환한다(진입일별 판정용).
+    마지막 1값이 아니라 **전 구간 시리즈**를 반환한다(진입일별 판정용).
     데이터 부족 구간은 NaN(호출측에서 fail-open 처리).
+
+    NOTE(P1-B): ``TechnicalIndicators.calculate_adx``와 **수치적으로 동일하지 않다.**
+    (이전 docstring의 '동일한 Wilder 평활' 서술은 사실과 달라 정정했다.)
+    구현 차이는 3가지다.
+      1. 시딩: 여기는 ewm(alpha=1/period, adjust=False)로 **첫 값 시딩**,
+         저기는 첫 period개 SMA로 시딩한 뒤 Wilder 재귀(indicators._wilder_smoothing).
+      2. ADX 평활 입력 구간: 저기는 DX 리스트를 다시 _wilder_smoothing에 넣어
+         (SMA 시딩 + 재귀) 2단으로 평활하므로 초기 구간 응답이 다르다.
+      3. di_sum == 0 처리: 여기는 NaN, 저기는 dx = 0.0.
+      (추가로 여기는 앞 2*period 구간을 NaN으로 마스킹하고, 저기는 round(2)로 반올림한다.)
+
+    실측 차이(합성 OHLC, period=14, 마지막 값 기준):
+      60봉 0.99 / 80봉 0.061 / 100봉 0.175 / 140봉 0.0086 / 400봉 0.0023 ADX 포인트.
+    즉 긴 구간에서는 수렴하지만 짧은 구간에서는 유의미하게 벌어진다. regime adx_min
+    기본값이 20.0이므로 두 구현을 통합하면 백테스트/워크포워드 진입 허용일 집합이
+    바뀐다. **통합 금지.** 동치가 아님과 각자의 계약은
+    tests/domain/test_adx_implementation_parity.py 가 지킨다.
     """
     high = df["high"].astype(float)
     low = df["low"].astype(float)

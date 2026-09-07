@@ -2,6 +2,7 @@
 """
 Strategy Dashboard Page Router - 전략 대시보드 (통합 페이지)
 """
+
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -25,5 +26,9 @@ async def strategy_dashboard_page(request: Request) -> HTMLResponse:
         {
             "active_page": "strategy_dashboard",
             "static_version": settings.app_version,
+            # 15:35 전략 자동 실행 경로 kill-switch 현재값 (표시 전용, 읽기만 한다).
+            # OFF면 GoldenCrossEngine.execute가 주문 없이 에러만 담아 즉시 반환한다
+            # (dry-run 대체 실행이 아니다). POST /api/v1/orders 수동 주문은 이 스위치와 무관하다.
+            "strategy_live_trading_enabled": settings.strategy_live_trading_enabled,
         },
     )

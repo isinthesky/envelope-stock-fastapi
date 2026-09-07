@@ -20,10 +20,11 @@ class PeakRuleThresholds:
 
     # 개인 수급 "강함" 기준 (personal_strong)
     personal_strong_days: int = 4
-    # TODO(refactor): 0.15 vs 0.20 drift — confirm intended value
     # NOTE: SellScoreSettings.personal_buy_ratio_high(0.20)와 의도적으로 다른 값이다.
+    # 이름의 `gate`가 용도를 구분한다 — 여기는 peak 규칙 성립 여부를 가르는 이진 게이트이고,
+    # personal_buy_ratio_high 는 점수 티어 경계다. 두 값을 통일하면 판정이 바뀐다.
     # 현재 evaluate_peak_rule_inputs / research 후보 규칙은 0.15로 동작하므로 그대로 보존한다.
-    personal_strong_ratio: float = 0.15
+    personal_strong_gate_ratio: float = 0.15
     # 개인 수급 "극단" 기준 (personal_extreme)
     personal_extreme_days: int = 5
     personal_extreme_ratio: float = 0.20

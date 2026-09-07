@@ -80,7 +80,9 @@ def build_preregistered_sell_rule_config(
                     {
                         "field": "personal_buy_ratio_5d_to_volume",
                         "operator": "gte",
-                        "value": peak.personal_strong_ratio,
+                        # NOTE(P1-B): 규칙 게이트 임계값(0.15). 매도 점수 티어 경계인
+                        # SellScoreSettings.personal_buy_ratio_high(0.20)와 다른 개념이므로 통합 금지.
+                        "value": peak.personal_strong_gate_ratio,
                     },
                     {
                         "field": "market_credit_change_ratio",

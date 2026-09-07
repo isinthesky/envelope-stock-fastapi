@@ -12,6 +12,11 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.settings.config import settings
+from src.settings.logging_config import setup_logging
+
+# uvicorn 은 자체 dictConfig 를 적용한 뒤 이 모듈을 import 하므로,
+# 여기서의 호출이 최종 로깅 설정이 된다. 반드시 라우터/서비스 import 보다 앞에 둔다.
+setup_logging()
 
 
 @asynccontextmanager
@@ -368,6 +373,9 @@ for page_router in public_page_routers:
 
 
 if __name__ == "__main__":
+    # 로컬 편의용 진입점. 운영/개발 표준 실행 경로는 `uvicorn src.main:app` 이며
+    # 로깅은 이 모듈 최상단의 setup_logging() 이 담당한다. 이 블록에 도달했다는 것은
+    # 모듈 본문이 이미 실행됐다는 뜻이므로 로깅은 여기서도 이미 적용된 상태다.
     import uvicorn
 
     uvicorn.run(
@@ -377,4 +385,7 @@ if __name__ == "__main__":
         reload=settings.uvicorn_reload,
         workers=settings.uvicorn_workers,
         log_level=settings.log_level.lower(),
+        # uvicorn 기본 LOGGING_CONFIG 적용을 끈다. 켜두면 Config.__init__ 단계에서
+        # dictConfig 가 우리 핸들러/포맷을 덮어쓴다.
+        log_config=None,
     )

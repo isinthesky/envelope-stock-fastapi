@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Stock API Admin{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231e3a5f'/%3E%3Cpath d='M14 42 L26 30 L36 38 L50 20' fill='none' stroke='%237dd3fc' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/styles/mypage.css" />
+  {# static_version을 주입하지 않는 라우터도 있으므로 default('')로 방어한다 (StrictUndefined 전환 대비) #}
+  <link rel="stylesheet" href="/static/styles/mypage.css?v={{ static_version|default('') }}" />
     {% block extra_css_links %}{% endblock %}
   <style>
     /* embed 모드: 허브 탭 iframe 등에서 사이드바/토글 숨기고 콘텐츠 전체폭 */

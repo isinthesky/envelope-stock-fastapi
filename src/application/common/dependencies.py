@@ -5,7 +5,6 @@ Dependencies - 의존성 주입 중앙 관리
 FastAPI Dependency Injection을 위한 공통 의존성 함수 정의
 """
 
-import ipaddress
 from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Annotated
@@ -19,6 +18,7 @@ from src.adapters.database.repositories.order_repository import OrderRepository
 from src.adapters.external.kis_api.auth import KISAuth, get_kis_auth
 from src.adapters.external.kis_api.client import KISAPIClient, get_kis_client
 from src.adapters.external.websocket.kis_websocket import KISWebSocket, get_kis_websocket
+from src.application.common.client_ip import get_client_ip, is_ip_allowed
 from src.application.common.exceptions import AuthorizationError
 
 # ==================== Database Session ====================
@@ -327,74 +327,10 @@ ADMIN_CSRF_HEADER = "x-requested-with"
 ADMIN_CSRF_HEADER_VALUE = "XMLHttpRequest"
 
 
-def get_client_ip(request: Request, trusted_proxy_ips: list[str] | None = None) -> str:
-    """클라이언트 IP 추출 (관리자 검증 + 공개 rate limit 공용)
-
-    프록시 헤더(X-Forwarded-For/X-Real-IP)는 직접 연결 IP가
-    신뢰할 수 있는 내부 네트워크(Docker bridge 등)인 경우에만 참조합니다.
-    신뢰하지 않는 직접 접속의 위조 헤더는 무시됩니다.
-
-    X-Forwarded-For는 프록시가 append하므로(nginx $proxy_add_x_forwarded_for),
-    client가 왼쪽에 위조 값을 끼워넣을 수 있습니다. 따라서 왼쪽이 아니라
-    오른쪽(가장 가까운 hop)부터 신뢰 프록시가 아닌 첫 IP(마지막 미신뢰 hop)를
-    실제 클라이언트로 취급해, 위조를 통한 IP 스푸핑(관리자 허용 IP/공개 쿨다운
-    우회)을 차단합니다.
-    """
-    direct_ip = request.client.host if request.client else None
-
-    # 직접 연결 IP가 신뢰 가능한 프록시인 경우에만 헤더 참조
-    if direct_ip:
-        try:
-            addr = ipaddress.ip_address(direct_ip)
-            is_trusted = _is_ip_allowed(str(addr), trusted_proxy_ips or [])
-        except ValueError:
-            is_trusted = False
-
-        if is_trusted:
-            trusted = trusted_proxy_ips or []
-            forwarded_for = request.headers.get("x-forwarded-for")
-            if forwarded_for:
-                hops = [p.strip() for p in forwarded_for.split(",") if p.strip()]
-                # 오른쪽부터 신뢰 프록시가 아닌 첫 hop = 실제 클라이언트
-                for candidate in reversed(hops):
-                    if not _is_ip_allowed(candidate, trusted):
-                        return candidate
-                # 모든 hop이 신뢰 프록시(비정상)면 가장 바깥 값 사용
-                if hops:
-                    return hops[0]
-            # X-Real-IP는 프록시가 overwrite로 설정하는 단일 값(single-proxy 전제)
-            real_ip = request.headers.get("x-real-ip")
-            if real_ip:
-                return real_ip
-
-        return direct_ip
-
-    return "unknown"
-
-
-def _is_ip_allowed(client_ip: str, allowed_ips: list[str]) -> bool:
-    """IP가 허용 목록에 있는지 확인 (CIDR 지원)"""
-    if client_ip == "unknown":
-        return False
-
-    try:
-        client_addr = ipaddress.ip_address(client_ip)
-    except ValueError:
-        return False
-
-    for allowed in allowed_ips:
-        try:
-            if "/" in allowed:
-                network = ipaddress.ip_network(allowed, strict=False)
-                if client_addr in network:
-                    return True
-            else:
-                if client_addr == ipaddress.ip_address(allowed):
-                    return True
-        except ValueError:
-            continue
-
-    return False
+# 클라이언트 IP 추출/허용 판정은 src.application.common.client_ip가 단일 진실 공급원이다.
+# (접근 로그 미들웨어/WebSocket 접근 제어와 동일 규칙을 공유하기 위함)
+# 하위호환: 기존 import 경로를 유지하기 위해 여기서 재수출한다.
+_is_ip_allowed = is_ip_allowed
 
 
 async def verify_admin_access(request: Request) -> str:

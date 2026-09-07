@@ -15,6 +15,8 @@ from starlette.responses import Response
 
 from src.adapters.database.connection import AsyncSessionLocal
 from src.adapters.database.models.access_log import AccessLogModel
+from src.application.common.client_ip import get_client_ip
+from src.settings.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +38,7 @@ class AccessLoggingMiddleware(BaseHTTPMiddleware):
     # 제외할 User-Agent 패턴 (봇, 내부 요청 등)
     EXCLUDE_USER_AGENTS = ["health", "kube-probe", "ELB-HealthChecker"]
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """요청 처리 및 로깅"""
         # 로깅 대상 여부 확인
         should_log = self._should_log(request)
@@ -79,15 +79,14 @@ class AccessLoggingMiddleware(BaseHTTPMiddleware):
 
         return False
 
-    async def _log_access(
-        self, request: Request, response: Response, start_time: float
-    ) -> None:
+    async def _log_access(self, request: Request, response: Response, start_time: float) -> None:
         """접근 로그 DB 저장"""
         # 응답 시간 계산
         response_time_ms = int((time.time() - start_time) * 1000)
 
-        # 클라이언트 IP 추출 (프록시 뒤에 있는 경우 X-Forwarded-For 헤더 확인)
-        ip_address = self._get_client_ip(request)
+        # 클라이언트 IP 추출 (신뢰 프록시일 때만 X-Forwarded-For/X-Real-IP 참조)
+        # access_logs.ip_address는 String(45)이므로 방어적으로 절단한다.
+        ip_address = self._get_client_ip(request)[:45]
 
         # 로그 데이터 생성
         log_data = AccessLogModel(
@@ -113,20 +112,10 @@ class AccessLoggingMiddleware(BaseHTTPMiddleware):
         )
 
     def _get_client_ip(self, request: Request) -> str:
-        """클라이언트 IP 추출"""
-        # X-Forwarded-For 헤더 확인 (프록시/로드밸런서 뒤에 있는 경우)
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            # 첫 번째 IP가 실제 클라이언트 IP
-            return forwarded_for.split(",")[0].strip()
+        """클라이언트 IP 추출
 
-        # X-Real-IP 헤더 확인
-        real_ip = request.headers.get("x-real-ip")
-        if real_ip:
-            return real_ip
-
-        # 직접 연결된 경우
-        if request.client:
-            return request.client.host
-
-        return "unknown"
+        관리자 검증(verify_admin_access)/공개 rate limit과 **동일한** 신뢰 프록시
+        규칙을 사용한다. 신뢰하지 않는 직접 접속이 보낸 X-Forwarded-For는
+        무시되므로 감사 로그 IP를 위조할 수 없다.
+        """
+        return get_client_ip(request, get_settings().trusted_proxy_ips)

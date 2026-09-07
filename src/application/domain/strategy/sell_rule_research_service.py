@@ -162,13 +162,19 @@ class SellPeakRuleResearchService:
         high_52week_ratio: float | None,
     ) -> dict[str, Any]:
         peak = DEFAULT_PEAK_RULE_THRESHOLDS
-        # TODO(refactor): 0.15 vs 0.20 drift — confirm intended value
-        # (peak.personal_strong_ratio=0.15 vs SellScoreSettings.personal_buy_ratio_high=0.20)
+        # NOTE(P1-B): peak.personal_strong_gate_ratio(0.15)와
+        # SellScoreSettings.personal_buy_ratio_high(0.20)는 drift가 아니라 **다른 판정기**다.
+        #   - peak.personal_strong_gate_ratio : peak 규칙의 이진 게이트(personal_strong 성립 여부).
+        #     sell_strategy_service.analyze_sell_signal의 overlay 신호로 라이브 매도 판정에 직결된다.
+        #   - personal_buy_ratio_high    : 매도 '점수' 3단 티어(high/mid/그 외)의 상단 경계.
+        #     sell_score_rules.personal_flow_rule 의 가중치 배분용이며 env(SELL_SCORE_*)로 튜닝 가능하다.
+        # 두 값을 같게 만들면 라이브 매도 Stage 판정이 바뀐다. 통합/값 변경 금지.
+        # 핀 테스트: tests/domain/test_threshold_ssot.py
         personal_strong = (
             personal_buy_days_5d is not None
             and personal_buy_days_5d >= peak.personal_strong_days
             and personal_buy_ratio_5d_to_volume is not None
-            and personal_buy_ratio_5d_to_volume >= peak.personal_strong_ratio
+            and personal_buy_ratio_5d_to_volume >= peak.personal_strong_gate_ratio
         )
         personal_extreme = (
             personal_buy_days_5d is not None
@@ -442,7 +448,7 @@ class SellPeakRuleResearchService:
                 evaluator=lambda row: bool(
                     row.get("personal_buy_days_5d", 0) >= peak.personal_strong_days
                     and (row.get("personal_buy_ratio_5d_to_volume") or 0)
-                    >= peak.personal_strong_ratio
+                    >= peak.personal_strong_gate_ratio
                     and (row.get("market_credit_change_ratio") or 0) >= peak.credit_hot_change
                     and (row.get("market_credit_recent_high_ratio") or 0)
                     >= peak.credit_hot_recent_high
@@ -458,7 +464,7 @@ class SellPeakRuleResearchService:
                 evaluator=lambda row: bool(
                     row.get("personal_buy_days_5d", 0) >= peak.personal_strong_days
                     and (row.get("personal_buy_ratio_5d_to_volume") or 0)
-                    >= peak.personal_strong_ratio
+                    >= peak.personal_strong_gate_ratio
                     and (row.get("market_credit_change_ratio") or 0) >= peak.credit_hot_change
                     and (row.get("market_credit_recent_high_ratio") or 0)
                     >= peak.credit_hot_recent_high

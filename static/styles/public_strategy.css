@@ -957,3 +957,32 @@ label {
   border: 1px dashed var(--border);
   border-radius: 8px;
 }
+
+/* ==================== 엔진 출처 배지 ====================
+ * 공개 포털은 mypage.css를 로드하지 않으므로 동일한 시각 규칙을 따로 정의한다.
+ * 공개 화면이 소비하는 매도 판단은 분석 엔진(E2) 결과 하나뿐이다. */
+
+p.engine-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.engine-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.engine-e2 {
+  background: #dbeafe;
+  color: var(--accent-strong);
+}

@@ -35,6 +35,12 @@
 
 {% block content %}
 <h1>매도 전략 분석</h1>
+<p class="engine-note">
+  <span class="engine-badge engine-e2">분석 엔진 E2</span>
+  <span>화면·API·텔레그램 전용 매도 분석입니다.
+    <strong>이 화면의 어떤 버튼도 실주문을 내지 않습니다.</strong>
+    월~금 15:35 실계좌 주문은 별도 엔진 E1(내 전략)이 담당하며 판단 규칙이 다릅니다.</span>
+</p>
 <p>보유 종목의 기술적 지표를 분석하여 매도 시점을 추천합니다.</p>
 {% if etf_universe_enabled %}
 <p style="font-size:12px; color:#0369a1; background:#e0f2fe; display:inline-block; padding:4px 10px; border-radius:8px; margin:2px 0;">
@@ -139,6 +145,10 @@
 
 <!-- 탭 2: 현금화 계획 -->
 <div id="panel-cash" class="sell-panel" role="tabpanel" aria-label="현금화 계획" hidden>
+  <p class="engine-note">
+    <span class="engine-badge engine-e2">분석 엔진 E2</span>
+    <span>정리 순서는 매도 분석(E2) 결과로 계산한 제안이며 자동 실행되지 않습니다.</span>
+  </p>
   <section class="history-section">
     <div class="history-header">
       <h2>포트폴리오 현금화 계획</h2>
@@ -166,6 +176,12 @@
 <div id="panel-research" class="sell-panel" role="tabpanel" aria-label="백테스트 / 룰셋" hidden>
   <section class="universe-backtest-section">
     <h2>유니버스 백테스트 (공격형 중단기 스윙 매도 v3)</h2>
+    <p class="engine-note">
+      <span class="engine-badge engine-e3">백테스트 엔진 E3</span>
+      <span><strong>실주문 규칙(E1)과도, 위 매도 분석(E2)과도 다릅니다.</strong>
+        E3에만 있는 lot 분할 부분익절·본전보호가 포함되므로
+        이 성과를 E1·E2의 성과로 읽으면 안 됩니다.</span>
+    </p>
     <p>현재 종목 유니버스를 대상으로 골든크로스 진입 + 공격형 중단기 스윙 매도 규칙의 승률/수익률을 집계합니다.</p>
     <div class="row">
       <label>시장</label>
@@ -223,6 +239,11 @@
         <button class="btn-refresh" type="button" id="walk_forward_refresh_btn">새로고침</button>
       </div>
     </div>
+    <p class="engine-note">
+      <span class="engine-badge engine-e1">실주문 엔진 E1 측정</span>
+      <span>이 리포트가 측정한 대상은 <strong>E1 청산 규칙</strong>입니다.
+        위 백테스트(E3)나 매도 분석(E2)의 성과가 아닙니다 — E2 규칙은 아직 walk-forward로 검증된 적이 없습니다.</span>
+    </p>
     <p>컨테이너 CLI(<code>scripts/run_walk_forward.py</code>)가 생성한 최신 롤링 OOS 검증 결과입니다. 이 화면에서는 실행하지 않고 저장된 리포트만 표시합니다.</p>
     <div id="walk_forward_container" class="result-card" style="margin-top: 16px;">
       <div class="placeholder-message">

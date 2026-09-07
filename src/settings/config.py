@@ -209,15 +209,6 @@ class Settings(BaseSettings):
         default=10000000, ge=0, description="단일 주문 최대 금액 (원)"
     )
 
-    # ==================== JWT 인증 ====================
-    jwt_secret_key: str = Field(
-        default="your-secret-key-here-change-in-production", description="JWT 시크릿 키"
-    )
-    jwt_algorithm: str = Field(default="HS256", description="JWT 알고리즘")
-    jwt_access_token_expire_minutes: int = Field(
-        default=30, ge=1, description="JWT 액세스 토큰 만료 시간 (분)"
-    )
-
     # ==================== CORS 설정 ====================
     cors_origins: list[str] = Field(
         default=["http://localhost:3000", "http://localhost:8000"],
@@ -232,6 +223,13 @@ class Settings(BaseSettings):
     # ==================== 로깅 설정 ====================
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         default="INFO", description="로그 레벨"
+    )
+    log_to_file: bool = Field(
+        default=False,
+        description=(
+            "회전 로그 파일 사용 여부. 컨테이너 기본은 stdout 전용이며, "
+            "true 로 켤 경우 log_file 경로에 마운트된 볼륨이 있어야 로그가 보존된다."
+        ),
     )
     log_file: str = Field(default="logs/kis_trading.log", description="로그 파일 경로")
     log_max_bytes: int = Field(default=10485760, ge=1, description="로그 파일 최대 크기 (바이트)")
@@ -733,19 +731,6 @@ class Settings(BaseSettings):
             raise ValueError(
                 "GC_SHORT_MA_PERIOD는 GC_LONG_MA_PERIOD보다 작아야 합니다 "
                 f"(현재 short={self.gc_short_ma_period}, long={self.gc_long_ma_period})."
-            )
-        return self
-
-    @model_validator(mode="after")
-    def validate_jwt_secret(self) -> "Settings":
-        """운영 환경에서 기본 JWT 시크릿 사용 시 차단"""
-        if (
-            self.env == "production"
-            and self.jwt_secret_key == "your-secret-key-here-change-in-production"
-        ):
-            raise ValueError(
-                "JWT_SECRET_KEY가 기본값입니다. 운영 환경에서는 반드시 변경하세요. "
-                "환경 변수 JWT_SECRET_KEY를 설정해주세요."
             )
         return self
 

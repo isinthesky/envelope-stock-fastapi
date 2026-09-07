@@ -42,6 +42,11 @@
 
 {% block content %}
 <h1>보유 종목 매도 점검</h1>
+<p class="engine-note">
+  <span class="engine-badge engine-e2">분석 엔진 E2</span>
+  <span>여기 표시되는 HOLD/REDUCE/EXIT는 <strong>분석 결과일 뿐 실주문이 아닙니다.</strong>
+    월~금 15:35 실계좌 주문은 엔진 E1이 별도 규칙으로 판단합니다.</span>
+</p>
 <p class="hold-intro">내 보유 종목과 평단가를 입력하면 각 종목을 매도 시그널 전략에 대입해
   매도 단계(HOLD/REDUCE/EXIT)·수익률·근거를 한눈에 보여줍니다. 입력값은 이 브라우저에만 저장됩니다(서버 미전송).</p>
 {% if etf_universe_enabled %}

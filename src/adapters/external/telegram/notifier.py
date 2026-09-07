@@ -18,7 +18,6 @@ KST = ZoneInfo("Asia/Seoul")
 
 from src.settings.config import settings
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -47,7 +46,16 @@ SELL_STAGE_DISPLAY: dict[str, tuple[str, str]] = {
 }
 
 _ETF_KEYWORDS = (
-    "ETF", "ETN", "TIGER", "KODEX", "RISE", "SOL", "KOSEF", "ACE", "HANARO", "TIMEFOLIO",
+    "ETF",
+    "ETN",
+    "TIGER",
+    "KODEX",
+    "RISE",
+    "SOL",
+    "KOSEF",
+    "ACE",
+    "HANARO",
+    "TIMEFOLIO",
 )
 
 
@@ -170,9 +178,7 @@ def build_golden_cross_recommendations_message(
 
         # 상세 표시(max_stocks) 다음 5개는 한 줄 요약으로 표시, 그 이상만 축약
         brief_limit = max_stocks + 5
-        for rank, s in enumerate(
-            top_stocks[max_stocks:brief_limit], start=max_stocks + 1
-        ):
+        for rank, s in enumerate(top_stocks[max_stocks:brief_limit], start=max_stocks + 1):
             symbol = html_mod.escape(str(s.get("symbol") or ""))
             name = html_mod.escape(str(s.get("name") or symbol))
             price = _to_float(s.get("current_price"))
@@ -224,14 +230,15 @@ def build_sell_signals_summary_message(
     lines: list[str] = [
         f"🔴 <b>매도 신호 알림{slot_part}</b>",
         f"📅 {now} KST",
+        # 엔진 출처 고지: 15:35 실주문(E1)과 판단 근거가 다르다는 점을 매 알림에 명시한다.
+        # _split_message가 4096자에서 분할하므로 반드시 헤더에 둔다.
+        "ℹ️ 분석 엔진 E2 · 참고용 분석이며 자동 주문은 나가지 않습니다",
         f"매도 신호 {len(stocks)}개 종목",
         "",
     ]
 
     for stock in stocks[:10]:  # 최대 10개
-        is_strong = (
-            stock.get("sell_phase") == "PHASE_5" or stock.get("final_stage") == "EXIT_ALL"
-        )
+        is_strong = stock.get("sell_phase") == "PHASE_5" or stock.get("final_stage") == "EXIT_ALL"
         emoji = "🔴" if is_strong else "🟠"
         raw_name = str(stock.get("name") or stock.get("symbol") or "")
         name = html_mod.escape(raw_name)
@@ -356,6 +363,8 @@ def build_no_sell_signals_message(
     lines: list[str] = [
         f"⚪ <b>매도 신호 알림{slot_part}</b>",
         f"📅 {now} KST",
+        # 엔진 출처 고지 (분할 전송 시에도 보이도록 헤더에 둔다)
+        "ℹ️ 분석 엔진 E2 · 참고용 분석이며 자동 주문은 나가지 않습니다",
         "",
         f"오늘은 매도 신호 종목이 없습니다. (추적 {total_tracked}개 종목)",
         "기준: PHASE_4/5(매도 권장/강력 매도) 또는 REDUCE_2/EXIT_ALL(강한 매도 단계)",
@@ -583,9 +592,7 @@ class TelegramNotifier:
         if not recommendations:
             return False
 
-        message = build_golden_cross_recommendations_message(
-            recommendations, slot_label=slot_label
-        )
+        message = build_golden_cross_recommendations_message(recommendations, slot_label=slot_label)
         return await self.send_message(message)
 
     # ==================== 매도 알림 포맷 ====================

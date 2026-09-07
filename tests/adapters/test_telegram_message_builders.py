@@ -38,9 +38,7 @@ class TestBuildSellSignalsSummaryMessage:
         }
 
     def test_contains_core_decision_fields(self):
-        message = build_sell_signals_summary_message(
-            [self._full_stock()], slot_label="09:30"
-        )
+        message = build_sell_signals_summary_message([self._full_stock()], slot_label="09:30")
 
         assert "매도 신호 알림 (09:30)" in message
         assert "삼성전자" in message and "005930" in message
@@ -104,6 +102,15 @@ class TestBuildSellSignalsSummaryMessage:
         assert "추적 종목 현황" in message
         assert "SK하이닉스: 보유 유지" in message
 
+    def test_engine_source_is_disclosed_in_header(self):
+        """매도 알림은 분석 엔진(E2) 출처와 '자동 주문 없음'을 헤더에 고지한다."""
+        message = build_sell_signals_summary_message([self._full_stock()])
+
+        assert "분석 엔진 E2" in message
+        assert "자동 주문은 나가지 않습니다" in message
+        # 고지는 헤더(첫 3줄) 안에 있어야 분할 전송 시에도 항상 보인다
+        assert "분석 엔진 E2" in "\n".join(message.split("\n")[:3])
+
 
 class TestBuildGoldenCrossRecommendationsMessage:
     def _recommendations(self) -> dict:
@@ -132,9 +139,7 @@ class TestBuildGoldenCrossRecommendationsMessage:
                     "industry_name": None,
                 },
             ],
-            "top_industries": [
-                {"industry_code": "278", "industry_name": "반도체", "count": 2}
-            ],
+            "top_industries": [{"industry_code": "278", "industry_name": "반도체", "count": 2}],
             "buy_candidate_count": 4,
             "scan_time": "2026-07-20T11:25:00",
             "errors": [],
@@ -188,9 +193,7 @@ class TestBuildGoldenCrossRecommendationsMessage:
         recommendations["top_industries"] = []
         recommendations["buy_candidate_count"] = 0
 
-        message = build_golden_cross_recommendations_message(
-            recommendations, slot_label="11:30"
-        )
+        message = build_golden_cross_recommendations_message(recommendations, slot_label="11:30")
 
         assert "⚪" in message
         assert "오늘은 매수 후보 종목이 없습니다." in message
@@ -220,9 +223,7 @@ class TestBuildGoldenCrossRecommendationsMessage:
             }
             for idx in range(7)
         ]
-        message = build_golden_cross_recommendations_message(
-            recommendations, max_stocks=5
-        )
+        message = build_golden_cross_recommendations_message(recommendations, max_stocks=5)
 
         # 1~5위: 상세 블록, 6~7위: 한 줄 요약 (상세 마커 없이)
         assert "5. <b>종목4</b>" in message
@@ -243,9 +244,7 @@ class TestBuildGoldenCrossRecommendationsMessage:
             }
             for idx in range(12)
         ]
-        message = build_golden_cross_recommendations_message(
-            recommendations, max_stocks=5
-        )
+        message = build_golden_cross_recommendations_message(recommendations, max_stocks=5)
 
         # 1~5위: 상세 블록
         assert "5. <b>종목4</b>" in message
@@ -308,3 +307,11 @@ class TestBuildNoSellSignalsMessage:
 
         assert "👉 전 종목 보유 유지 — 오늘 매도 조치 불필요" in message
         assert "수동 확인 필요" not in message
+
+    def test_engine_source_is_disclosed_in_header(self):
+        """매도 신호 없음 알림도 동일하게 분석 엔진(E2) 출처를 헤더에 고지한다."""
+        message = build_no_sell_signals_message(total_tracked=10)
+
+        assert "분석 엔진 E2" in message
+        assert "자동 주문은 나가지 않습니다" in message
+        assert "분석 엔진 E2" in "\n".join(message.split("\n")[:3])

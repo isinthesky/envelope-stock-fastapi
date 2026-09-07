@@ -66,10 +66,31 @@ class GoldenCrossRiskExitReason(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class GoldenCrossPullbackParameters:
+    """스캔/추천/알림/백테스트 기준선 파라미터.
+
+    NOTE(P1-B): 이 세트의 ``oversold_threshold``(30.0)와
+    ``strategy.dto.StochasticConfig.oversold_threshold``(25.0)가 다른 것은 drift가 아니라
+    **판정 경로가 다르기 때문**이다. 한쪽으로 통일하면 전략 거동이 바뀐다. 값 변경 금지.
+      - 30.0 (이 세트) : 스캔/추천/알림/백테스트 기준선.
+        strategy_router / buy_strategy_service / strategy_service /
+        public_strategy_service(PUBLIC_SCAN_STOCH_THRESHOLD) /
+        recommendation_scan_service / recommendation.rule_set_validation_service
+        (_UNIVERSE_STOCH_THRESHOLD) / settings.buy_notification_stoch_threshold /
+        backtest generators 가 이 기준을 쓴다.
+      - 25.0 (StochasticConfig 기본값) : 프리셋이 stochastic_config를 지정하지 않았을 때의
+        실주문 기본값. GoldenCrossConfigDTO → GoldenCrossStateMachine → golden_cross_engine
+        (실계좌 주문 경로)으로 이어진다.
+      - 단, 실주문 경로가 항상 25.0인 것은 아니다. presets.gc_aggressive는
+        stochastic_config에 oversold_threshold=30.0을 명시한다(프리셋별 오버라이드).
+
+    핀 테스트: tests/domain/test_threshold_ssot.py
+    """
+
     short_period: int = 55
     long_period: int = 165
     stoch_k_period: int = 14
     stoch_d_period: int = 3
+    # 스캔/추천/백테스트 기준 과매도 임계값. 실주문 기본값(StochasticConfig 25.0)과 의도적으로 다르다.
     oversold_threshold: float = 30.0
     recovery_threshold: float = 20.0
     strong_recovery_threshold: float = 30.0

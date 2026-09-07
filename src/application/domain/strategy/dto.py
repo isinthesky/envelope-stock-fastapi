@@ -117,11 +117,26 @@ class GoldenCrossMAConfig(BaseDTO):
 
 
 class StochasticConfig(BaseDTO):
-    """Stochastic 설정"""
+    """Stochastic 설정 (실주문 state_machine 경로가 읽는 설정).
+
+    NOTE(P1-B): ``oversold_threshold`` 기본 25.0은
+    ``strategy_contract.DEFAULT_GOLDEN_CROSS_PULLBACK.oversold_threshold``(30.0, 스캔/백테스트
+    기준선)와 **의도적으로 다르다.** 여기 기본값은 프리셋이 stochastic_config를 지정하지 않았을 때
+    GoldenCrossStateMachine → golden_cross_engine(실계좌 주문)에 그대로 반영되므로,
+    바꾸면 실주문 진입 판정이 완화/강화된다. 값 변경 금지.
+    (프리셋이 명시하면 그 값이 이긴다. 예: presets.gc_aggressive = 30.0)
+
+    핀 테스트: tests/domain/test_threshold_ssot.py
+    """
 
     k_period: int = Field(default=14, description="%K 기간", ge=5, le=30)
     d_period: int = Field(default=3, description="%D 기간", ge=2, le=10)
-    oversold_threshold: float = Field(default=25.0, description="과매도 기준", ge=10, le=40)
+    oversold_threshold: float = Field(
+        default=25.0,
+        description="과매도 기준 (실주문 진입 기본값. 스캔 기준선 30.0과 의도적으로 다름)",
+        ge=10,
+        le=40,
+    )
     recovery_threshold: float = Field(default=20.0, description="회복 기준", ge=10, le=40)
     strong_recovery_threshold: float = Field(
         default=30.0, description="강한 회복 기준", ge=20, le=50

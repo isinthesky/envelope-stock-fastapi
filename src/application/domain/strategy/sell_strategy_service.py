@@ -1895,7 +1895,7 @@ class SellStrategyService:
         비중축소 Stage 결정 (기존 Phase와 별도)
 
         우선순위:
-        1. 최고가 대비 15% 손절 → EXIT_ALL
+        1. 최고가 대비 손절(risk_contract.DEFAULT_PEAK_DRAWDOWN_STOP_RATIO, 현재 15%) → EXIT_ALL
         2. 전량 청산 (데드크로스 + 거래량 급증) → EXIT_ALL
         3. 추세 붕괴 (데드크로스 + 극심한 과열) → EXIT_ALL
         4. sharp v1 수익 보호 (다중 상단 경고 정렬) → REDUCE
@@ -1912,7 +1912,9 @@ class SellStrategyService:
 
         # === 1순위: 긴급 손절 (최우선) ===
         if is_stop_loss_triggered:
-            reasons.append("가격 손절 (보유 중 최고가 대비 15% 하락)")
+            reasons.append(
+                f"가격 손절 (보유 중 최고가 대비 {DEFAULT_PEAK_DRAWDOWN_STOP_RATIO:.0%} 하락)"
+            )
             return SellStageEnum.EXIT_ALL, reasons
 
         # === 2순위: 추세 붕괴 - 전량 청산 ===

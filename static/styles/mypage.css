@@ -89,3 +89,33 @@ body.sidebar-hidden .content { margin-left: 0; }
     z-index: 1100;
   }
 }
+
+/* ===== 엔진 출처 배지 (E1 실주문 / E2 분석 / E3 백테스트) =====
+ * 매도 판단 엔진이 서로 독립적인 3벌이므로 화면마다 출처를 명시한다.
+ * 문구는 전부 Jinja 템플릿의 정적 텍스트이며 JS 삽입 지점이 없다.
+ * 신호 상태를 뜻하는 기존 .state-badge / .status-* 계열과는 의미가 다르므로 재사용하지 않는다.
+ * `p.engine-note`로 선언해 위쪽 `.content > p` / `.content-inner > p`(둘 다 특이도 0,1,1)와
+ * 동률을 만들고 파일 뒤쪽 선언으로 이긴다. */
+p.engine-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #475569;
+}
+.engine-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.engine-e1 { background: #fee2e2; color: #991b1b; }
+.engine-e2 { background: #dbeafe; color: #1e40af; }
+.engine-e3 { background: #fef3c7; color: #92400e; }
+.engine-live-on  { background: #991b1b; color: #fff; }
+.engine-live-off { background: #dcfce7; color: #166534; }
