@@ -7,12 +7,15 @@ framework-free and route-free.
 ## STRUCTURE
 ```text
 domain/
+|-- access_log/    # access log query, stats, retention cleanup
 |-- account/       # balance and position use cases
 |-- auth/          # KIS token and approval-key use cases
 |-- backtest/      # simulation engine, data loader, order/position managers
 |-- market_data/   # current price, orderbook, candles
 |-- ohlcv/         # cache manager, warmup/core loaders, scheduler
 |-- order/         # order lifecycle and pacing/risk workflow
+|-- paper_trade/   # paper trading
+|-- recommendation/ # candidate scan, rule sets, walk-forward validation
 |-- risk/          # reusable guards such as SafetyGuard
 |-- screener/      # Naver/value stock screening
 `-- strategy/      # golden-cross, sell signal, universe, schedulers, notifications
@@ -31,6 +34,7 @@ domain/
 | Backtest facade | `backtest/service.py` | wraps engine and result summaries |
 | Order operations | `order/service.py` | KIS order calls and repository updates |
 | Common indicators | `../common/indicators.py` | shared technical indicators, not strategy-only |
+| Access log use cases | `access_log/service.py` | owns its own session via `@transaction`; called from `api/access_log_router.py` |
 
 > Note: the legacy Bollinger `strategy/engine.py` was removed; only `golden_cross` strategies run via the scheduler.
 

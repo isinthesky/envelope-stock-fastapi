@@ -12,12 +12,15 @@
 ```text
 src/
   main.py          # FastAPI 앱/라이프사이클/라우터 등록
-  settings/        # Pydantic Settings
+  settings/        # Pydantic Settings + 로깅 부트스트랩
   adapters/        # DB/Redis/KIS/Naver/Telegram/WS
   application/     # interface/domain/common
 ```
 
 ## `main.py` 실행 흐름(현재 코드 기준)
+- **모듈 로드(import 시점)**
+  - `settings.logging_config.setup_logging()` 호출 — dictConfig 로 콘솔(stdout) 로깅을 설정하고, `LOG_TO_FILE=true` 면 회전 파일 핸들러를 추가한다. 라우터/서비스 import 보다 반드시 앞서야 한다.
+  - `AccessLoggingMiddleware` 등록(`/page` 경로만 DB 기록, 클라이언트 IP는 `common/client_ip.py` 규칙).
 - **lifespan(startup)**
   - DB 연결 점검(`SELECT 1`)
   - Redis 연결 점검(`ping`)
@@ -32,15 +35,24 @@ src/
     - `/api/v1/market` (MarketData)
     - `/api/v1/accounts` (Account)
     - `/api/v1/orders` (Order)
-    - `/api/v1/strategies` (Strategy)
-    - `/api/v1/ohlcv` (OHLCV Cache)
+    - `/api/v1/strategies` (Strategy: 라우터 단위 `verify_admin_access` 보호. 전략 CRUD admin 라우터는 `enable_admin_strategy_routes=True` 일 때만 추가 마운트)
+    - `/api/v1/strategies` (SellRuleResearch: 라우터 내부 prefix)
+    - `/api/v1/ops` (Operations: `AdminAccessDep` 보호)
+    - `/api/v1/public/strategies` (공개 전략 스캔: 라우터 내부 prefix)
     - `/api/v1/screener` (Screener: 라우터 내부 prefix)
+    - `/api/v1/recommendations` (Recommendation: 라우터 내부 prefix)
     - `/api/v1/backtest` (Backtest: 라우터 내부 prefix)
+    - `/api/v1/access-logs` (AccessLogs: 라우터 내부 prefix, 관리자 IP 전용)
   - WebSocket: `/ws`
-  - Page(Jinja2): `page_routers` 루프 등록(각 라우터가 자체 prefix 보유)
+  - Page(Jinja2): **두 개의 별도 루프**로 등록한다(각 라우터가 자체 prefix 보유).
+    - `mypage_routers` → `dependencies=[Depends(verify_admin_access)]` 와 함께 include(= `/mypage/*`와 `/ops`의 include-level IP 게이트)
+    - `public_page_routers` → 의존성 없이 include(`/page/*` 공개 포털)
+    - `page/__init__.py`의 `page_routers`는 두 리스트를 합친 하위호환 별칭이며 `main.py`는 사용하지 않는다. 새 페이지는 반드시 위 두 리스트 중 하나에 넣어야 등록된다.
 - **기본 엔드포인트**
   - `/` : 간단 상태 요약(dict)
-  - `/health` : 헬스체크 스텁(TODO 존재)
+  - `/health` : 인프라 실검사. DB `SELECT 1`, Redis `ping`, KIS 토큰 유효성(`get_kis_auth().token_info`)을 확인해
+    `{"status", "database", "redis", "kis_api"}` 를 반환한다. DB/Redis 실패는 `status`를 `degraded`로 낮추지만
+    KIS 토큰은 `kis_api: unauthenticated|unavailable`로만 표기하고 `status`에는 반영하지 않는다. HTTP 상태는 항상 200이다.
 - **lifespan(shutdown)**
   - scheduler/task stop → httpx 클라이언트 close → DB/Redis close 순서로 정리
 

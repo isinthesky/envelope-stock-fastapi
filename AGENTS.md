@@ -17,7 +17,9 @@ kis-strategy-alert-server/
 |   |-- application/
 |   |   |-- common/              # ResponseDTO, DI aliases, exceptions, decorators, metrics
 |   |   |-- domain/
+|   |   |   |-- access_log/      # access log query, stats, retention cleanup
 |   |   |   |-- account/, auth/, backtest/, market_data/, ohlcv/, order/
+|   |   |   |-- paper_trade/     # paper trading
 |   |   |   |-- recommendation/  # readiness, scan, rule-set services and DTOs
 |   |   |   |-- risk/            # SafetyGuard and risk/position-sizing DTOs
 |   |   |   |-- screener/, strategy/  # strategies, schedulers, symbol validation
@@ -27,7 +29,7 @@ kis-strategy-alert-server/
 |   |-- adapters/
 |   |   |-- cache/, database/    # Redis and async SQLAlchemy models/repositories
 |   |   `-- external/            # KIS, DART, KOFIA, Naver, Telegram, WebSocket I/O
-|   `-- settings/                # Pydantic settings and exception-handler registration
+|   `-- settings/                # Pydantic settings, logging bootstrap, exception-handler registration
 |-- templates/                   # Jinja page templates used by interface/page routers
 |-- static/                      # dashboard JavaScript and CSS
 |-- tests/                       # pytest suite; domain/adapters/interface grouping
@@ -53,6 +55,9 @@ Ignore generated or local-state directories when mapping the project: `.venv/`, 
 | DB persistence | `src/adapters/database/repositories/` | Repository pattern over async SQLAlchemy sessions |
 | External API client | `src/adapters/external/<provider>/` | Network I/O only; policy remains in domain services |
 | Settings/env key | `src/settings/config.py`, `.env.example` | Add typed field plus template key |
+| Logging bootstrap | `src/settings/logging_config.py` | `setup_logging()` dictConfig; called at the top of `src/main.py` |
+| Client IP / proxy trust | `src/application/common/client_ip.py` | single source for admin IP checks, access logs, public cooldowns, WebSocket |
+| Access log API/domain | `src/application/interface/api/access_log_router.py`, `src/application/domain/access_log/` | `/api/v1/access-logs`, admin-gated |
 | Ops runbook | `README.md`, `docs/ops/` | Swagger/OpenAPI disabled; ops routes are protected |
 
 ## CODE MAP
@@ -136,6 +141,12 @@ docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -
 
 ## NOTES
 - ⚠️ `force_refresh=True`를 남발하지 않는다. KIS 토큰은 1일 1회 발급 원칙이다.
-- `docker compose build`와 `docker compose up -d --build`는 `kis_token_cache:/root/KIS/config` named volume을 유지하므로 토큰 재발급 없이 안전하다.
-- 전체 테스트의 현재 확인값은 `517 passed, 13 skipped`다.
+- `docker compose build`와 `docker compose up -d --build`는 `kis_token_cache` named volume을 유지하므로 토큰 재발급 없이 안전하다.
+  마운트 경로는 실행 사용자의 `HOME`이 결정한다: 현재 배포본(root)은 `/root/KIS/config`, 컨테이너 하드닝 적용 후(비루트 `uid 10001`)는 `/home/appuser/KIS/config`.
+- 컨테이너 하드닝(비루트 `uid 10001` 실행, Redis 비밀번호 필수, DB/Redis 로컬 전용 바인딩)은 2026-09-08 기준 **파일 변경만 완료된 미배포 상태**다. 절차는 `README.md`의 「컨테이너 하드닝 적용 절차」를 따른다.
+- 하드닝 적용 후 api 컨테이너 안에서 `uv run ...` 은 `/app/.venv` 쓰기 때문에 실패한다. `/app/.venv/bin/python` 또는 `/app/.venv/bin/<cmd>` 를 직접 쓰거나 `docker compose exec --user root api ...` 를 사용한다.
+- 전체 테스트의 현재 확인값은 `790 passed, 13 skipped`다(2026-09-08 실측).
 - `/ops`, `/api/v1/ops/summary`, `/api/v1/ops/notification-scheduler-status`는 구현되어 있으며 `AdminAccessDep`로 보호된다.
+  단 보호 강도는 `ADMIN_ALLOWED_IPS` 값에 전적으로 의존한다 — 전 대역을 허용하면 사실상 무보호다.
+- 클라이언트 IP 판정은 `src/application/common/client_ip.py` 단일 출처를 쓴다(관리자 IP 검증·접근 로그·공개 스캔 쿨다운·WebSocket 공통). 프록시 헤더는 `TRUSTED_PROXY_IPS` 에 속한 직접 연결에서만 신뢰한다.
+- 로깅 부트스트랩은 `src/settings/logging_config.py`의 `setup_logging()`이며 `src/main.py` 최상단에서 호출된다.

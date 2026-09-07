@@ -7,15 +7,22 @@
 ```text
 common/
   dto.py                 # BaseDTO, ResponseDTO, Pagination DTO
-  dependencies.py        # FastAPI DI: DB/KIS/Redis/Settings/일부 서비스
+  dependencies.py        # FastAPI DI: DB/KIS/Redis/Settings/일부 서비스 + verify_admin_access
   decorators.py          # @transaction, @retry, @cache, @log_execution, @validate_input
   exceptions.py          # 공통 예외(도메인에서 래핑/변환에 사용)
-  validators.py          # 입력 검증 유틸
-  formatters.py          # 포맷팅 유틸
+  client_ip.py           # 신뢰 프록시 기반 클라이언트 IP 추출(SSOT)
+  middleware/            # AccessLoggingMiddleware 등 공통 미들웨어
   indicators.py          # 기술적 지표 계산
   performance_metrics.py # 성과 지표 계산
+  trading_calendar.py    # 거래일/영업일 계산 유틸
   background_tasks.py    # 토큰 자동 갱신 등 백그라운드 태스크
 ```
+
+> `client_ip.py`는 관리자 IP 검증(`verify_admin_access`), 공개 스캔 rate limit(`public_strategy_router`),
+> 접근 로그 미들웨어, WebSocket 접근 제어가 **모두 같은 규칙**을 쓰도록 하는 단일 출처입니다.
+> `X-Forwarded-For`/`X-Real-IP`는 직접 연결 IP가 `TRUSTED_PROXY_IPS`에 속할 때만 신뢰하고,
+> XFF는 왼쪽이 아니라 **오른쪽(가장 가까운 hop)부터** 신뢰 프록시가 아닌 첫 IP를 클라이언트로 취급합니다.
+> stdlib(`ipaddress`) + starlette 타입만 의존하므로 `interface`/`domain`을 import하지 않습니다.
 
 ## 사용 규칙 (중요)
 - **역의존 금지**: common은 `interface/*`, `domain/*`을 import 하지 않습니다.

@@ -439,10 +439,16 @@ KIS_PAPER_APP_KEY=your_paper_app_key
 KIS_PAPER_APP_SECRET=your_paper_app_secret
 KIS_PAPER_ACCOUNT_NO=11111111
 
-# Security
-SECRET_KEY=your-secret-key-here
-API_KEY_SALT=your-api-key-salt
+# Security / 접근 제어
+# (SECRET_KEY / API_KEY_SALT 는 config.py 에 존재하지 않는 키였으므로 2026-09-08 제거)
+ADMIN_ALLOWED_IPS=["127.0.0.1", "::1"]
+TRUSTED_PROXY_IPS=["127.0.0.0/8", "::1/128"]
+
+# Redis 인증 (docker compose 사용 시 필수)
+REDIS_PASSWORD=change-me-redis-password
 ```
+
+> 실제 환경 변수 계약의 SSoT는 `src/settings/config.py` + `.env.example` 입니다. 위 블록은 예시입니다.
 
 ---
 

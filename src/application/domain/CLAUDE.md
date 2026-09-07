@@ -12,18 +12,27 @@
 ## 📂 구조
 ```
 domain/
+├── access_log/           # 접근 로그 조회/통계/정리
 ├── account/              # 계좌 잔고/포지션 조회
 ├── auth/                 # KIS 인증/토큰/승인키 관리
 ├── backtest/             # 백테스트 엔진/데이터 로더
 ├── market_data/          # 현재가/호가/차트 조회
+├── ohlcv/                # OHLCV 캐시 매니저/워밍업/스케줄러
 ├── order/                # 주문 생성/조회/취소/정정
+├── paper_trade/          # 모의매매
+├── recommendation/       # 추천 후보/룰셋/walk-forward 검증
 ├── risk/                 # 리스크 가드(예: SafetyGuard)
+├── screener/             # 네이버 기반 가치주 스크리닝
 └── strategy/             # 전략 관리/스캔/알림/스케줄러
 ```
 
 ---
 
 ## 🗂️ 도메인별 구성 요약
+
+### access_log/
+- `dto.py`: 접근 로그 목록/통계/고유 IP/정리 결과 DTO (프론트 `templates/page/access_logs.html` 응답 계약)
+- `service.py`: `AccessLogRepository` 호출, `@transaction`으로 세션/트랜잭션 경계 소유
 
 ### account/
 - `dto.py`: 계좌/포지션 DTO

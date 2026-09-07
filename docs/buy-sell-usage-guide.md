@@ -1,6 +1,6 @@
 # 매수/매도 전략 사용 가이드 (mypage 기준)
 
-> 대상: 운영자 · 최종 갱신 2026-08-02 · 기준 브랜치 `main`
+> 대상: 운영자 · 최종 갱신 2026-09-08 · 기준 브랜치 `chore/improvement-issues-20260908`
 > 이 문서는 **현행 코드 실측 기반**입니다. 계획/과거 문서는 `docs/archive/` 참고.
 
 ---
@@ -11,6 +11,7 @@
 - **매도는 점수 기반 4단계**로 자동 산출됩니다.
 - **매수 스캔·매도 알림은 스케줄러가 자동 실행**합니다. mypage 화면은 대부분 *검토·수동 확인용*입니다.
 - ⚠️ **실주문으로 이어지는 유일한 조작은 `내 전략` 화면의 프리셋 활성화**뿐입니다. 나머지 버튼은 주문을 내지 않습니다.
+- ⚠️ **매도 판단 엔진은 3벌(E1/E2/E3)이고 서로 규칙이 다릅니다.** 각 화면 상단의 엔진 배지로 출처를 확인하세요. E1=실주문(월~금 15:35, `STRATEGY_LIVE_TRADING_ENABLED`가 켜진 경우에만), E2=화면·API·텔레그램 분석, E3=백테스트. 상세는 [`docs/sell-strategy.md`](sell-strategy.md) §1.
 
 ```mermaid
 flowchart LR
@@ -49,15 +50,27 @@ flowchart LR
 수동/고급(자동화로 대체됨)  Auth · Account · Order · Market Data
 ```
 
-| 화면 | URL | 용도 | 실주문? |
-|------|-----|------|:-------:|
-| 전략 센터 | `/mypage/strategy-hub` | 매수 스캔·추천·내전략 3탭 허브 | — |
-| └ 매수 스캔 | `/mypage/strategy` | 골든크로스 스캔·재무필터 | ✕ |
-| └ 추천/룰셋 | `/mypage/recommendation` | 후보 추천·walk-forward | ✕ |
-| └ 내 전략 | `/mypage/strategy/dashboard` | 프리셋 **활성화** | ⚠️ **O** |
-| Sell Strategy | `/mypage/sell-strategy` | 매도 시그널·현금화 계획 | ✕ |
-| 보유 매도 점검 | `/mypage/holdings` | 보유종목 매도 판단 | ✕ |
-| Backtest | `/mypage/backtest` | 백테스트 검증 | ✕ |
+| 화면 | URL | 용도 | 엔진(화면 배지) | 실주문? |
+|------|-----|------|------|:-------:|
+| 전략 센터 | `/mypage/strategy-hub` | 매수 스캔·추천·내전략 3탭 허브 | — (배지 없음) | — |
+| └ 매수 스캔 | `/mypage/strategy` | 골든크로스 스캔·재무필터 | — (배지 없음) | ✕ |
+| └ 추천/룰셋 | `/mypage/recommendation` | 후보 추천·walk-forward | `실주문 엔진 E1 측정` (walk-forward 검증 카드) | ✕ |
+| └ 내 전략 | `/mypage/strategy/dashboard` | 프리셋 **활성화** | `실주문 엔진 E1` + `실주문 스위치 ON/OFF` | ⚠️ **O** (스위치 OFF면 dry-run) |
+| Sell Strategy | `/mypage/sell-strategy` | 매도 시그널·현금화 계획 | 종목분석·현금화 = `분석 엔진 E2` / 백테스트 탭 = `백테스트 엔진 E3` / walk-forward 탭 = `실주문 엔진 E1 측정` | ✕ |
+| 보유 매도 점검 | `/mypage/holdings` | 보유종목 매도 판단 | `분석 엔진 E2` | ✕ |
+| Backtest | `/mypage/backtest` | 백테스트 검증 | `백테스트 엔진 E3` | ✕ |
+
+mypage 밖의 매도 표시 경로:
+
+| 표시 경로 | 위치 | 엔진(배지) |
+|------|------|------|
+| 운영 대시보드 — 매도 감시 카드 | `/ops` | `분석 엔진 E2` |
+| 텔레그램 매도 알림 (09:30/12:30) | Telegram | 헤더 1줄 `ℹ️ 분석 엔진 E2 · 참고용 분석이며 자동 주문은 나가지 않습니다` |
+| 공개 매도 분석 | `/page/sell-analysis/` | `분석 엔진 E2` |
+| 공개 전략 소개 — 매도 절 | `/page/` | `분석 엔진 E2` |
+
+> 위에 열거한 화면·알림에만 엔진 배지가 있습니다(전략 센터·매수 스캔에는 없습니다).
+> **E2 화면에서 본 EXIT_ALL이 15:35에 그대로 주문되지 않습니다.** 실주문은 E1이 별도 규칙으로 판단합니다.
 
 ---
 

@@ -55,13 +55,16 @@ kis-strategy-alert-server/
 ### 인증/환경
 - `POST /api/v1/auth/token`
 - `POST /api/v1/auth/token/refresh`
-- `GET /api/v1/auth/token-status`
+- `GET /api/v1/auth/token/status`
 - `GET /api/v1/auth/environment`
 
 ### 계좌/주문
 - `GET /api/v1/accounts/balance`
 - `GET /api/v1/accounts/positions`
 - `GET /api/v1/orders`
+- ⚠️ `POST /api/v1/orders` — **수동 실주문 API**입니다. `TRADING_ENVIRONMENT=prod`에서는 KIS 실전 주문(`TTTC0802U`/`TTTC0801U`)이 나갑니다.
+  `STRATEGY_LIVE_TRADING_ENABLED` kill-switch를 **거치지 않으며**, 보호 장치는 `ADMIN_ALLOWED_IPS` IP allowlist와
+  쓰기 요청용 `X-Requested-With: XMLHttpRequest` 헤더 검사(`verify_admin_access`)뿐입니다.
 
 ### 전략/분석
 - `GET /api/v1/strategies`
@@ -89,6 +92,8 @@ cp .env.example .env
 ```env
 APP_NAME="KIS Strategy & Alert Server"
 POSTGRES_PASSWORD=change-me
+REDIS_PASSWORD=change-me   # 필수. 비우면 redis 컨테이너가 기동을 거부합니다
+DB_BIND_HOST=127.0.0.1     # DB/Redis 호스트 포트는 로컬 전용 바인딩
 API_PORT=10131
 KIS_APP_KEY=...
 KIS_APP_SECRET=...
@@ -107,7 +112,10 @@ TELEGRAM_CHAT_ID=...
 /opt/homebrew/bin/docker compose up -d --build
 ```
 
-> 토큰은 `kis_token_cache:/root/KIS/config` named volume에 보존되므로 재빌드는 안전합니다.
+> 토큰은 `kis_token_cache` named volume에 보존되므로 재빌드는 안전합니다.
+> 마운트 경로는 컨테이너 실행 사용자의 `HOME`이 결정합니다 — 현재 배포본은 root 기준 `/root/KIS/config`이고,
+> 아래 「컨테이너 하드닝 적용 절차」를 적용하면 비루트 `uid 10001` 기준 `/home/appuser/KIS/config`가 됩니다.
+> 볼륨 이름은 그대로이므로 토큰 파일은 어느 방향으로도 이동/복사되지 않습니다.
 
 검증:
 
@@ -115,6 +123,92 @@ TELEGRAM_CHAT_ID=...
 /opt/homebrew/bin/docker compose ps
 curl -fsS http://localhost:${API_PORT:-10131}/health
 ```
+
+### 3) 컨테이너 하드닝 적용 절차 (2026-09-08 기준 **미적용**)
+
+`Dockerfile`(비루트 `uid 10001`), `docker-compose.yml`(Redis 비밀번호 필수화, DB/Redis 로컬 전용 바인딩,
+토큰 볼륨 경로 변경), `.dockerignore`는 **파일 변경만 완료된 상태**입니다.
+아직 재빌드하지 않았으므로 **실행 중인 컨테이너는 변경 전 이미지(root, `/root/KIS/config`)** 입니다.
+
+⚠️ KIS 토큰은 **1일 1회 발급 원칙**입니다. 아래 절차는 장 마감 후 또는 주말에 1회만 수행하고,
+`force_refresh=True`를 임의로 추가하지 않습니다. 재기동 1회차에는 프로세스 시작 시각 기준 토큰 파일이
+새로 생길 수 있으므로, "재발급 없음"은 **2회차** `docker compose restart api` 후 토큰 파일 목록/mtime이
+변하지 않는 것으로 판정합니다.
+
+```bash
+# ① .env 에 필수 키 설정 (URL 예약문자 @ : / % 금지)
+#    REDIS_PASSWORD=$(openssl rand -hex 24)
+#    DB_BIND_HOST=127.0.0.1
+
+# ② api 정지
+docker compose stop api
+
+# ③ 토큰 볼륨 소유권을 새 실행 uid 로 변경 (파일 복사 없음)
+docker run --rm -v kis-strategy-alert-server_kis_token_cache:/data alpine \
+  sh -c 'chown -R 10001:10001 /data && chmod 700 /data'
+
+# ④ 재빌드 + 기동
+docker compose up -d --build
+
+# ⑤ 실행 사용자 확인
+docker exec kis-strategy-alert-server id            # uid=10001 이어야 함
+docker exec kis-strategy-alert-server sh -c 'echo $HOME'   # /home/appuser 이어야 함
+
+# ⑥ 토큰 캐시 쓰기 가능 검증 — WRITABLE 이 나오지 않으면 즉시 롤백
+docker exec kis-strategy-alert-server sh -c \
+  'touch /home/appuser/KIS/config/.wtest && rm /home/appuser/KIS/config/.wtest && echo WRITABLE'
+```
+
+롤백(⑥ 실패 시):
+
+⚠️ **`git checkout -- <path>` 는 쓰지 마세요.** 그 명령은 index(= 커밋된 내용)로 되돌리므로,
+하드닝이 커밋된 뒤에는 하드닝 버전을 그대로 복원하는 **무동작**이 됩니다(에러도 나지 않습니다).
+그 상태에서 아래 `chown 0:0` 만 적용되면 컨테이너는 `uid 10001` 인데 토큰 캐시는 `root:root 0700` 이 되어
+**토큰 파일을 읽지도 쓰지도 못합니다.** 이때 `auth.py` 의 `_load_token_from_file()` 은 읽기 실패를
+"토큰 없음"으로 삼키고(`except Exception: return None`) 조용히 **새 토큰을 발급**하므로 1일 1회 발급 원칙이 깨집니다.
+
+하드닝 직전 커밋은 `f12f240`(`Dockerfile`/`docker-compose.yml` 를 마지막으로 변경한 커밋)입니다.
+커밋 전/후 모두에서 동작하도록 SHA 를 명시해 되돌립니다.
+
+```bash
+# R1 하드닝 직전 버전으로 명시적 복원 (커밋 여부와 무관하게 동작)
+git checkout f12f240 -- docker-compose.yml Dockerfile
+rm -f .dockerignore
+
+# R2 복원 결과 확인 — 아래 두 결과가 모두 맞아야 chown 0:0 이 안전하다
+grep -n 'kis_token_cache:/root/KIS/config' docker-compose.yml   # 토큰 마운트가 root HOME 기준인지
+grep -n 'USER ' Dockerfile                                       # 출력이 없어야 함(= root 실행)
+
+# R3 R2 가 확인된 경우에만 볼륨 소유권을 root 로 되돌린다
+docker run --rm -v kis-strategy-alert-server_kis_token_cache:/data alpine chown -R 0:0 /data
+
+# R4 재빌드 + 실행 사용자 재확인
+docker compose up -d --build
+docker exec kis-strategy-alert-server id            # uid=0(root) 이어야 함
+docker exec kis-strategy-alert-server sh -c 'ls -la /root/KIS/config'
+```
+
+> R2 가 기대와 다르면(= 여전히 하드닝 버전이면) **`chown 0:0` 을 실행하지 마세요.** 그 경우 올바른 소유권은
+> `10001:10001` 이며, 이미 `0:0` 으로 바꿨다면 `chown -R 10001:10001` 로 되돌린 뒤
+> 토큰 파일 목록/mtime 이 변하지 않았는지 확인합니다.
+
+- Redis 비밀번호가 비어 있어도 `docker compose ps/logs/down/config`는 정상 동작합니다(파싱 시점이 아니라
+  **런타임 가드**로 막습니다). 비어 있으면 redis 컨테이너만 `FATAL: REDIS_PASSWORD ...` 로그를 남기고 종료합니다.
+- 적용 후에는 컨테이너 안에서 `uv run ...`이 `/app/.venv` 쓰기 실패로 동작하지 않습니다.
+  **`/app/.venv/bin/<cmd>` 를 직접 실행하세요**(예: `docker compose exec api /app/.venv/bin/python scripts/...`).
+  `PYTHONPATH=/app` 은 이미 이미지 ENV 에 있으므로 추가 설정이 필요 없습니다.
+- ⚠️ **`docker compose exec --user root api ...` 는 기본 수단으로 쓰지 않습니다.** `--user` 는 `HOME` 을 재설정하지 않아
+  `Dockerfile` 의 `ENV HOME=/home/appuser` 를 그대로 상속합니다. 그 상태에서 KIS 인증을 타는 명령을 돌리면
+  `auth.py` 의 `Path.home()/"KIS"/"config"` 아래에 **root 소유 0600 토큰 파일**이 마운트된 `kis_token_cache` 볼륨에 남고,
+  이후 `uid 10001` 프로세스가 그 파일을 읽지 못해 토큰을 조용히 재발급합니다(1일 1회 원칙 위반).
+  부득이하게 root 가 필요하면 KIS 인증을 타지 않는 명령으로 한정하고, `-e HOME=/tmp` 를 함께 지정한 뒤
+  작업 후 소유권을 되돌립니다.
+
+  ```bash
+  docker compose exec --user root -e HOME=/tmp api <cmd>
+  docker run --rm -v kis-strategy-alert-server_kis_token_cache:/data alpine \
+    sh -c 'chown -R 10001:10001 /data && ls -la /data'
+  ```
 
 ## 운영 확인 순서
 
@@ -125,7 +219,9 @@ curl -fsS http://localhost:${API_PORT:-10131}/health
 curl -fsS http://localhost:${API_PORT:-10131}/api/v1/ops/summary
 ```
 
-`/health`는 최소 연결 상태 확인용입니다.
+`/health`는 DB(`SELECT 1`)·Redis(`ping`)·KIS 토큰 유효성만 보는 연결 수준 점검입니다.
+DB/Redis가 끊기면 `status`가 `degraded`로 내려가지만 HTTP 상태는 항상 200이므로, `curl -fsS`의 성공 여부가 아니라
+응답 본문의 `status` 값을 확인해야 합니다(KIS 토큰 실패는 `kis_api` 필드에만 반영되고 `status`는 바꾸지 않습니다).
 WebSocket/전략 스케줄/알림 스케줄의 세부 상태는 `/api/v1/ops/summary` 또는 각 status API로 확인하세요.
 
 ### 2. 전략 스케줄러 확인
@@ -176,6 +272,7 @@ http://localhost:${API_PORT:-10131}/ops
 - `02-readme-revamp-draft.md` — README 개편 초안 원본
 - `03-ops-dashboard-proposal.md` — `/ops` 설계안
 - `04-api-operations-routine.md` — 하루 운영 루틴 기준 API 시나리오
+- `05-public-scan-etf-mode-transition.md` — `ETF_UNIVERSE_ENABLED` 전환이 `/page` 공개 스캔에 미치는 영향
 
 ## 테스트
 
@@ -185,25 +282,37 @@ http://localhost:${API_PORT:-10131}/ops
 docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -e PYTHONPATH=/work -e UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv kis-strategy-alert-server-api uv run pytest tests/ -q
 ```
 
-현재 확인값: `731 passed, 13 skipped`.
+현재 확인값: `790 passed, 13 skipped` (2026-09-08 실측, 이전 베이스라인 `731 passed, 13 skipped`).
+
+> 컨테이너 하드닝 적용 후에는 이 이미지도 비루트(`uid 10001`)로 실행됩니다.
+> Docker Desktop이 bind mount 소유권을 컨테이너 uid로 매핑하므로 위 명령은 그대로 동작하며,
+> 권한 오류가 나면 `--user root` 를 추가하세요.
 
 ## 알려진 함정
 
 - ⚠️ 월~금 `15:35` 활성 `golden_cross` 전략 실행은 `STRATEGY_LIVE_TRADING_ENABLED=true`일 때만 실주문한다. 기본값은 `false`이며 운영 검증과 명시적 승인 뒤에만 켠다.
+- ⚠️ **`STRATEGY_LIVE_TRADING_ENABLED`는 서버 전체의 주문 차단기가 아니다.** 강제 지점은 `GoldenCrossEngine.execute`(`domain/strategy/golden_cross_engine.py:137`) **한 곳**뿐이므로, 이 스위치가 막는 것은 전략 자동 실행(15:35 스케줄러)과 `POST /api/v1/strategies/{id}/execute` 경로다. `POST /api/v1/orders`(`order_router` → `OrderService.create_order`)는 이 검사를 전혀 거치지 않는 **별개의 실주문 경로**이며, 관리자 IP allowlist를 통과한 요청은 스위치가 OFF여도 KIS 실전 주문을 낼 수 있다. 즉 실질 방어선은 `ADMIN_ALLOWED_IPS` 범위다.
 - ⚠️ `analysis_history`의 종목코드 칸에는 `MEMO-BROADCAST-1` 같은 메모 행을 넣지 않는다. 파이프라인이 `^[0-9A-Z]{6}$`로 자동 필터하지만, 종목코드 칸은 종목코드 전용이다.
 - ⚠️ 실운영 `KIS_API_RATE_LIMIT=8`은 KIS 실전 한도 `20/s`의 40%로 설정한 보수값이다. `EGW00201`은 `0.5 → 1.0 → 2.0`초 지수 백오프로 최대 3회 재시도한다.
 - ⚠️ 알림은 `09:20/11:20/12:20/14:20` 데이터 갱신 뒤 `09:30/11:30/12:30/14:30`에 전송한다. 20분 내 성공 갱신이 없으면 조용히 skip하고, 동일 시그니처는 6시간 동안 중복 차단한다.
+- ⚠️ 매도 판단 엔진은 3벌(E1 실주문 / E2 화면·API·텔레그램 분석 / E3 백테스트)이고 규칙이 서로 다르다. 각 화면 상단의 엔진 배지로 출처를 확인한다. 상세는 `docs/sell-strategy.md` §1, 화면↔엔진 매핑은 `docs/buy-sell-usage-guide.md` §2.
+- ⚠️ 컨테이너 하드닝(비루트 실행 · Redis 비밀번호 필수 · DB/Redis 로컬 전용 바인딩)은 **파일 변경만 완료된 미배포 상태**다(2026-09-08). 적용 전에는 「컨테이너 하드닝 적용 절차」의 순서를 반드시 지킨다.
 
 ## 알려진 한계
 
 - 개별 page router를 테스트/별도 앱에서 직접 include하면 `main.py`와 동일한 관리자 guard를 별도로 붙여야 합니다.
-- access log는 아직 `/api`, `/mypage`, `/health` 전체를 포괄하지 않습니다.
+- access log는 여전히 `/page` 경로만 기록합니다(`AccessLoggingMiddleware.LOG_PATHS`). `/api`, `/mypage`, `/health`는 대상이 아닙니다.
+  - 다만 기록되는 클라이언트 IP는 2026-09-08에 신뢰 프록시 기반 공통 판정(`application/common/client_ip.py`)으로 통일되어, 관리자 IP 검증·공개 스캔 쿨다운·WebSocket 접근 제어와 같은 값을 씁니다.
 - `/api/v1/ops/summary` 는 여러 서비스 호출을 집계하므로, 일부 외부 API 상태가 나쁘면 응답이 느려질 수 있습니다.
+- 애플리케이션 로깅은 `src/settings/logging_config.py`의 `setup_logging()`이 `src/main.py` 최상단에서 적용합니다. `scripts/` CLI 진입점은 아직 이 부트스트랩을 호출하지 않아 백테스트/스캔/백필 실행 시 INFO 로그가 보이지 않습니다.
+- `ADMIN_ALLOWED_IPS`를 전 대역(`0.0.0.0/0`)으로 열어 두면 `/mypage/*`·`/api/v1/ops/*`·`/api/v1/access-logs`의 IP 보호가 무력화됩니다. 운영 `.env` 값을 주기적으로 점검하세요.
 
 ## 다음 우선 개발 후보
 
 - `/ops` summary 경량화 및 부분 실패 tolerant aggregation
-- `/mypage/*` route-level 관리자 보호 확대
+- `/mypage/*` route-level 관리자 보호 확대 + `ADMIN_ALLOWED_IPS` 범위 재조정
 - access log 범위를 `/api`, `/mypage` 까지 확장
+- `scripts/` CLI 진입점에 `setup_logging()` 배선
+- 사용하지 않는 JWT 의존성(`python-jose`, `passlib[bcrypt]`) 제거 및 `uv.lock` 재생성 — 설정은 이미 제거됨
 - notification scheduler 결과 이력 영속화
 - README와 운영 문서의 지속 동기화

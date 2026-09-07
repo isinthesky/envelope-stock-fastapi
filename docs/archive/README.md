@@ -3,7 +3,7 @@
 작업이 **코드에 반영 완료**된 계획/개선/리팩토링 문서를 이력 보존용으로 모아둔 곳입니다.
 현행 동작의 근거로 삼지 마세요 — 계획 당시 스냅샷이며, 최신 상태는 코드·`README.md`·`CLAUDE.md`가 기준입니다.
 
-> 정리 일자: 2026-08-02
+> 정리 일자: 2026-08-02 (최근 갱신: 2026-08-14)
 
 ## 보관 문서와 완료 근거
 
@@ -21,6 +21,7 @@
 | `sell-strategy/claude-plan.md` | 매도 판단 로직 진단(원안) | 점수제로 실현 |
 | `sell-strategy/implementation-plan.md` | 매도 점수제 구현 계획 | `sell_score_rules.py`(12규칙)+`sell_score_settings.py` 임계 라이브 |
 | `sell-strategy/implementation-review.md` | 점수제 갭 분석 | 당시 "미구현" 지적 → 현재 구현 완료(문서 stale) |
+| `2026-08-13-sell-strategy-external-review.md` | 매도 전략 외부 평가 원문(LLM 대화) | 사실 전제 다수가 낡음(MA 이원화·Hard Stop 미구현·백테스트 미실행 전제) → `docs/sell-strategy.md` 결정 문서로 대체, 유효 제안은 해당 문서 §5·§6에 흡수 |
 
 ## 아직 진행 중(아카이브 안 함 — `docs/`에 유지)
 
@@ -31,4 +32,5 @@
 
 ## 현행 사용 가이드
 
-매수/매도 실사용법은 → [`docs/buy-sell-usage-guide.md`](../buy-sell-usage-guide.md)
+- 매수/매도 실사용법 → [`docs/buy-sell-usage-guide.md`](../buy-sell-usage-guide.md)
+- 매도 전략 결정 문서(SSoT) → [`docs/sell-strategy.md`](../sell-strategy.md)

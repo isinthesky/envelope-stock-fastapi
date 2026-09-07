@@ -22,6 +22,7 @@ Related assets outside this tree: `templates/page/*.html`, `templates/layouts/*.
 | Strategy API | `api/strategy_router.py` | public router plus `admin_router` gated in `main.py` |
 | Backtest API | `api/backtest_router.py` | legacy/raw DTO responses, internal prefix |
 | Ops API | `api/ops_router.py` | `/api/v1/ops` prefix and admin protection from `main.py` |
+| Access log API | `api/access_log_router.py` | `/api/v1/access-logs`, admin-gated; delegates to `domain/access_log/service.py` |
 | Public page | `page/public_strategy_page_router.py` | `/page/*`, intentionally public |
 | Admin pages | `page/*_page_router.py` | `/mypage/*`, include-level admin protection |
 | Page registry | `page/__init__.py` | `page_routers` list consumed by `main.py` |
@@ -37,6 +38,11 @@ Related assets outside this tree: `templates/page/*.html`, `templates/layouts/*.
   data behavior in APIs.
 - Prefix changes must be checked against `src/main.py`, README endpoint lists, page JavaScript, and
   interface tests.
+- Never read `request.client.host` or `X-Forwarded-For` directly; use `get_client_ip()` from
+  `../common/client_ip.py` so admin checks, public cooldowns, access logs, and WebSocket agree.
+- Sell-related pages carry an engine-origin badge (`p.engine-note` + `span.engine-badge`) so E1/E2/E3
+  results are never confused; see `docs/buy-sell-usage-guide.md` §2 and
+  `tests/interface/test_admin_page_engine_badges.py`.
 
 ## ANTI-PATTERNS
 - Do not call repositories or SQLAlchemy models directly from routers.
