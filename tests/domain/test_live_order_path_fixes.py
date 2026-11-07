@@ -478,3 +478,125 @@ def test_default_scan_ma_matches_default_strategy_config() -> None:
         defaults.short_period,
         defaults.long_period,
     )
+
+
+# ==================== SafetyGuard 연결(2026-11-07) ====================
+
+
+def test_safety_guard_market_crash_and_daily_entry_cap() -> None:
+    from src.application.domain.risk.safety_guard import SafetyGuard
+
+    guard = SafetyGuard(initial_capital=Decimal("10000000"))
+    assert guard.can_trade()[0] is True
+    guard.update_market_change(-0.021)
+    assert guard.can_trade()[0] is False  # 시장 급락 → 신규 매수 차단
+    assert guard.can_trade(is_risk_reducing=True)[0] is True  # 매도는 허용
+    guard.update_market_change(0.0)
+    for sym in ("A", "B", "C"):
+        guard.record_entry(sym)
+    allowed, reason, _ = guard.can_trade()
+    assert allowed is False and reason is not None  # 일 신규 진입 3건 상한
+
+
+@pytest.mark.asyncio
+async def test_live_buy_blocked_at_max_positions_and_state_reset() -> None:
+    created = SimpleNamespace(
+        id=31, signal_type=SignalType.BUY.value, signal_status=SignalStatus.PENDING.value
+    )
+
+    class Signals(_Signals):
+        async def get_by_symbol(self, *a, **k):
+            return []
+
+        async def create_signal(self, **kwargs):
+            return created
+
+    signals, states = Signals(), _States()
+    engine = _engine(signals, states)
+    engine._run_state = {"held": 5, "max_positions": 5}
+    engine._execute_buy = AsyncMock(side_effect=AssertionError("max positions must block"))
+    engine._model_to_dto = lambda model: model
+
+    await engine._handle_signal(
+        strategy=SimpleNamespace(id=1, account_no="12345678"),
+        symbol="069500",
+        transition=StateTransition(
+            new_state=SymbolState.IN_POSITION, signal=Signal.BUY, reason="gc"
+        ),
+        current_snapshot=SimpleNamespace(
+            close=Decimal("100"), ma_short=1, ma_long=1, stoch_k=1.0, stoch_d=1.0
+        ),
+        state=SimpleNamespace(state=SymbolState.READY_TO_BUY.value),
+        config=SimpleNamespace(),
+        safety_guard=SimpleNamespace(),
+        dry_run=False,
+    )
+
+    assert signals.updates[-1][1] == {
+        "status": SignalStatus.SKIPPED,
+        "exit_reason": "max_positions",
+    }
+    assert states.calls == [("reset_to_waiting", {"args": (1, "069500")})]
+
+
+@pytest.mark.asyncio
+async def test_benchmark_change_uses_today_bar_only(monkeypatch) -> None:
+    engine = _engine()
+    today = pd.Timestamp(datetime.now(KST).date())
+    fresh = pd.DataFrame(
+        {"timestamp": [today - pd.Timedelta(days=1), today], "close": [100.0, 97.0]}
+    )
+    engine._fetch_ohlcv = AsyncMock(return_value=fresh)
+    assert await engine._benchmark_change_today() == pytest.approx(-0.03)
+    stale = fresh.assign(timestamp=fresh["timestamp"] - pd.Timedelta(days=3))
+    engine._fetch_ohlcv = AsyncMock(return_value=stale)
+    assert await engine._benchmark_change_today() == 0.0  # 당일 봉 없음 → 급락 판정 안 함
+
+
+@pytest.mark.asyncio
+async def test_engine_fetch_forces_same_day_bar() -> None:
+    engine = _engine()
+    seen = {}
+
+    class Loader:
+        async def load_ohlcv_dataframe(self, **kwargs):
+            seen.update(kwargs)
+            return pd.DataFrame({"timestamp": [pd.Timestamp("2026-11-06")], "close": [1.0]})
+
+    engine._data_loader = Loader()
+    await engine._fetch_ohlcv("069500", days=10)
+    assert seen["cache_freshness_days"] == 0  # 이전: 기본 1일 → 15:35에 당일 종가 미반영
+
+
+@pytest.mark.asyncio
+async def test_etf_mode_uses_etf_universe_not_stock_screen(monkeypatch) -> None:
+    from src.adapters.database.models.stock_universe import MarketType
+
+    seen = {}
+
+    class FakeScreener:
+        def __init__(self, *a, **k):
+            pass
+
+        async def get_screening_candidates(self, market=None):
+            seen["market"] = market
+            raise RuntimeError("stop after candidate query")
+
+    monkeypatch.setattr(engine_module, "StockScreener", FakeScreener)
+    monkeypatch.setattr(engine_module.settings, "etf_universe_enabled", True)
+    engine = _engine()
+    engine.strategy_repo = SimpleNamespace(
+        get_by_id=AsyncMock(
+            return_value=SimpleNamespace(id=1, config_json="{}", symbol_list=[], account_no="1")
+        )
+    )
+    engine._benchmark_change_today = AsyncMock(return_value=0.0)
+    engine._evaluate_entry_regime = AsyncMock(return_value=True)
+    engine._init_safety_guard = AsyncMock(
+        return_value=SimpleNamespace(update_market_change=lambda x: None)
+    )
+    engine.symbol_state_repo = SimpleNamespace(get_in_position=AsyncMock(return_value=[]))
+
+    await engine.execute(strategy_id=1, dry_run=True)
+
+    assert seen["market"] == MarketType.ETF

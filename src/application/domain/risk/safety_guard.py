@@ -274,6 +274,15 @@ class SafetyGuard:
     def update_market_change(self, market_change: float) -> None:
         self.account.market_change = market_change
 
+    def record_entry(self, symbol: str) -> None:
+        """신규 매수 접수 1건을 당일 거래 수에 반영한다(max_daily_trades = 일 신규 진입 상한).
+
+        엔진은 하루 1회 실행되므로 실행 단위 상태 = 일 단위 상태다. 2026-11-07 백테스트 재현에서
+        이 상한(3건)과 시장 급락 가드가 성과 개선의 전부였다(reports/entry_guard_eval_20261107.json).
+        """
+        _ = symbol
+        self._get_today_stats().trades += 1
+
     def get_status(self) -> dict[str, object]:
         can_trade, reason, message = self.can_trade()
         stats = self._get_today_stats()

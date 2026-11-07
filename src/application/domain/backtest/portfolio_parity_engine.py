@@ -31,6 +31,7 @@ from src.application.domain.backtest.dto import (
     DailyStatsDTO,
     TradeDTO,
 )
+from src.application.domain.backtest.entry_guard import EntryGuardConfig, EntryGuardDay, check_entry
 from src.application.domain.backtest.exit_overlay import OVERLAY_TRADE_EXIT_REASON, ExitOverlay
 from src.application.domain.backtest.golden_cross_parity import GoldenCrossParityReplay
 from src.application.domain.backtest.order_manager import BacktestOrderManager
@@ -124,12 +125,16 @@ class PortfolioExecutionOptions:
     cash_interest: CashInterestSchedule | None = None
     liquidate_at_end: bool = False
     exit_overlay: ExitOverlay | None = None
+    # SafetyGuard 재현(신규 진입만 차단). same_close 전용. None=미적용(기본, 라이브 현행=무효 가드와 동일)
+    entry_guard: EntryGuardConfig | None = None
 
     def __post_init__(self) -> None:
         if self.fill_timing not in ("same_close", "next_open"):
             raise ValueError(f"unsupported fill_timing: {self.fill_timing}")
         if self.sizing_mode not in ("cash_ratio", "equal_weight_equity"):
             raise ValueError(f"unsupported sizing_mode: {self.sizing_mode}")
+        if self.entry_guard is not None and self.fill_timing != "same_close":
+            raise ValueError("entry_guard supports fill_timing='same_close' only")
 
     @property
     def is_default(self) -> bool:
@@ -143,6 +148,8 @@ class PortfolioExecutionOptions:
             parts.append("liquidate_at_end")
         if self.exit_overlay is not None:
             parts.append(f"overlay={self.exit_overlay.describe()}")
+        if self.entry_guard is not None:
+            parts.append(self.entry_guard.describe())
         return ",".join(parts)
 
 
@@ -158,6 +165,7 @@ class PortfolioRunResult:
     open_fallbacks: int = 0
     interest_earned: Decimal = Decimal("0")
     end_liquidation_cost: Decimal = Decimal("0")
+    guard_blocks: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -272,6 +280,9 @@ class PortfolioParityEngine:
         end_liquidation_cost = Decimal("0")
         prev_active_day: date | None = None
 
+        guard_blocks: dict[str, int] = {}
+        day_losses = {"streak": 0}
+
         def _close_position(symbol: str, price: Decimal, exec_dt: datetime, reason: str) -> None:
             nonlocal cash
             pos = positions[symbol]
@@ -279,6 +290,8 @@ class PortfolioParityEngine:
                 trade=pos.trade, price=price, date=exec_dt, exit_reason=reason
             )
             cash += net
+            # 당일 연속 손실 청산 수(SafetyGuard TradingDayStats와 같은 일 단위)
+            day_losses["streak"] = day_losses["streak"] + 1 if completed.profit < 0 else 0
             completed_trades.append(
                 {
                     "profit_rate": completed.profit_rate,
@@ -320,6 +333,7 @@ class PortfolioParityEngine:
 
         for d in calendar:
             exec_dt = dt_map[d]
+            day_losses["streak"] = 0
             in_active = active_from is None or d >= active_from
 
             # ── Phase 0 (next_open 전용): 전일 종가 시그널을 당일 시가로 체결.
@@ -497,14 +511,31 @@ class PortfolioParityEngine:
             candidates.sort(key=lambda c: (_BUY_REASON_PRIORITY.get(c[1].reason or "", 9), c[0]))
 
             # ── Phase D: 진입 — 체결 결과를 FSM에 피드백(거부 시 라이브처럼 reset_to_waiting)
+            entries_today = 0
             for symbol, transition, current in candidates:
                 st = fsm[symbol]
                 price = current.close
                 qty = 0
                 reject_reason = None
+                guard_reason = None
+                if ex.entry_guard is not None:
+                    equity_now = float(cash + _positions_value(positions, close_map, last_close, d))
+                    guard_reason = check_entry(
+                        ex.entry_guard,
+                        EntryGuardDay(
+                            day=d,
+                            equity_now=equity_now,
+                            equity_history=[float(e) for e in equity_curve[-21:]],
+                            entries_today=entries_today,
+                            consecutive_losses_today=day_losses["streak"],
+                        ),
+                    )
                 if entry_allowed_dates is not None and d not in entry_allowed_dates:
                     # 시장 국면 필터: 하락/횡보장 신규 진입 차단(라이브 regime 게이트 정합)
                     reject_reason = "regime_block"
+                elif guard_reason is not None:
+                    reject_reason = guard_reason
+                    guard_blocks[guard_reason] = guard_blocks.get(guard_reason, 0) + 1
                 elif next_open:
                     # 시그널 시점 슬롯 예약: (보유 − 매도대기 + 매수대기) < max
                     committed = len(positions) - len(pending_sells) + len(pending_buys)
@@ -543,6 +574,7 @@ class PortfolioParityEngine:
                 )
                 trades.append(trade)
                 entered_positions += 1
+                entries_today += 1
                 # 체결 성공 → IN_POSITION 확정(라이브 _update_state_after_signal)
                 st.state = SymbolState.IN_POSITION.value
                 st.entry_price = current.close
@@ -620,6 +652,7 @@ class PortfolioParityEngine:
             open_fallbacks=open_fallbacks,
             interest_earned=interest_earned,
             end_liquidation_cost=end_liquidation_cost,
+            guard_blocks=guard_blocks,
         )
 
 

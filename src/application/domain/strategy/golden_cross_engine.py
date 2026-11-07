@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.cache.redis_client import get_redis_client
 from src.adapters.database.models.strategy import StrategyModel
+from src.adapters.database.models.stock_universe import MarketType
 from src.adapters.database.models.strategy_signal import SignalStatus, SignalType
 from src.adapters.database.models.strategy_symbol_state import SymbolState
 from src.adapters.database.repositories.strategy_repository import StrategyRepository
@@ -166,22 +167,40 @@ class GoldenCrossEngine:
             config = self._parse_config(strategy)
             _warn_if_ma_drift(strategy_id, config)
 
-            # 2-1. 시장 국면 게이트(신규 매수 전용, 실행당 1회). 실주문은 fail-closed.
+            # 2-1. 벤치 당일 봉 확보(로더가 API로 받아 캐시) → 급락 가드 입력 + 레짐 판정에 당일 봉 반영
+            market_change = await self._benchmark_change_today()
+
+            # 2-2. 시장 국면 게이트(신규 매수 전용, 실행당 1회). 실주문은 fail-closed.
             entry_regime_allowed = await self._evaluate_entry_regime(fail_open=dry_run)
 
             # 3. 상태 머신 초기화
             state_machine = GoldenCrossStateMachine(config)
 
-            # 4. SafetyGuard 초기화
+            # 4. SafetyGuard 초기화 + 당일 시장 변화(급락 가드) + 보유 종목 수(최대 포지션)
             safety_guard = await self._init_safety_guard(strategy)
+            safety_guard.update_market_change(market_change)
+            held = await self.symbol_state_repo.get_in_position(strategy.id)
+            self._run_state = {
+                "held": len(held),
+                "max_positions": config.position.max_position_count,
+            }
 
             # 5. 종목 스크리닝
             screener = StockScreener(self.session, self.kis_client, config.screener_config)
-            candidates = await screener.get_screening_candidates()
+            # ETF 모드: 개별주 스크리닝(시총·거래량)은 ETF에 시총이 없어 221종 중 2종만 통과시켰다.
+            # 백테스트·walk-forward 유니버스(활성 ETF 전체)와 맞춰 ETF 조건(활성·거래가능·비제외)만 쓴다.
+            candidates = await screener.get_screening_candidates(
+                market=MarketType.ETF if settings.etf_universe_enabled else None
+            )
 
-            # 기존 전략 종목도 포함
+            # 기존 전략 종목도 포함. 처리 순서는 백테스트(Phase B 청산 → Phase D 진입)와 맞춘다:
+            # 보유 종목 먼저, 나머지는 종목코드 순(일 진입 상한·최대 포지션이 순서에 의존).
             existing_symbols = set(strategy.symbol_list)
-            all_symbols = list(set(candidates) | existing_symbols)
+            held_symbols = {h.symbol for h in held}
+            all_symbols = sorted(
+                set(candidates) | existing_symbols | held_symbols,
+                key=lambda sym: (sym not in held_symbols, sym),
+            )
 
             logger.info(
                 f"[GC Engine] Processing {len(all_symbols)} symbols for strategy {strategy_id}"
@@ -571,6 +590,23 @@ class GoldenCrossEngine:
             await self.symbol_state_repo.reset_to_waiting(strategy.id, symbol)
             return self._model_to_dto(signal_model)
 
+        # 최대 보유 종목 수(전략 config, 백테스트 max_positions와 동일 — 이전엔 라이브 미적용)
+        run_state = getattr(self, "_run_state", None)
+        if (
+            signal_type == SignalType.BUY
+            and run_state is not None
+            and run_state["held"] >= run_state["max_positions"]
+        ):
+            logger.info(
+                f"[GC Engine] {symbol} BUY blocked: max positions "
+                f"{run_state['held']}/{run_state['max_positions']}"
+            )
+            await self.signal_repo.update_execution(
+                signal_model.id, status=SignalStatus.SKIPPED, exit_reason="max_positions"
+            )
+            await self.symbol_state_repo.reset_to_waiting(strategy.id, symbol)
+            return self._model_to_dto(signal_model)
+
         # SafetyGuard 체크
         can_trade, _, block_message = safety_guard.can_trade(
             is_risk_reducing=signal_type == SignalType.SELL
@@ -597,6 +633,9 @@ class GoldenCrossEngine:
                 await self._execute_buy(
                     strategy, symbol, current_snapshot.close, config, signal_model
                 )
+                safety_guard.record_entry(symbol)
+                if run_state is not None:
+                    run_state["held"] += 1
             else:
                 await self._execute_sell(
                     strategy, symbol, current_snapshot.close, state, signal_model
@@ -860,6 +899,27 @@ class GoldenCrossEngine:
             entry_price=entry_price,
         )
 
+    async def _benchmark_change_today(self) -> float:
+        """벤치(gc_regime_benchmark) 당일 종가 수익률. 당일 봉이 없거나 오류면 0.0(급락 가드 미발동).
+
+        데이터 부재 시 신규 매수 차단은 레짐 게이트(fail-closed)가 담당한다.
+        """
+        try:
+            bench = await self._fetch_ohlcv(settings.gc_regime_benchmark, days=10, min_candles=2)
+            if bench is None or len(bench) < 2:
+                return 0.0
+            last = pd.Timestamp(bench["timestamp"].iloc[-1])
+            last_day = (last.tz_convert(KST) if last.tzinfo else last).date()
+            if last_day != datetime.now(KST).date():
+                return 0.0
+            closes = bench["close"].astype(float)
+            change = float(closes.iloc[-1] / closes.iloc[-2] - 1.0)
+            logger.info(f"[GC Engine] benchmark change today {change:.2%}")
+            return change
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[GC Engine] benchmark change unavailable: {e}")
+            return 0.0
+
     async def _evaluate_entry_regime(self, *, fail_open: bool) -> bool:
         """신규 매수 시장 국면 게이트(실행당 1회). 비활성이면 항상 허용."""
         if not settings.gc_regime_filter_enabled:
@@ -905,11 +965,15 @@ class GoldenCrossEngine:
         """
         data_loader = self._get_data_loader()
         try:
+            # cache_freshness_days=0: 15:35 실행에서 "어제 봉까지 있으면 신선"으로 보고 당일 종가를
+            # 받지 않던 문제(신호가 백테스트 same_close보다 하루 늦음) 수정. 당일 봉이 이미 캐시돼 있으면
+            # API를 다시 부르지 않는다(15:31 이후 봉만 저장되므로 캐시된 당일 봉은 확정값).
             df = await data_loader.load_ohlcv_dataframe(
                 symbol=symbol,
                 days=days,
                 interval="1d",
                 min_candles=min_candles,
+                cache_freshness_days=0,
             )
         except ValueError as e:
             # 데이터 부족 등 예상된 실패만 스킵(None). 그 외 예외(네트워크/스키마 등)는
