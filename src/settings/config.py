@@ -72,10 +72,11 @@ class Settings(BaseSettings):
         default=3, ge=1, le=7, description="OHLCV 워밍업/스케줄러 신선도 기준 (일)"
     )
     ohlcv_retention_days: int = Field(
-        default=1400,
+        default=3650,
         ge=30,
         le=3650,
-        description="OHLCV 보존 기간 (일). 3년 백테스트(1095) + 지표 워밍업 버퍼(~300)",
+        description="OHLCV 보존 기간 (일). 2018~ 다국면 walk-forward 재현용(2026-11-06 1400→3650). "
+        "1400일이면 02:00 정리 job이 연구 데이터(2023 이전)를 지워 과거 검증을 재현할 수 없었다",
     )
     ohlcv_cleanup_batch_size: int = Field(
         default=1000, ge=100, le=10000, description="OHLCV 정리 배치 크기"
@@ -255,6 +256,29 @@ class Settings(BaseSettings):
         description="X-Forwarded-For/X-Real-IP를 신뢰할 reverse proxy IP/CIDR 목록",
     )
 
+    # ==================== 관리자 로그인(ID/PW 세션) ====================
+    # 주문 페이지(/mypage/order)와 주문 API(/api/v1/orders)는 IP allowlist에 더해
+    # 로그인 세션을 요구한다. 아이디/해시가 비어 있으면 로그인이 비활성화되어 해당 경로는
+    # 전부 거부된다(fail-closed). 해시는 scripts/ops/hash_admin_password.py로 생성한다.
+    admin_username: str = Field(default="", description="관리자 로그인 아이디")
+    admin_password_hash: str = Field(
+        default="",
+        description="관리자 비밀번호 scrypt 해시 (형식: scrypt:n:r:p:salt_hex:hash_hex)",
+    )
+    admin_session_ttl_seconds: int = Field(
+        default=43200, ge=300, le=604800, description="관리자 세션 유효 시간(초, 절대 만료)"
+    )
+    admin_session_cookie_secure: bool = Field(
+        default=False,
+        description="세션 쿠키 Secure 플래그. HTTPS 프록시 뒤에서만 true로 켠다(HTTP 직접 접속 시 로그인 불가).",
+    )
+    admin_login_max_failures: int = Field(
+        default=5, ge=1, le=100, description="IP별 로그인 실패 허용 횟수(초과 시 잠금)"
+    )
+    admin_login_lockout_seconds: int = Field(
+        default=900, ge=60, le=86400, description="로그인 실패 집계/잠금 윈도우(초)"
+    )
+
     enable_admin_strategy_routes: bool = Field(
         default=False,
         description="전략 생성/수정/삭제 같은 관리자 전용 라우트를 API에 마운트할지 여부(기본: 비활성).",
@@ -338,13 +362,13 @@ class Settings(BaseSettings):
         default=55,
         ge=3,
         le=120,
-        description="[ETF] 골든크로스 단기 이동평균 기간(일). ETF 전환 시 .env로 50 권장",
+        description="[ETF] 골든크로스 단기 이동평균 기간(일). 실주문 전략 config·walk-forward 검증값(55)과 통일(2026-11-06)",
     )
     gc_long_ma_period: int = Field(
         default=165,
         ge=20,
         le=400,
-        description="[ETF] 골든크로스 장기 이동평균 기간(일). ETF 전환 시 .env로 200 권장",
+        description="[ETF] 골든크로스 장기 이동평균 기간(일). 실주문 전략 config·walk-forward 검증값(165)과 통일(2026-11-06)",
     )
     etf_universe_enabled: bool = Field(
         default=False,
@@ -603,6 +627,27 @@ class Settings(BaseSettings):
     strategy_live_trading_enabled: bool = Field(
         default=False,
         description="골든크로스 실주문 마스터 스위치. False면 dry-run만 허용",
+    )
+    strategy_order_price_type: Literal["closing", "limit"] = Field(
+        default="closing",
+        description="전략 실주문 가격 유형. closing=장후 시간외 종가(KIS ORD_DVSN 06, 접수 15:30~16:00·"
+        "체결 15:40~16:00, 당일 종가 체결 → 백테스트 '신호봉 종가 체결' 가정과 일치). "
+        "limit=정규장 지정가 — 15:30 장 마감 뒤 실행되는 기본 스케줄(15:35)에서는 체결될 수 없다",
+    )
+    strategy_reconcile_hour: int = Field(
+        default=16, ge=0, le=23, description="전략 주문 체결 대사(reconcile) 시각(시, KST). 월~금"
+    )
+    strategy_reconcile_minute: int = Field(
+        default=10,
+        ge=0,
+        le=59,
+        description="전략 주문 체결 대사 시각(분, KST). 시간외 종가 세션(~16:00) 종료 뒤여야 한다",
+    )
+    live_commission_rate: float = Field(
+        default=0.00015,
+        ge=0,
+        le=0.01,
+        description="실현손익 추정용 매매 수수료율(편도). 실제 체결 수수료는 계좌 약정에 따른다",
     )
     universe_refresh_hour: int = Field(
         default=8, ge=0, le=23, description="유니버스 갱신(B-1) 시각(시, KST). 월~금"
