@@ -14,6 +14,7 @@ from src.application.domain.backtest.cost_schedule import (
     get_latest_backtest_cost_schedule,
 )
 from src.application.domain.backtest.dto import BacktestConfigDTO, TradeDTO
+from src.settings.config import settings
 
 
 class BacktestOrderManager:
@@ -26,6 +27,18 @@ class BacktestOrderManager:
         """
         self.config = config
         self.trade_id_counter = 0
+        exempt = (
+            config.tax_exempt_symbols
+            if config.tax_exempt_symbols is not None
+            else settings.etf_universe_symbols
+        )
+        self._tax_exempt_symbols: frozenset[str] = frozenset(
+            s.strip() for s in exempt if s and s.strip()
+        )
+
+    def is_tax_exempt(self, symbol: str) -> bool:
+        """국내 상장 ETF는 증권거래세 면제 → 매도세 0%."""
+        return self.config.etf_tax_exempt and symbol in self._tax_exempt_symbols
 
     def _cost_schedule_for(self, trade_datetime: datetime) -> BacktestCostSchedule:
         schedule_date = self.config.cost_schedule_date or trade_datetime.date()
@@ -41,7 +54,9 @@ class BacktestOrderManager:
             return Decimal(str(self.config.commission_rate))
         return schedule.default_commission_rate
 
-    def _sell_tax_rate(self, schedule: BacktestCostSchedule) -> Decimal:
+    def _sell_tax_rate(self, schedule: BacktestCostSchedule, symbol: str | None = None) -> Decimal:
+        if symbol is not None and self.is_tax_exempt(symbol):
+            return Decimal("0")
         if self.config.tax_rate is not None:
             return Decimal(str(self.config.tax_rate))
         return schedule.sell_tax_rate
@@ -59,6 +74,42 @@ class BacktestOrderManager:
         if self.config.use_price_rounding:
             return schedule.round_price(price)
         return price
+
+    # ==================== 공개 비용 헬퍼(포트폴리오 시뮬레이션/청산평가용) ====================
+
+    def buy_commission(self, amount: Decimal, trade_date: datetime) -> Decimal:
+        """매수 체결금액에 대한 수수료."""
+        if not self.config.use_commission:
+            return Decimal("0")
+        return amount * self._commission_rate(self._cost_schedule_for(trade_date))
+
+    def sell_costs(self, amount: Decimal, trade_date: datetime, symbol: str) -> Decimal:
+        """매도 체결금액에 대한 수수료 + 매도세(ETF 면제 반영)."""
+        schedule = self._cost_schedule_for(trade_date)
+        commission = (
+            amount * self._commission_rate(schedule) if self.config.use_commission else Decimal("0")
+        )
+        tax = (
+            amount * self._sell_tax_rate(schedule, symbol) if self.config.use_tax else Decimal("0")
+        )
+        return commission + tax
+
+    def sell_execution_price(self, price: Decimal, trade_date: datetime) -> Decimal:
+        """매도 슬리피지/호가 반올림을 반영한 체결가."""
+        schedule = self._cost_schedule_for(trade_date)
+        actual = price
+        if self.config.use_slippage:
+            actual = price * (Decimal("1") - self._slippage_rate(schedule))
+        return self._round_execution_price(schedule, actual)
+
+    def liquidation_value(
+        self, symbol: str, price: Decimal, quantity: int, trade_date: datetime
+    ) -> Decimal:
+        """보유 수량을 해당 바 종가로 청산했을 때의 순수령액(슬리피지·수수료·세금 차감)."""
+        if quantity <= 0:
+            return Decimal("0")
+        amount = self.sell_execution_price(price, trade_date) * quantity
+        return amount - self.sell_costs(amount, trade_date, symbol)
 
     def execute_buy_order(
         self, symbol: str, price: Decimal, quantity: int, date: datetime
@@ -145,7 +196,7 @@ class BacktestOrderManager:
             commission = Decimal("0")
 
         if self.config.use_tax:
-            tax = sell_amount * self._sell_tax_rate(schedule)
+            tax = sell_amount * self._sell_tax_rate(schedule, trade.symbol)
         else:
             tax = Decimal("0")
 

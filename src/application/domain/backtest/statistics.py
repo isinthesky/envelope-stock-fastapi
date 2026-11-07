@@ -147,7 +147,12 @@ def deflated_sharpe_ratio(
     Args:
         returns: 선택된 전략의 OOS 일별 수익(per-period Sharpe/적률 계산용)
         trial_sharpes: 모든 시도(후보×fold)의 per-period Sharpe(SR0 분산 추정용)
-        n_trials: 시도 수(기본 len(trial_sharpes))
+        n_trials: 시도 수(기본 len(trial_sharpes)). ⚠️ 이번 실행의 후보×fold가 아니라
+            **누적 연구 시도 수**(과거 그리드/ablation 포함)를 넣어야 선택편향이 제대로
+            보정된다. 과소 입력 시 DSR이 과대평가된다.
+
+    Sharpe 기준: per-period(일별), rf=0. 연환산 비교는 ×√252
+    (`PerformanceMetrics.calculate_daily_sharpe_ratio(..., risk_free_rate=0.0)`과 동일).
     """
     stats = sharpe_stats(returns)
     n = n_trials if n_trials is not None else len(trial_sharpes)

@@ -143,7 +143,7 @@ class TestBacktestOrderManager:
         expected_sell_price = Decimal("77000") * Decimal("0.9995")
         expected_sell_amount = expected_sell_price * 10
         expected_sell_commission = expected_sell_amount * Decimal("0.00015")
-        expected_sell_tax = expected_sell_amount * Decimal("0.0018")
+        expected_sell_tax = expected_sell_amount * Decimal("0.0020")  # 2026 환원 세율
 
         assert sell_trade.exit_price == expected_sell_price
         assert sell_trade.commission == expected_buy_commission + expected_sell_commission
@@ -174,7 +174,7 @@ class TestBacktestOrderManager:
 
         expected_sell_price = Decimal("77000") * Decimal("0.9995")
         expected_sell_amount = expected_sell_price * 10
-        assert sell_trade.tax == expected_sell_amount * Decimal("0.0018")
+        assert sell_trade.tax == expected_sell_amount * Decimal("0.0015")  # 2025 세율(거래일 기준)
 
     def test_buy_order_rounds_execution_price_when_enabled(self) -> None:
         config = BacktestConfigDTO(
@@ -235,7 +235,7 @@ class TestBacktestOrderManager:
         )
 
         expected_sell_amount = Decimal("77001") * 10
-        expected_tax = expected_sell_amount * Decimal("0.0018")
+        expected_tax = expected_sell_amount * Decimal("0.0020")
         assert sell_trade.exit_price == Decimal("77001")
         assert sell_trade.tax == expected_tax
         assert net_proceeds == expected_sell_amount - expected_tax
@@ -390,3 +390,54 @@ class TestBacktestOrderManager:
             buy_trade3, Decimal("80000"), datetime(2024, 1, 8), "take_profit"
         )
         assert take_profit_trade.exit_reason == "take_profit"
+
+
+class TestEtfSellTaxExemption:
+    """국내 상장 ETF는 증권거래세 면제 → 매도세 0 (bug: 기존에는 주식 세율 적용)."""
+
+    @staticmethod
+    def _buy(manager: BacktestOrderManager, symbol: str) -> TradeDTO:
+        trade, _ = manager.execute_buy_order(
+            symbol=symbol, price=Decimal("10000"), quantity=10, date=datetime(2025, 3, 1)
+        )
+        return trade
+
+    def test_etf_symbol_pays_no_sell_tax_even_with_manual_tax_rate(self) -> None:
+        config = BacktestConfigDTO(use_tax=True, tax_rate=0.0018, tax_exempt_symbols=["069500"])
+        manager = BacktestOrderManager(config)
+        sell, _ = manager.execute_sell_order(
+            trade=self._buy(manager, "069500"), price=Decimal("11000"), date=datetime(2025, 3, 5)
+        )
+        assert sell.tax == Decimal("0")
+
+    def test_stock_symbol_still_taxed(self) -> None:
+        config = BacktestConfigDTO(use_tax=True, tax_exempt_symbols=["069500"])
+        manager = BacktestOrderManager(config)
+        sell, _ = manager.execute_sell_order(
+            trade=self._buy(manager, "005930"), price=Decimal("11000"), date=datetime(2025, 3, 5)
+        )
+        assert sell.tax == sell.exit_price * 10 * Decimal("0.0015")
+
+    def test_exemption_can_be_disabled(self) -> None:
+        config = BacktestConfigDTO(
+            use_tax=True, etf_tax_exempt=False, tax_exempt_symbols=["069500"]
+        )
+        manager = BacktestOrderManager(config)
+        sell, _ = manager.execute_sell_order(
+            trade=self._buy(manager, "069500"), price=Decimal("11000"), date=datetime(2025, 3, 5)
+        )
+        assert sell.tax > 0
+
+    def test_default_exempt_list_is_operating_etf_universe(self) -> None:
+        from src.settings.config import settings
+
+        manager = BacktestOrderManager(BacktestConfigDTO())
+        assert all(manager.is_tax_exempt(s) for s in settings.etf_universe_symbols)
+        assert not manager.is_tax_exempt("005930")
+
+    def test_liquidation_value_deducts_slippage_commission_tax(self) -> None:
+        config = BacktestConfigDTO(cost_schedule_date=date(2025, 6, 1), tax_exempt_symbols=[])
+        manager = BacktestOrderManager(config)
+        value = manager.liquidation_value("005930", Decimal("10000"), 10, datetime(2025, 6, 1))
+        gross = Decimal("10000") * Decimal("0.9995") * 10
+        assert value == gross - gross * Decimal("0.00015") - gross * Decimal("0.0015")

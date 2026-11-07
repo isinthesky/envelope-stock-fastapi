@@ -32,6 +32,8 @@ class BacktestConfigDTO(BaseDTO):
         use_slippage: 슬리피지 사용 여부
         cost_schedule_date: 거래 비용 스케줄 고정 기준일
         use_price_rounding: 체결가 호가 단위 반올림 여부
+        etf_tax_exempt: 국내 ETF 매도세 면제 적용 여부
+        tax_exempt_symbols: 매도세 면제 심볼(None이면 운영 ETF 유니버스)
         execution_timing: 매매 신호 체결 시점
     """
 
@@ -64,6 +66,19 @@ class BacktestConfigDTO(BaseDTO):
         description="거래일 대신 사용할 날짜별 비용 스케줄 기준일",
     )
     use_price_rounding: bool = Field(default=False, description="체결가 호가 단위 반올림 여부")
+    etf_tax_exempt: bool = Field(
+        default=True,
+        description=(
+            "국내 상장 ETF 매도세(증권거래세) 면제 적용 여부. True면 ETF 심볼은 "
+            "tax_rate/스케줄과 무관하게 매도세 0%."
+        ),
+    )
+    tax_exempt_symbols: list[str] | None = Field(
+        default=None,
+        description=(
+            "매도세 면제(ETF) 심볼 목록. None이면 settings.etf_universe_symbols를 사용한다."
+        ),
+    )
     execution_timing: ExecutionTiming = Field(
         default="next_open",
         description=(
@@ -90,9 +105,7 @@ class BacktestRequestDTO(BaseDTO):
     symbol: str = Field(description="종목코드", min_length=6, max_length=20)
     start_date: datetime = Field(description="시작일")
     end_date: datetime = Field(description="종료일")
-    strategy_type: str = Field(
-        default="golden_cross", description="전략 유형 (golden_cross)"
-    )
+    strategy_type: str = Field(default="golden_cross", description="전략 유형 (golden_cross)")
     strategy_params: dict | None = Field(
         default=None,
         description="전략별 추가 파라미터 (골든크로스: short_period, long_period, stoch_oversold, stoch_overbought 등)",
@@ -131,9 +144,7 @@ class MultiSymbolBacktestRequestDTO(BaseDTO):
     symbols: list[str] = Field(description="종목코드 리스트", min_length=1)
     start_date: datetime = Field(description="시작일")
     end_date: datetime = Field(description="종료일")
-    strategy_type: str = Field(
-        default="golden_cross", description="전략 유형 (golden_cross)"
-    )
+    strategy_type: str = Field(default="golden_cross", description="전략 유형 (golden_cross)")
     strategy_params: dict | None = Field(default=None, description="전략별 추가 파라미터")
     strategy_config: StrategyConfigDTO = Field(
         default_factory=StrategyConfigDTO, description="전략 설정 (포지션/리스크 관리)"
@@ -280,8 +291,16 @@ class BacktestResultDTO(BaseDTO):
     # 리스크 지표
     mdd: float = Field(description="최대 낙폭 (%)")
     volatility: float = Field(description="연환산 변동성 (%)")
-    sharpe_ratio: float = Field(description="Sharpe Ratio")
-    sortino_ratio: float = Field(description="Sortino Ratio")
+    sharpe_ratio: float = Field(
+        description=("연환산 Sharpe = mean(일별수익 − rf_daily)/std(일별수익)×√252, rf 연 3% 기본")
+    )
+    sharpe_ratio_rf0: float | None = Field(
+        default=None,
+        description="연환산 Sharpe(rf=0) — DSR(per-period Sharpe)과 같은 기준(×√252)",
+    )
+    sortino_ratio: float = Field(
+        description="Sortino = mean(초과수익)/sqrt(mean(min(초과수익,0)^2))×√252 (전체 관측치)"
+    )
     calmar_ratio: float = Field(description="Calmar Ratio")
     var_95: float = Field(description="VaR 95% (%)")
 
@@ -290,7 +309,9 @@ class BacktestResultDTO(BaseDTO):
     winning_trades: int = Field(description="이익 거래 수")
     losing_trades: int = Field(description="손실 거래 수")
     win_rate: float = Field(description="승률 (%)")
-    profit_factor: float = Field(description="Profit Factor")
+    profit_factor: float = Field(
+        description="Profit Factor — 거래 손익 금액(KRW, 비용 차감) 기준 총이익/총손실"
+    )
     avg_win: float = Field(description="평균 수익 (%)")
     avg_loss: float = Field(description="평균 손실 (%)")
     avg_win_loss_ratio: float = Field(description="평균 손익비")
@@ -338,6 +359,15 @@ class UniverseBacktestRequestDTO(BaseDTO):
         description="ETF 포함 여부(market 미지정 시). None이면 운영 etf_universe_enabled 값을 기본 적용",
     )
     eligible_only: bool = Field(default=True, description="유니버스 적격 종목만 대상")
+    symbols: list[str] | None = Field(
+        default=None,
+        description=(
+            "고정 대상 종목 목록(권장). 지정 시 유니버스 스캔을 건너뛴다. 미지정 시 "
+            "현재 유니버스를 종목코드 순으로 선택하며 **오늘의 시그널 상태로 거르지 않는다**"
+            "(look-ahead 방지)."
+        ),
+        max_length=100,
+    )
     limit: int = Field(default=20, description="백테스트 대상 최대 종목 수", ge=1, le=100)
     portfolio: bool = Field(default=False, description="공유 자본 포트폴리오 시뮬레이션 사용 여부")
     max_positions: int = Field(
@@ -379,6 +409,12 @@ class UniverseBacktestSummaryDTO(BaseDTO):
         description="요약 유형. 이 섹션은 포트폴리오 수익률이 아닌 종목별 평균 진단입니다.",
     )
     label: str = Field(default="non-portfolio per-symbol diagnostic")
+    ranking_note: str = Field(
+        default=(
+            "post-hoc: best/worst_symbols는 전체 기간 결과로 사후 정렬한 진단값이다 "
+            "(종목 선정·우선순위에 사용 금지)"
+        )
+    )
     requested_count: int = Field(description="요청 종목 수")
     success_count: int = Field(description="성공 종목 수")
     failed_count: int = Field(description="실패 종목 수")
@@ -413,6 +449,11 @@ class UniverseBacktestPortfolioSummaryDTO(BaseDTO):
     )
     ranking_method: str = Field(description="후보 우선순위 산정 방식")
     position_sizing: str = Field(description="포지션 사이징 방식")
+    equity_valuation: str = Field(
+        default="daily_mark_to_market",
+        description="MDD용 자산 평가 방식(daily_mark_to_market | event_cost_basis(legacy))",
+    )
+    cost_model: str = Field(default="", description="반영된 거래비용 모델")
     initial_capital: Decimal = Field(description="초기 자본")
     final_capital: Decimal = Field(description="최종 자본")
     ending_cash: Decimal = Field(description="종료 현금")

@@ -93,3 +93,62 @@ async def test_walk_forward_latest_unavailable_when_no_report(
 
     assert result.available is False
     assert result.verdict is None
+
+
+@pytest.mark.asyncio
+async def test_universe_selection_uses_fixed_symbols_without_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime
+
+    from src.application.domain.backtest.dto import UniverseBacktestRequestDTO
+
+    def _no_scan(*_args, **_kwargs):
+        raise AssertionError("fixed symbols must not trigger a universe scan")
+
+    monkeypatch.setattr(backtest_router, "BuyStrategyService", _no_scan)
+    request = UniverseBacktestRequestDTO(
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 12, 31),
+        symbols=["069500", "005930", "069500"],
+        limit=5,
+    )
+    symbols, method = await backtest_router._select_universe_symbols(
+        request, None, {"stoch_oversold": 30.0}, 20, 60
+    )
+    assert symbols == ["069500", "005930"]
+    assert method.startswith("fixed_symbols")
+
+
+@pytest.mark.asyncio
+async def test_universe_selection_ignores_today_signal_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """이전: 오늘의 gc_state(OPTIMAL_BUY 우선)로 걸러 종목을 선정 → look-ahead."""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from src.application.domain.backtest.dto import UniverseBacktestRequestDTO
+
+    stocks = [
+        SimpleNamespace(symbol="300000", gc_state="OPTIMAL_BUY", screening_score=1.0),
+        SimpleNamespace(symbol="100000", gc_state="WAITING_FOR_GC", screening_score=1.0),
+        SimpleNamespace(symbol="200000", gc_state="DEAD_CROSS", screening_score=1.0),
+    ]
+
+    class _FakeBuyService:
+        def __init__(self, session):
+            pass
+
+        async def scan_golden_cross_candidates(self, **_kwargs):
+            return SimpleNamespace(stocks=stocks)
+
+    monkeypatch.setattr(backtest_router, "BuyStrategyService", _FakeBuyService)
+    request = UniverseBacktestRequestDTO(
+        start_date=datetime(2024, 1, 1), end_date=datetime(2024, 12, 31), limit=2
+    )
+    symbols, method = await backtest_router._select_universe_symbols(
+        request, None, {"stoch_oversold": 30.0}, 20, 60
+    )
+    assert symbols == ["100000", "200000"]
+    assert "no_signal_state_filter" in method

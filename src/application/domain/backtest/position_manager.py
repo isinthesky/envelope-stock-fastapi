@@ -36,8 +36,7 @@ class Position:
         self.current_atr: float | None = entry_atr
         self.breakeven_armed = False
         self.trailing_stop_activated = False
-        self.partial_take_profit_1_taken = False
-        self.partial_take_profit_2_taken = False
+        # 부분익절 단계는 lot이 아니라 포지션(심볼) 단위로 BacktestEngine.partial_tp_stage가 추적한다.
 
     def update_highest_price(self, price: Decimal) -> None:
         if price > self.highest_price:

@@ -65,6 +65,8 @@ class BacktestEngine:
                 min_pullback_bars=params.get("min_pullback_bars", 2),
                 min_reentry_cooldown_bars=params.get("min_reentry_cooldown_bars", 5),
                 disable_stoch_overbought_sell=params.get("disable_stoch_overbought_sell", True),
+                # 리스크 청산 후 새 골든크로스 요구(라이브 FSM WAITING_FOR_GC 정합, 기본 True)
+                require_fresh_cross_after_exit=params.get("require_fresh_cross_after_exit", True),
             )
         else:
             # golden_cross 외 타입은 지원하지 않는다. 미지원 타입은 명시적으로 실패한다.
@@ -84,6 +86,12 @@ class BacktestEngine:
         self.close_history: list[float] = []
         self.last_exit_date: datetime | None = None
         self.pending_signal: PendingSignal | None = None
+        # 부분익절 진행 단계(포지션 단위, 0=미실행/1=1차 완료/2=2차 완료).
+        # lot 단위 플래그는 같은 진입가의 모든 lot을 같은 날 +10%에 전량 청산시키는
+        # 버그가 있었다 → 포지션(심볼) 단위로 1개 tranche만 청산하도록 추적한다.
+        self.partial_tp_stage: dict[str, int] = {}
+        self.last_bar_date: datetime | None = None
+        self.last_bar_price: Decimal | None = None
 
     async def run(
         self, data: pd.DataFrame, start_date: datetime, end_date: datetime
@@ -97,6 +105,9 @@ class BacktestEngine:
             self.low_history.append(float(row.get("low", row["close"])))
             self.close_history.append(float(row["close"]))
             await self._process_day(current_date, current_price, row)
+            self.last_bar_date = current_date
+            self.last_bar_price = current_price
+        self._apply_final_liquidation_mark()
         return self._generate_result(start_date, end_date)
 
     async def _process_day(self, date: datetime, current_price: Decimal, row: pd.Series) -> None:
@@ -166,6 +177,9 @@ class BacktestEngine:
         self.position_manager.clear_all_positions()
         self.last_exit_date = None
         self.pending_signal = None
+        self.partial_tp_stage.clear()
+        self.last_bar_date = None
+        self.last_bar_price = None
         if hasattr(self.signal_generator, "reset"):
             self.signal_generator.reset()
 
@@ -198,6 +212,7 @@ class BacktestEngine:
             return
 
         lot_plan = self._build_entry_lot_plan(quantity)
+        self.partial_tp_stage[self.symbol] = 0
         risk_config = self.strategy_config.risk_management
         entry_atr = (
             self._calculate_current_atr()
@@ -265,9 +280,18 @@ class BacktestEngine:
             {
                 "profit_rate": completed_trade.profit_rate,
                 "holding_days": completed_trade.holding_days,
+                # 금액 기준 Profit Factor용(KRW, 비용 차감 후)
+                "profit": completed_trade.profit,
             }
         )
         self.last_exit_date = date
+        if not self.position_manager.has_position(self.symbol):
+            self.partial_tp_stage.pop(self.symbol, None)
+            # 리스크 청산(손절/트레일링 등) 후 재진입 재무장: 라이브 FSM은 모든 청산 후
+            # WAITING_FOR_GC로 리셋되어 새 골든크로스가 필요하다.
+            notify = getattr(self.signal_generator, "notify_exit", None)
+            if notify is not None and exit_reason != "signal":
+                notify()
 
     async def _check_risk_management(self, date: datetime, current_price: Decimal) -> None:
         if not self.position_manager.has_position(self.symbol):
@@ -283,31 +307,17 @@ class BacktestEngine:
             if current_atr is not None:
                 self.position_manager.update_position_atr(self.symbol, current_atr)
 
-        for position in list(self.position_manager.get_positions(self.symbol)):
+        trailing_activation = self.strategy_params.get("trailing_stop_activation", 0.15)
+        for position in self.position_manager.get_positions(self.symbol):
             profit_ratio = position.get_unrealized_profit_rate(current_price)
             if profit_ratio >= breakeven_activation:
                 position.breakeven_armed = True
-            if profit_ratio >= self.strategy_params.get("trailing_stop_activation", 0.15):
+            if profit_ratio >= trailing_activation:
                 position.trailing_stop_activated = True
 
-            if not position.partial_take_profit_1_taken and profit_ratio >= partial_1:
-                position.partial_take_profit_1_taken = True
-                await self._close_position_lot(
-                    position,
-                    date,
-                    current_price,
-                    GoldenCrossRiskExitReason.PARTIAL_TAKE_PROFIT_1.value,
-                )
-                continue
-            if not position.partial_take_profit_2_taken and profit_ratio >= partial_2:
-                position.partial_take_profit_2_taken = True
-                await self._close_position_lot(
-                    position,
-                    date,
-                    current_price,
-                    GoldenCrossRiskExitReason.PARTIAL_TAKE_PROFIT_2.value,
-                )
-                continue
+        await self._apply_partial_take_profits(date, current_price, partial_1, partial_2)
+
+        for position in list(self.position_manager.get_positions(self.symbol)):
             if self.position_manager.check_breakeven(position, current_price):
                 await self._close_position_lot(
                     position, date, current_price, GoldenCrossRiskExitReason.BREAKEVEN.value
@@ -365,6 +375,59 @@ class BacktestEngine:
                 await self._close_position_lot(
                     position, date, current_price, GoldenCrossRiskExitReason.MAX_HOLD.value
                 )
+
+    async def _apply_partial_take_profits(
+        self, date: datetime, current_price: Decimal, partial_1: float, partial_2: float
+    ) -> None:
+        """포지션 단위 부분익절: 단계별로 **가장 앞 tranche 1개**만 청산한다.
+
+        - 1차(partial_1 도달): 첫 lot 청산 → stage 1
+        - 2차(partial_2 도달): 다음 lot 청산 → stage 2
+        - 마지막 lot(러너)은 부분익절로 청산하지 않고 트레일링/손절/보유기간 규칙을 따른다.
+        수익률은 포지션 평균 진입가 기준이다.
+        """
+        avg_entry = self.position_manager.get_average_entry_price(self.symbol)
+        if avg_entry is None or avg_entry <= 0:
+            return
+        profit_ratio = float((current_price - avg_entry) / avg_entry)
+        stage = self.partial_tp_stage.get(self.symbol, 0)
+        steps = (
+            (1, partial_1, GoldenCrossRiskExitReason.PARTIAL_TAKE_PROFIT_1.value),
+            (2, partial_2, GoldenCrossRiskExitReason.PARTIAL_TAKE_PROFIT_2.value),
+        )
+        for target_stage, threshold, reason in steps:
+            if stage >= target_stage or profit_ratio < threshold:
+                continue
+            lots = self.position_manager.get_positions(self.symbol)
+            if len(lots) <= 1:
+                # 러너(마지막 tranche)는 부분익절 대상이 아니다.
+                break
+            stage = target_stage
+            self.partial_tp_stage[self.symbol] = stage
+            await self._close_position_lot(lots[0], date, current_price, reason)
+
+    def _apply_final_liquidation_mark(self) -> None:
+        """최종 바 평가를 청산 순수령액(슬리피지·수수료·세금 차감)으로 보정한다.
+
+        미청산 lot을 종가 그대로 평가하면 실제 청산 시 비용이 누락되어 최종 자본/MDD가
+        낙관된다. 거래 기록(trades)은 바꾸지 않고 마지막 equity 포인트만 보정한다.
+        """
+        if (
+            not self.position_manager.has_position(self.symbol)
+            or self.last_bar_date is None
+            or self.last_bar_price is None
+            or not self.equity_curve
+            or not self.daily_stats
+        ):
+            return
+        quantity = self.position_manager.get_total_quantity(self.symbol)
+        net_value = self.order_manager.liquidation_value(
+            self.symbol, self.last_bar_price, quantity, self.last_bar_date
+        )
+        last = self.daily_stats[-1]
+        self.equity_curve.pop()
+        self.daily_stats.pop()
+        self._update_daily_stats(last.date, net_value)
 
     def _update_daily_stats(self, date: datetime, position_value: Decimal) -> None:
         equity = self.cash + position_value

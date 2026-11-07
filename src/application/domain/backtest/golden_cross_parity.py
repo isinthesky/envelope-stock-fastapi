@@ -257,6 +257,7 @@ class GoldenCrossParityReplay:
                         {
                             "profit_rate": completed.profit_rate,
                             "holding_days": completed.holding_days,
+                            "profit": completed.profit,
                         }
                     )
                     for idx, t in enumerate(trades):

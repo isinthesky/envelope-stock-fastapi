@@ -353,6 +353,7 @@ const renderPortfolioSummary = (summary) => {
     <div class="panel">
       <h3>포트폴리오 수익률</h3>
       <div class="config-note">${escapeHtml(summary.simulation_type || 'shared_capital_portfolio')} · max ${fmtNum(summary.max_positions)} positions</div>
+      <div class="config-note">우선순위: ${escapeHtml(summary.ranking_method || '-')} · MDD 평가: ${escapeHtml(summary.equity_valuation || '-')} · 비용: ${escapeHtml(summary.cost_model || '-')}</div>
       <div class="universe-summary-grid">
         <div class="universe-summary-card"><div class="label">총 수익률</div><div class="value ${summary.total_return >= 0 ? 'positive' : 'negative'}">${fmtPct(summary.total_return)}</div></div>
         <div class="universe-summary-card"><div class="label">벤치마크 초과</div><div class="value ${summary.excess_return >= 0 ? 'positive' : 'negative'}">${fmtPct(summary.excess_return)}</div></div>
@@ -381,7 +382,11 @@ const renderUniverseBacktest = (data) => {
       <td>${item.average_holding_days != null ? Number(item.average_holding_days).toFixed(1) + '일' : '-'}</td>
     </tr>
   `).join('');
+  const selectionNote = data.config_summary?.selection_note
+    ? `<div class="config-note">종목 선정: ${escapeHtml(data.config_summary.selection_method || '-')} — ${escapeHtml(data.config_summary.selection_note)}</div>`
+    : '';
   container.innerHTML = `
+    ${selectionNote}
     ${renderPortfolioSummary(data.portfolio_summary)}
     ${renderUniverseMetricCards(data.diagnostic_summary, '진단용 개별 종목 평균')}
     ${comparisonRows ? `

@@ -33,6 +33,10 @@ class RegimeEntryFilter:
     use_adx: bool = False
     adx_period: int = 14
     adx_min: float = 20.0
+    # 방향 게이트(opt-in, 기본 OFF): 벤치 +DI > −DI 일 때만 진입. ADX(추세 강도)는
+    # 하락 추세에서도 높아지므로, 강도 게이트에 방향 조건을 AND로 더할 때 쓴다.
+    # adx_period와 같은 Wilder 평활을 쓴다. 워밍업(NaN)은 fail-open.
+    use_di_direction: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -40,11 +44,48 @@ class RegimeEntryFilter:
             parts.append(f"MA{self.ma_period}")
         if self.use_adx:
             parts.append(f"ADX{self.adx_period}≥{self.adx_min:g}")
+        if self.use_di_direction:
+            parts.append(f"+DI{self.adx_period}>-DI")
         return "+".join(parts) if parts else "no-filter"
 
 
 def _row_date(ts: Any) -> date:
     return cast(date, ts.date() if hasattr(ts, "date") else ts)
+
+
+def wilder_dmi_series(df: pd.DataFrame, period: int) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """(ADX, +DI, −DI) 시리즈. ADX는 `wilder_adx_series`와 **수치 동일**(같은 계산 경로).
+
+    +DI/−DI도 ADX와 같은 앞 2*period 구간을 NaN으로 마스킹한다(fail-open 판정용).
+    """
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+
+    prev_close = close.shift(1)
+    tr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(
+        axis=1
+    )
+
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move
+    minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move
+
+    alpha = 1.0 / period
+    atr = tr.ewm(alpha=alpha, adjust=False).mean()
+    plus_di = 100.0 * plus_dm.ewm(alpha=alpha, adjust=False).mean() / atr
+    minus_di = 100.0 * minus_dm.ewm(alpha=alpha, adjust=False).mean() / atr
+
+    di_sum = (plus_di + minus_di).replace(0.0, float("nan"))
+    dx = 100.0 * (plus_di - minus_di).abs() / di_sum
+    adx = dx.ewm(alpha=alpha, adjust=False).mean()
+    adx.iloc[: 2 * period] = float("nan")
+    plus_di = plus_di.copy()
+    minus_di = minus_di.copy()
+    plus_di.iloc[: 2 * period] = float("nan")
+    minus_di.iloc[: 2 * period] = float("nan")
+    return adx, plus_di, minus_di
 
 
 def wilder_adx_series(df: pd.DataFrame, period: int) -> pd.Series:
@@ -89,7 +130,9 @@ def wilder_adx_series(df: pd.DataFrame, period: int) -> pd.Series:
     plus_di = 100.0 * plus_dm.ewm(alpha=alpha, adjust=False).mean() / atr
     minus_di = 100.0 * minus_dm.ewm(alpha=alpha, adjust=False).mean() / atr
 
-    di_sum = (plus_di + minus_di).replace(0.0, pd.NA)
+    # pd.NA로 바꾸면 dtype이 object로 승격돼 ewm이 TypeError를 낸다(라이브 레짐 게이트가 항상
+    # 예외→fail-open이던 원인). float NaN을 써서 dtype을 유지한다. 값 의미(0 → 결측)는 동일.
+    di_sum = (plus_di + minus_di).replace(0.0, float("nan"))
     dx = 100.0 * (plus_di - minus_di).abs() / di_sum
     adx = dx.ewm(alpha=alpha, adjust=False).mean()
     # 최소 데이터 미달 구간은 신뢰 불가 → NaN(fail-open)
@@ -110,7 +153,7 @@ def compute_allowed_entry_dates(
     """
     if filt is None or benchmark_df is None or benchmark_df.empty:
         return None
-    if not (filt.use_ma or filt.use_adx):
+    if not (filt.use_ma or filt.use_adx or filt.use_di_direction):
         return None
     if "close" not in benchmark_df.columns or "timestamp" not in benchmark_df.columns:
         return None
@@ -133,7 +176,14 @@ def compute_allowed_entry_dates(
     else:
         adx_ok = pd.Series(True, index=df.index)
 
-    allowed_mask = ma_ok & adx_ok
+    # 방향 게이트(opt-in): +DI > −DI. 미확정(NaN) → 허용(fail-open)
+    if filt.use_di_direction and {"high", "low"}.issubset(df.columns):
+        _, plus_di, minus_di = wilder_dmi_series(df, filt.adx_period)
+        di_ok = (plus_di > minus_di) | plus_di.isna() | minus_di.isna()
+    else:
+        di_ok = pd.Series(True, index=df.index)
+
+    allowed_mask = ma_ok & adx_ok & di_ok
     return {d for d, ok in zip(dates, allowed_mask) if bool(ok)}
 
 

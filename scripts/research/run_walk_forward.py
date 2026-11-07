@@ -17,7 +17,9 @@ P1에서 DB에 적재된 실 OHLCV(98종목)를 backfill 없이 읽어, 검증�
   --train/--test/--step/--embargo  롤링 창(거래일 수, 기본 504/126/126/5)
   --max-positions   동시 보유 상한(기본 5)
   --alloc           신규 포지션당 현금비율(기본: config 값)
-  --no-tax          매도세 미적용(국내 주식형 ETF 실제 면제 반영)
+  --no-tax          매도세 미적용(ETF 면제는 기본 자동 반영되므로 개별주까지 끌 때만)
+  --output-dir      리포트 출력 디렉터리(기본: 저장소 reports/)
+  --n-trials        DSR 누적 연구 시도 수(미지정 시 이번 실행 시도 수 + 경고)
 """
 
 from __future__ import annotations
@@ -260,6 +262,11 @@ def _resolve_symbols(args) -> list[str]:
     return list(data["included_symbols"])
 
 
+def _output_dir(args) -> Path:
+    """리포트 출력 디렉터리(기본: 저장소 reports/ — 기존 동작). 커버리지 입력 탐색은 무관."""
+    return Path(args.output_dir) if getattr(args, "output_dir", None) else REPORTS_DIR
+
+
 def _latest_coverage() -> Path:
     files = sorted(REPORTS_DIR.glob("coverage_*.json"))
     if not files:
@@ -328,6 +335,7 @@ async def run(args) -> None:
         selection_metric="sharpe_ratio",
         benchmark=bench_df,  # 국면 분해 활성화
         regime_long_ma=200,
+        n_trials=args.n_trials,
     )
     print(f"[wf] running {len(candidates)} candidates × {len(windows)} folds …", flush=True)
     report = runner.run(panels, trading_days, windows)
@@ -344,10 +352,11 @@ async def run(args) -> None:
     # 게이트 판정을 리포트 상단(headline 다음)에 삽입
     report_md = report.markdown + "\n" + gate_result.markdown()
 
-    REPORTS_DIR.mkdir(exist_ok=True)
+    out_dir = _output_dir(args)
+    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    md_path = REPORTS_DIR / f"walk_forward_{stamp}.md"
-    json_path = REPORTS_DIR / f"walk_forward_{stamp}.json"
+    md_path = out_dir / f"walk_forward_{stamp}.md"
+    json_path = out_dir / f"walk_forward_{stamp}.json"
     md_path.write_text(report_md, encoding="utf-8")
     json_path.write_text(
         json.dumps(
@@ -480,6 +489,7 @@ async def run_regime_ab(args) -> None:
             selection_metric="sharpe_ratio",
             benchmark=bench_df,
             regime_long_ma=200,
+            n_trials=args.n_trials,
         )
         print(f"[wf-ab] variant={name} ({filt.describe() if filt else 'no-filter'}) …", flush=True)
         report = runner.run(panels, trading_days, windows)
@@ -567,10 +577,11 @@ async def run_regime_ab(args) -> None:
         "> 무필터(none) 대비 개선 여부로 필터 효용을 판단하라. 개선 시에만 라이브 적용 검토.",
     ]
 
-    REPORTS_DIR.mkdir(exist_ok=True)
+    out_dir = _output_dir(args)
+    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    md_path = REPORTS_DIR / f"walk_forward_regime_ab_{stamp}.md"
-    json_path = REPORTS_DIR / f"walk_forward_regime_ab_{stamp}.json"
+    md_path = out_dir / f"walk_forward_regime_ab_{stamp}.md"
+    json_path = out_dir / f"walk_forward_regime_ab_{stamp}.json"
     md_path.write_text("\n".join(md) + "\n", encoding="utf-8")
     json_path.write_text(
         json.dumps(
@@ -644,6 +655,7 @@ async def run_sector_cap_ab(args) -> None:
             ),
             backtest_config=backtest_config,
             benchmark=bench_df,
+            n_trials=args.n_trials,
         ).run(panels, trading_days, windows)
         results.append({"variant": label, "cap": cap, "oos": report.oos, "stats": report.stats})
 
@@ -660,10 +672,11 @@ async def run_sector_cap_ab(args) -> None:
             ),
         },
     }
-    REPORTS_DIR.mkdir(exist_ok=True)
+    out_dir = _output_dir(args)
+    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    json_path = REPORTS_DIR / f"walk_forward_sector_cap_ab_{stamp}.json"
-    md_path = REPORTS_DIR / f"walk_forward_sector_cap_ab_{stamp}.md"
+    json_path = out_dir / f"walk_forward_sector_cap_ab_{stamp}.json"
+    md_path = out_dir / f"walk_forward_sector_cap_ab_{stamp}.md"
     json_path.write_text(json.dumps(comparison, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(
         "# Walk-Forward Sector Cap A/B\n\n"
@@ -715,6 +728,19 @@ def main() -> None:
         help="symbol->sector JSON 파일. 섹터 캡 활성화 시 필수",
     )
     ap.add_argument("--no-tax", action="store_true")
+    ap.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="리포트(md/json) 출력 디렉터리. 기본: 저장소 reports/ (기존 동작)",
+    )
+    ap.add_argument(
+        "--n-trials",
+        type=int,
+        default=None,
+        help="DSR용 누적 연구 시도 수(과거 그리드/ablation/A-B 포함). 연구자가 반드시 "
+        "지정해야 함 — 미지정 시 이번 실행 시도 수만 쓰고 리포트에 경고를 남긴다",
+    )
     ap.add_argument(
         "--regime-ab",
         action="store_true",

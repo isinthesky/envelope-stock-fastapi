@@ -7,7 +7,8 @@ Backtest Result Builder - 백테스트 성과 지표 집계 (단일 출처)
 공유하도록 하여, 검증 하네스가 산출하는 숫자와 기존 백테스트 엔진의 숫자가
 정의상 일치하도록 보장한다.
 
-행위 보존: 이 함수는 기존 엔진 로직을 그대로 옮긴 것이며 결과가 달라지지 않는다.
+지표 정의(2026-11 수정): Sharpe는 일별 초과수익 기준(연환산), Sortino는 전체
+관측치 하방편차, Profit Factor는 금액 기준이다. `PerformanceMetrics` 참고.
 """
 
 from datetime import datetime
@@ -35,12 +36,15 @@ def build_backtest_result(
     daily_stats: list[DailyStatsDTO],
     trades: list[TradeDTO],
     completed_trades: list[dict],
+    risk_free_rate: float = 3.0,
 ) -> BacktestResultDTO:
     """일별 자산곡선/거래 이력으로부터 성과 지표를 집계한다.
 
     Args:
         completed_trades: 청산 완료된 거래의 요약 dict 리스트
-            (각 원소는 ``{"profit_rate": float, "holding_days": int}``)
+            (각 원소는 ``{"profit_rate": float, "holding_days": int, "profit": Decimal}``;
+            ``profit``이 있으면 Profit Factor를 금액 기준으로 계산)
+        risk_free_rate: 연 무위험이자율(%) — Sharpe/Sortino 초과수익 기준
     """
     final_capital = equity_curve[-1] if equity_curve else initial_capital
     total_return = PerformanceMetrics.calculate_total_return(initial_capital, final_capital)
@@ -57,8 +61,12 @@ def build_backtest_result(
         }
     )
     volatility = PerformanceMetrics.calculate_volatility(equity_df)
-    sharpe = PerformanceMetrics.calculate_sharpe_ratio(annualized_return, volatility)
-    sortino = PerformanceMetrics.calculate_sortino_ratio(equity_df, annualized_return)
+    # Sharpe: 일별 초과수익 기준(연 rf 3% → 일별 복리 변환). rf0 값은 DSR과 같은 기준.
+    sharpe = PerformanceMetrics.calculate_daily_sharpe_ratio(
+        equity_df, risk_free_rate=risk_free_rate
+    )
+    sharpe_rf0 = PerformanceMetrics.calculate_daily_sharpe_ratio(equity_df, risk_free_rate=0.0)
+    sortino = PerformanceMetrics.calculate_sortino_ratio(equity_df, risk_free_rate=risk_free_rate)
     calmar = PerformanceMetrics.calculate_calmar_ratio(annualized_return, mdd_info["mdd"])
     var_95 = PerformanceMetrics.calculate_var(equity_df)
     trade_stats = PerformanceMetrics.calculate_trade_count(completed_trades)
@@ -80,6 +88,7 @@ def build_backtest_result(
         mdd=mdd_info["mdd"],
         volatility=volatility,
         sharpe_ratio=sharpe,
+        sharpe_ratio_rf0=sharpe_rf0,
         sortino_ratio=sortino,
         calmar_ratio=calmar,
         var_95=var_95,

@@ -24,12 +24,14 @@ from decimal import Decimal
 import pandas as pd
 
 from src.adapters.database.models.strategy_symbol_state import SymbolState
+from src.application.domain.backtest.cash_interest import CashInterestSchedule
 from src.application.domain.backtest.dto import (
     BacktestConfigDTO,
     BacktestResultDTO,
     DailyStatsDTO,
     TradeDTO,
 )
+from src.application.domain.backtest.exit_overlay import OVERLAY_TRADE_EXIT_REASON, ExitOverlay
 from src.application.domain.backtest.golden_cross_parity import GoldenCrossParityReplay
 from src.application.domain.backtest.order_manager import BacktestOrderManager
 from src.application.domain.backtest.result_builder import build_backtest_result
@@ -104,12 +106,65 @@ class _OpenPosition:
 
 
 @dataclass(frozen=True, slots=True)
+class PortfolioExecutionOptions:
+    """연구용 체결/사이징/현금 모델 옵션(opt-in). 기본값 = 기존 엔진 동작과 동일.
+
+    - fill_timing: "same_close"(기본, 시그널 바 종가 체결) | "next_open"(종가 t 시그널 →
+      t+1 시가 체결, 갭 리스크 포함). next_open에서 시가가 결측/0이면 그날 종가로 대체하고
+      `open_fallbacks`로 집계한다.
+    - sizing_mode: "cash_ratio"(기본, 잔여현금 × allocation_ratio — 라이브 정합) |
+      "equal_weight_equity"(총자산 / max_positions, 잔여현금 한도).
+    - cash_interest: 미투자 현금 이자 스케줄(None=0%, 기본).
+    - liquidate_at_end: 마지막 바 보유분을 순청산가(슬리피지·수수료·세금 차감)로 평가.
+    - exit_overlay: 가격 기반 추가 청산 규칙(H5). None=미적용(기본).
+    """
+
+    fill_timing: str = "same_close"
+    sizing_mode: str = "cash_ratio"
+    cash_interest: CashInterestSchedule | None = None
+    liquidate_at_end: bool = False
+    exit_overlay: ExitOverlay | None = None
+
+    def __post_init__(self) -> None:
+        if self.fill_timing not in ("same_close", "next_open"):
+            raise ValueError(f"unsupported fill_timing: {self.fill_timing}")
+        if self.sizing_mode not in ("cash_ratio", "equal_weight_equity"):
+            raise ValueError(f"unsupported sizing_mode: {self.sizing_mode}")
+
+    @property
+    def is_default(self) -> bool:
+        return self == PortfolioExecutionOptions()
+
+    def describe(self) -> str:
+        parts = [self.fill_timing, self.sizing_mode]
+        if self.cash_interest is not None:
+            parts.append(f"interest={self.cash_interest.label}")
+        if self.liquidate_at_end:
+            parts.append("liquidate_at_end")
+        if self.exit_overlay is not None:
+            parts.append(f"overlay={self.exit_overlay.describe()}")
+        return ",".join(parts)
+
+
+@dataclass(frozen=True, slots=True)
 class PortfolioRunResult:
     result: BacktestResultDTO  # symbol="PORTFOLIO" 성과 집계
     entered_positions: int
     rejected: list[RejectedEntry]
     max_sector_exposure: float  # 시뮬 전체에서 관측된 최대 단일 섹터 비중
     max_concurrent_positions: int
+    # ── 연구 옵션 진단(기본 실행에서는 0/빈 값) ──
+    overlay_exits: dict[str, int] = field(default_factory=dict)
+    open_fallbacks: int = 0
+    interest_earned: Decimal = Decimal("0")
+    end_liquidation_cost: Decimal = Decimal("0")
+
+
+@dataclass(slots=True)
+class _PendingBuy:
+    symbol: str
+    reason: str | None
+    signal_date: date
 
 
 class PortfolioParityEngine:
@@ -119,9 +174,11 @@ class PortfolioParityEngine:
         self,
         config: GoldenCrossConfigDTO | None = None,
         constraints: PortfolioConstraints | None = None,
+        execution: PortfolioExecutionOptions | None = None,
     ) -> None:
         self.config = config or GoldenCrossConfigDTO()
         self.constraints = constraints or PortfolioConstraints()
+        self.execution = execution or PortfolioExecutionOptions()
         self.replay = GoldenCrossParityReplay(self.config)
 
     def run(
@@ -146,6 +203,8 @@ class PortfolioParityEngine:
         if not panels:
             raise ValueError("empty panels for portfolio backtest")
 
+        ex = self.execution
+        next_open = ex.fill_timing == "next_open"
         sm = GoldenCrossStateMachine(self.config)
         risk = self.config.risk_config
 
@@ -153,6 +212,7 @@ class PortfolioParityEngine:
         rows: dict[str, list[IndicatorSnapshot]] = {}
         didx: dict[str, dict[date, int]] = {}
         close_map: dict[str, dict[date, Decimal]] = {}
+        open_map: dict[str, dict[date, Decimal]] = {}
         dt_map: dict[date, datetime] = {}
         all_dates: set[date] = set()
         for symbol, df in panels.items():
@@ -169,8 +229,15 @@ class PortfolioParityEngine:
                 all_dates.add(d)
             didx[symbol] = dmap
             close_map[symbol] = cmap
+            if next_open and "open" in prepared.columns:
+                omap: dict[date, Decimal] = {}
+                for i, o in enumerate(prepared["open"].tolist()):
+                    if o == o and o is not None and float(o) > 0:  # NaN/0 제외
+                        omap[srows[i].timestamp.date()] = Decimal(str(o))
+                open_map[symbol] = omap
 
         calendar = sorted(all_dates)
+        last_day = calendar[-1]
 
         order_manager = BacktestOrderManager(backtest_config)
         # allocation_ratio: 제약에 명시값 있으면 오버라이드, 없으면 config(라이브) 값
@@ -196,24 +263,157 @@ class PortfolioParityEngine:
         entered_positions = 0
         max_sector_exposure = 0.0
         max_concurrent = 0
+        # 연구 옵션 상태
+        pending_sells: dict[str, str] = {}  # symbol -> exit_reason
+        pending_buys: list[_PendingBuy] = []
+        overlay_exits: dict[str, int] = {}
+        open_fallbacks = 0
+        interest_earned = Decimal("0")
+        end_liquidation_cost = Decimal("0")
+        prev_active_day: date | None = None
+
+        def _close_position(symbol: str, price: Decimal, exec_dt: datetime, reason: str) -> None:
+            nonlocal cash
+            pos = positions[symbol]
+            completed, net = order_manager.execute_sell_order(
+                trade=pos.trade, price=price, date=exec_dt, exit_reason=reason
+            )
+            cash += net
+            completed_trades.append(
+                {
+                    "profit_rate": completed.profit_rate,
+                    "holding_days": completed.holding_days,
+                    "profit": completed.profit,
+                }
+            )
+            for idx, t in enumerate(trades):
+                if t.trade_id == completed.trade_id:
+                    trades[idx] = completed
+                    break
+            del positions[symbol]
+
+        def _size(price: Decimal, mark: dict[str, Decimal], d: date) -> int:
+            if ex.sizing_mode == "equal_weight_equity":
+                total_equity = cash + _positions_value(positions, close_map, mark, d)
+                target = min(cash, total_equity / Decimal(max_pos))
+                if target <= 0:
+                    return 0
+                return order_manager.calculate_position_size(target, 1.0, price)
+            return order_manager.calculate_position_size(cash, alloc, price)
+
+        def _sector_reject(
+            symbol: str, price: Decimal, qty: int, mark: dict[str, Decimal], d: date
+        ) -> bool:
+            if max_sector >= 1.0:
+                return False
+            sector = self.constraints.sector_of(symbol)
+            # 시장가치 노출 기준 캡: (섹터 시가 + 신규 시가) / 총자산.
+            # 체결 수수료/세금 드래그(<0.1%)는 다음 MTM에서 자동 반영되며
+            # 캡(예: 30%)의 해상도 대비 무시 가능하므로 시가로 평가한다.
+            total_equity = cash + _positions_value(positions, close_map, mark, d)
+            sector_value = _sector_value(positions, close_map, mark, d, sector, self.constraints)
+            if total_equity > 0:
+                prospective = float((sector_value + price * qty) / total_equity)
+                if prospective > max_sector:
+                    return True
+            return False
 
         for d in calendar:
             exec_dt = dt_map[d]
+            in_active = active_from is None or d >= active_from
+
+            # ── Phase 0 (next_open 전용): 전일 종가 시그널을 당일 시가로 체결.
+            # last_close 갱신 전이므로 사이징/섹터 평가는 전일 종가 기준(미래 참조 없음).
+            if next_open and in_active and (pending_sells or pending_buys):
+                for symbol in list(pending_sells.keys()):
+                    if symbol not in positions:
+                        del pending_sells[symbol]
+                        continue
+                    bar_i = didx[symbol].get(d)
+                    if bar_i is None:
+                        continue  # 당일 바 없음 → 다음 바까지 대기
+                    price = open_map.get(symbol, {}).get(d)
+                    if price is None:
+                        price = rows[symbol][bar_i].close
+                        open_fallbacks += 1
+                    _close_position(symbol, price, rows[symbol][bar_i].timestamp, pending_sells[symbol])
+                    del pending_sells[symbol]
+                still_pending: list[_PendingBuy] = []
+                for pb in pending_buys:
+                    symbol = pb.symbol
+                    bar_i = didx[symbol].get(d)
+                    if bar_i is None:
+                        still_pending.append(pb)
+                        continue
+                    st = fsm[symbol]
+                    price = open_map.get(symbol, {}).get(d)
+                    if price is None:
+                        price = rows[symbol][bar_i].close
+                        open_fallbacks += 1
+                    reject_reason: str | None = None
+                    qty = 0
+                    if len(positions) >= max_pos:
+                        reject_reason = "max_positions"
+                    elif price <= 0:
+                        reject_reason = "invalid_price"
+                    else:
+                        # date.min: close_map 조회를 비켜 전일 종가(last_close)로만 평가
+                        qty = _size(price, last_close, date.min)
+                        if qty < 1 or not order_manager.can_afford(cash, price, qty):
+                            reject_reason = "insufficient_cash"
+                        elif _sector_reject(symbol, price, qty, last_close, date.min):
+                            reject_reason = "sector_cap"
+                    if reject_reason is None:
+                        fill_dt = rows[symbol][bar_i].timestamp
+                        trade, total_cost = order_manager.execute_buy_order(
+                            symbol=symbol, price=price, quantity=qty, date=fill_dt
+                        )
+                        if cash < total_cost:
+                            reject_reason = "insufficient_cash"
+                    if reject_reason is not None:
+                        rejected.append(RejectedEntry(d, symbol, reject_reason))
+                        st.reset_to_waiting()
+                        continue
+                    cash -= total_cost
+                    positions[symbol] = _OpenPosition(
+                        symbol, self.constraints.sector_of(symbol), qty, trade
+                    )
+                    trades.append(trade)
+                    entered_positions += 1
+                    st.state = SymbolState.IN_POSITION.value
+                    st.entry_price = price  # 체결 기준 시가(슬리피지 전) — same_close의 종가와 대칭
+                    st.entry_date = fill_dt
+                    st.highest_price = None
+                    st.trailing = False
+                    st.gc_date = None
+                    st.pullback_date = None
+                pending_buys = still_pending
+
             for symbol, cmap in close_map.items():
                 if d in cmap:
                     last_close[symbol] = cmap[d]
 
             # 워밍업 구간(active_from 이전): FSM은 active_from에서 get_initial_state로
             # 플랫 초기화(지표는 lookback으로 유효). 이전 구간은 진입/집계 없이 건너뜀.
-            if active_from is not None and d < active_from:
+            if not in_active:
                 continue
+
+            # ── 현금 이자(opt-in): 직전 활성일 이후 달력일 복리
+            if ex.cash_interest is not None and prev_active_day is not None and cash > 0:
+                accrued = cash * ex.cash_interest.accrual_factor(prev_active_day, d)
+                cash += accrued
+                interest_earned += accrued
+            prev_active_day = d
 
             # ── Phase A: 당일 바가 있는 심볼의 FSM을 라이브와 동일하게 1스텝 진행
             transitions: dict[str, tuple[StateTransition, IndicatorSnapshot]] = {}
+            pending_buy_symbols = {pb.symbol for pb in pending_buys}
             for symbol in panels:
                 bar_i = didx[symbol].get(d)
                 if bar_i is None or bar_i == 0:  # 당일 바 없음 또는 prev 없음
                     continue
+                if symbol in pending_buy_symbols:
+                    continue  # next_open 체결 대기 중(이론상 바가 있으면 이미 체결됨)
                 current = rows[symbol][bar_i]
                 prev = rows[symbol][bar_i - 1]
                 st = fsm.get(symbol)
@@ -246,26 +446,32 @@ class PortfolioParityEngine:
                 tr_pair = transitions.get(symbol)
                 if tr_pair is None:
                     continue  # 당일 바 없음 → 보유 유지
+                if symbol in pending_sells:
+                    continue  # next_open 매도 대기(FSM은 이미 리셋됨)
                 transition, current = tr_pair
                 st = fsm[symbol]
+                exit_reason: str | None = None
                 if transition.signal == Signal.SELL:
-                    pos = positions[symbol]
                     exit_reason = _EXIT_REASON_MAP.get(transition.reason or "", "signal")
-                    completed, net = order_manager.execute_sell_order(
-                        trade=pos.trade, price=current.close, date=exec_dt, exit_reason=exit_reason
+                elif ex.exit_overlay is not None:
+                    bar_i = didx[symbol][d]
+                    lb = ex.exit_overlay.breakdown_lookback
+                    recent = [r.close for r in rows[symbol][max(0, bar_i - lb + 1) : bar_i + 1]]
+                    overlay_reason = ex.exit_overlay.check(
+                        close=current.close,
+                        entry_price=st.entry_price,
+                        highest_price=st.highest_price,
+                        ma_long=current.ma_long if current.ma_long > 0 else None,
+                        recent_closes=recent,
                     )
-                    cash += net
-                    completed_trades.append(
-                        {
-                            "profit_rate": completed.profit_rate,
-                            "holding_days": completed.holding_days,
-                        }
-                    )
-                    for idx, t in enumerate(trades):
-                        if t.trade_id == completed.trade_id:
-                            trades[idx] = completed
-                            break
-                    del positions[symbol]
+                    if overlay_reason is not None:
+                        overlay_exits[overlay_reason] = overlay_exits.get(overlay_reason, 0) + 1
+                        exit_reason = OVERLAY_TRADE_EXIT_REASON[overlay_reason]
+                if exit_reason is not None:
+                    if next_open:
+                        pending_sells[symbol] = exit_reason
+                    else:
+                        _close_position(symbol, current.close, exec_dt, exit_reason)
                     st.reset_to_waiting()
                 else:  # IN_POSITION HOLD: 상태만 유지
                     st.state = transition.new_state.value
@@ -295,34 +501,28 @@ class PortfolioParityEngine:
                 st = fsm[symbol]
                 price = current.close
                 qty = 0
-                reject_reason: str | None = None
+                reject_reason = None
                 if entry_allowed_dates is not None and d not in entry_allowed_dates:
                     # 시장 국면 필터: 하락/횡보장 신규 진입 차단(라이브 regime 게이트 정합)
                     reject_reason = "regime_block"
+                elif next_open:
+                    # 시그널 시점 슬롯 예약: (보유 − 매도대기 + 매수대기) < max
+                    committed = len(positions) - len(pending_sells) + len(pending_buys)
+                    if committed >= max_pos:
+                        reject_reason = "max_positions"
+                    else:
+                        pending_buys.append(_PendingBuy(symbol, transition.reason, d))
+                        continue  # 체결/사이징은 다음 바 시가에서
                 elif len(positions) >= max_pos:
                     reject_reason = "max_positions"
                 elif price <= 0:  # current.close는 Decimal — 불량 데이터(<=0)만 방어
                     reject_reason = "invalid_price"
                 else:
-                    qty = order_manager.calculate_position_size(cash, alloc, price)
+                    qty = _size(price, last_close, d)
                     if qty < 1 or not order_manager.can_afford(cash, price, qty):
                         reject_reason = "insufficient_cash"
-                    else:
-                        sector = self.constraints.sector_of(symbol)
-                        if max_sector < 1.0:
-                            # 시장가치 노출 기준 캡: (섹터 시가 + 신규 시가) / 총자산.
-                            # 체결 수수료/세금 드래그(<0.1%)는 다음 MTM에서 자동 반영되며
-                            # 캡(예: 30%)의 해상도 대비 무시 가능하므로 시가로 평가한다.
-                            total_equity = cash + _positions_value(
-                                positions, close_map, last_close, d
-                            )
-                            sector_value = _sector_value(
-                                positions, close_map, last_close, d, sector, self.constraints
-                            )
-                            if total_equity > 0:
-                                prospective = float((sector_value + price * qty) / total_equity)
-                                if prospective > max_sector:
-                                    reject_reason = "sector_cap"
+                    elif _sector_reject(symbol, price, qty, last_close, d):
+                        reject_reason = "sector_cap"
 
                 if reject_reason is not None:
                     rejected.append(RejectedEntry(d, symbol, reject_reason))
@@ -354,6 +554,17 @@ class PortfolioParityEngine:
 
             # ── Phase E: 일별 시가평가
             pos_value = _positions_value(positions, close_map, last_close, d)
+            if ex.liquidate_at_end and d == last_day and positions:
+                # 마지막 바: 보유분을 순청산가(슬리피지·수수료·세금 차감)로 평가
+                liq_value = Decimal("0")
+                for symbol, pos in positions.items():
+                    px = _price_at(symbol, close_map, last_close, d)
+                    if px is not None:
+                        liq_value += order_manager.liquidation_value(
+                            symbol, px, pos.quantity, exec_dt
+                        )
+                end_liquidation_cost = pos_value - liq_value
+                pos_value = liq_value
             equity = cash + pos_value
             equity_curve.append(equity)
             max_concurrent = max(max_concurrent, len(positions))
@@ -393,7 +604,7 @@ class PortfolioParityEngine:
             start_date=start_date,
             end_date=end_date,
             initial_capital=initial_capital,
-            execution_timing="same_close",
+            execution_timing="next_open" if next_open else "same_close",
             equity_curve=equity_curve,
             daily_stats=daily_stats,
             trades=trades,
@@ -405,6 +616,10 @@ class PortfolioParityEngine:
             rejected=rejected,
             max_sector_exposure=round(max_sector_exposure, 4),
             max_concurrent_positions=max_concurrent,
+            overlay_exits=overlay_exits,
+            open_fallbacks=open_fallbacks,
+            interest_earned=interest_earned,
+            end_liquidation_cost=end_liquidation_cost,
         )
 
 

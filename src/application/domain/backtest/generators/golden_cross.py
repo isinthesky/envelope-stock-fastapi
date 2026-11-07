@@ -20,6 +20,13 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
     pullback_bars/cooldown, `<50`·MA gap 게이트 부재). 따라서 이 경로로 얻은
     백테스트 결과는 "실제 매매되는 로직"을 대표하지 않는다.
 
+    재진입 재무장(라이브 정합): 라이브 FSM은 손절/트레일링/익절/최대보유 등 **모든
+    청산 후 WAITING_FOR_GC로 리셋**되어 "전일 단기MA<=장기MA → 금일 단기MA>장기MA"
+    교차가 새로 발생해야만 다시 매수 경로에 진입한다. 엔진이 리스크 청산 시
+    `notify_exit()`를 호출하면, 이 생성기는 단기MA<=장기MA를 한 번 관측(재무장)하기
+    전까지 매수를 차단한다(`require_fresh_cross_after_exit=True`, 기본=라이브 정합).
+    False로 끄면 기존 동작(쿨다운 바 수만 대기 후 같은 GC 구간 재진입)이다.
+
     라이브와 동일한 시그널로 검증하려면
     `backtest.golden_cross_parity.GoldenCrossParityReplay` 를 사용하라.
     이 생성기는 온디맨드 백테스트(단일런)의 진단/호환 용도로만 유지한다.
@@ -39,6 +46,7 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
         min_pullback_bars: int = DEFAULT_GOLDEN_CROSS_PULLBACK.min_pullback_bars,
         min_reentry_cooldown_bars: int = DEFAULT_GOLDEN_CROSS_PULLBACK.min_reentry_cooldown_bars,
         disable_stoch_overbought_sell: bool = True,
+        require_fresh_cross_after_exit: bool = True,
     ):
         self.short_period = short_period
         self.long_period = long_period
@@ -57,6 +65,16 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
         self._oversold_seen = False
         self._pullback_bars = 0
         self._bars_since_exit = 999999
+        self.require_fresh_cross_after_exit = require_fresh_cross_after_exit
+        self._awaiting_fresh_cross = False
+
+    def notify_exit(self) -> None:
+        """엔진의 리스크 청산(시그널 매도 외) 통지 → 쿨다운 시작 + 새 교차 대기."""
+        self._bars_since_exit = 0
+        self._oversold_seen = False
+        self._pullback_bars = 0
+        if self.require_fresh_cross_after_exit:
+            self._awaiting_fresh_cross = True
 
     @property
     def min_period(self) -> int:
@@ -83,6 +101,9 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
         )
         is_gc_active = ma_short > ma_long
         is_death_cross = ma_short < ma_long
+        if self._awaiting_fresh_cross and not is_gc_active:
+            # 단기MA<=장기MA 관측 → 다음 상향 교차가 '새 골든크로스'가 된다(재무장).
+            self._awaiting_fresh_cross = False
         if stoch_k < self.stoch_oversold:
             self._oversold_seen = True
             self._pullback_bars += 1
@@ -106,6 +127,8 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
         if not is_gc_active:
             self._oversold_seen = False
             self._pullback_bars = 0
+            return False
+        if self._awaiting_fresh_cross:
             return False
         if self._bars_since_exit < self.min_reentry_cooldown_bars:
             return False
@@ -179,3 +202,4 @@ class GoldenCrossSignalGenerator(BaseSignalGenerator):
         self._oversold_seen = False
         self._pullback_bars = 0
         self._bars_since_exit = 999999
+        self._awaiting_fresh_cross = False

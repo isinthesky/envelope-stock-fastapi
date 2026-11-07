@@ -31,46 +31,51 @@ class UnsupportedBacktestCostDateError(Exception):
         )
 
 
-_COST_SCHEDULES: Final[tuple[BacktestCostSchedule, ...]] = (
-    # 2020~2022 레짐 추가(walk-forward 다국면 검증에서 2022 약세장을 비용 반영해
-    # 백테스트하기 위함). 한국 유가증권시장 증권거래세(농특세 0.15% 포함) 기준:
-    #   2020: 0.25%(거래세 0.10% + 농특세 0.15%)
-    #   2021~2022: 0.23%(0.08% + 0.15%)
-    # ⚠️ 국내 주식형 ETF는 실제로 증권거래세가 면제되므로 이 세율 적용은 비용을
-    #    과대계상(보수적)한다. go/no-go 판단에는 안전한 방향이며, 필요 시
-    #    BacktestConfigDTO.use_tax=False 로 종목군에 맞게 끌 수 있다.
-    BacktestCostSchedule(
-        effective_from=date(2020, 1, 1),
-        sell_tax_rate=Decimal("0.0025"),
-        default_commission_rate=Decimal("0.00015"),
-        default_slippage_rate=Decimal("0.0005"),
-        price_tick=_PRICE_TICK_ONE_KRW,
-        source_label="krx-securities-transaction-tax:regime-2020-01-01",
+# ==================== 매도 증권거래세(농특세 포함) 스케줄 ====================
+# 편집 포인트: 아래 표(_SELL_TAX_TABLE)만 고치면 된다. 세율은 KRX 유가증권/코스닥
+# 상장 **주식** 매도 시 합계(증권거래세 + 농어촌특별세, KOSPI 농특세 0.15%)다.
+#
+#   effective_from | 합계세율 | 근거/확신
+#   2018-01-01     | 0.30%   | 거래세 0.15% + 농특세 0.15% (2019-06-02까지) — 홀드아웃(2018~19)용
+#   2019-06-03     | 0.25%   | 거래세 0.10% + 농특세 0.15% (2019-06-03 인하)
+#   2020-01-01     | 0.25%   | 거래세 0.10% + 농특세 0.15%
+#   2021-01-01     | 0.23%   | 0.08% + 0.15% (2021~2022)
+#   2023-01-01     | 0.20%   | 0.05% + 0.15%
+#   2024-01-01     | 0.18%   | 0.03% + 0.15%
+#   2025-01-01     | 0.15%   | 0.00% + 0.15%
+#   2026-01-01     | 0.20%   | ⚠️ 2025 세법개정으로 0.05% 환원(0.05%+0.15%)으로 파악 — 약 80% 확신.
+#                              시행령 최종 확정치로 재확인 후 필요 시 이 행만 수정할 것.
+#
+# ⚠️ 국내 상장 ETF(수익증권)는 증권거래세 **면제** → `order_manager`가 ETF 심볼에
+#    0%를 적용한다(`etf_tax_exempt`). 참고(미구현): 국내주식형 외 ETF(해외/채권/
+#    원자재 등)는 매매차익에 배당소득세 15.4%가 과세된다 — 이 엔진은 반영하지 않는다.
+_SELL_TAX_TABLE: Final[tuple[tuple[date, str, str], ...]] = (
+    (date(2018, 1, 1), "0.0030", "krx-securities-transaction-tax:regime-2018-01-01"),
+    (date(2019, 6, 3), "0.0025", "krx-securities-transaction-tax:regime-2019-06-03"),
+    (date(2020, 1, 1), "0.0025", "krx-securities-transaction-tax:regime-2020-01-01"),
+    (date(2021, 1, 1), "0.0023", "krx-securities-transaction-tax:regime-2021-01-01"),
+    (date(2023, 1, 1), "0.0020", "krx-securities-transaction-tax:regime-2023-01-01"),
+    (date(2024, 1, 1), "0.0018", "krx-securities-transaction-tax:regime-2024-01-01"),
+    (date(2025, 1, 1), "0.0015", "krx-securities-transaction-tax:regime-2025-01-01"),
+    (
+        date(2026, 1, 1),
+        "0.0020",
+        "krx-securities-transaction-tax:regime-2026-01-01(unconfirmed~80%)",
     ),
+)
+_DEFAULT_COMMISSION_RATE: Final = Decimal("0.00015")
+_DEFAULT_SLIPPAGE_RATE: Final = Decimal("0.0005")
+
+_COST_SCHEDULES: Final[tuple[BacktestCostSchedule, ...]] = tuple(
     BacktestCostSchedule(
-        effective_from=date(2021, 1, 1),
-        sell_tax_rate=Decimal("0.0023"),
-        default_commission_rate=Decimal("0.00015"),
-        default_slippage_rate=Decimal("0.0005"),
+        effective_from=effective_from,
+        sell_tax_rate=Decimal(rate),
+        default_commission_rate=_DEFAULT_COMMISSION_RATE,
+        default_slippage_rate=_DEFAULT_SLIPPAGE_RATE,
         price_tick=_PRICE_TICK_ONE_KRW,
-        source_label="krx-securities-transaction-tax:regime-2021-01-01",
-    ),
-    BacktestCostSchedule(
-        effective_from=date(2023, 1, 1),
-        sell_tax_rate=Decimal("0.0023"),
-        default_commission_rate=Decimal("0.00015"),
-        default_slippage_rate=Decimal("0.0005"),
-        price_tick=_PRICE_TICK_ONE_KRW,
-        source_label="project-plan-claim-ledger:backtest-cost-regime-2023-01-01",
-    ),
-    BacktestCostSchedule(
-        effective_from=date(2025, 1, 1),
-        sell_tax_rate=Decimal("0.0018"),
-        default_commission_rate=Decimal("0.00015"),
-        default_slippage_rate=Decimal("0.0005"),
-        price_tick=_PRICE_TICK_ONE_KRW,
-        source_label="project-plan-claim-ledger:backtest-cost-regime-2025-01-01",
-    ),
+        source_label=label,
+    )
+    for effective_from, rate, label in _SELL_TAX_TABLE
 )
 
 

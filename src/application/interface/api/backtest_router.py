@@ -62,6 +62,55 @@ async def run_multi_symbol_backtest(
     return await service.run_multi_symbol_backtest(request)
 
 
+_SELECTION_NOTE = (
+    "종목 선정은 오늘의 GC 상태/전체기간 수익률을 사용하지 않는다(look-ahead 제거). "
+    "단, 유니버스 구성·적격성(eligible_only)은 현재 스냅샷이라 생존편향이 남는다. "
+    "결과의 best/worst 정렬은 사후(post-hoc) 진단값이다."
+)
+
+
+async def _select_universe_symbols(
+    request: UniverseBacktestRequestDTO,
+    session,
+    base_strategy_params: dict,
+    short_ma: int,
+    long_ma: int,
+) -> tuple[list[str], str]:
+    """백테스트 대상 종목을 **시그널 상태와 무관하게** 고른다.
+
+    이전 구현은 오늘 스캔의 gc_state(OPTIMAL_BUY 등)로 거르고 그 순서를 썼다 →
+    백테스트 기간 이후 정보(오늘의 상태)로 종목을 고르는 look-ahead.
+    """
+    if request.symbols:
+        fixed: list[str] = []
+        for raw in request.symbols:
+            sym = raw.strip()
+            if sym and sym not in fixed:
+                fixed.append(sym)
+        return fixed[: request.limit], "fixed_symbols(user_provided)"
+
+    # include_etf: 명시값 우선, 미지정(None)이면 운영 유니버스 모드를 기본 적용
+    include_etf = (
+        request.include_etf if request.include_etf is not None else settings.etf_universe_enabled
+    )
+    buy_service = BuyStrategyService(session=session)
+    scan = await buy_service.scan_golden_cross_candidates(
+        market=request.market,
+        stoch_threshold=float(base_strategy_params.get("stoch_oversold", 30.0)),
+        gc_only=False,
+        include_etf=include_etf,
+        limit=max(request.limit * 5, request.limit),
+        short_ma_period=short_ma,
+        long_ma_period=long_ma,
+    )
+    items = list(scan.stocks)
+    if request.eligible_only:
+        items = [item for item in items if item.screening_score is not None]
+    # gc_state/점수 정렬을 쓰지 않고 종목코드 순으로 결정적 선택(미래 정보 없음)
+    ordered = sorted({item.symbol for item in items})
+    return ordered[: request.limit], "current_universe_symbol_order(no_signal_state_filter)"
+
+
 @router.post("/run-universe-golden-cross", response_model=UniverseBacktestResultDTO)
 async def run_universe_golden_cross_backtest(
     request: UniverseBacktestRequestDTO,
@@ -115,39 +164,9 @@ async def run_universe_golden_cross_backtest(
     base_strategy_params["short_period"] = _short_ma
     base_strategy_params["long_period"] = _long_ma
 
-    # include_etf: 명시값 우선, 미지정(None)이면 운영 유니버스 모드를 기본 적용
-    include_etf = (
-        request.include_etf if request.include_etf is not None else settings.etf_universe_enabled
+    symbols, selection_method = await _select_universe_symbols(
+        request, session, base_strategy_params, _short_ma, _long_ma
     )
-    buy_service = BuyStrategyService(session=session)
-    scan = await buy_service.scan_golden_cross_candidates(
-        market=request.market,
-        stoch_threshold=float(base_strategy_params.get("stoch_oversold", 30.0)),
-        gc_only=False,
-        include_etf=include_etf,
-        limit=max(request.limit * 5, request.limit),
-        # 후보 선정 MA를 백테스트 MA와 일치시킴(검증된 override 값 반영)
-        short_ma_period=_short_ma,
-        long_ma_period=_long_ma,
-    )
-
-    preferred_states = ["OPTIMAL_BUY", "READY_TO_BUY", "BUY_INTEREST", "WAITING_FOR_PULLBACK"]
-    selected_scan_items = [
-        item for state in preferred_states for item in scan.stocks if item.gc_state == state
-    ]
-    if request.eligible_only:
-        selected_scan_items = [
-            item for item in selected_scan_items if item.screening_score is not None
-        ]
-
-    symbols, seen_symbols = [], set()
-    for item in selected_scan_items:
-        if item.symbol in seen_symbols:
-            continue
-        seen_symbols.add(item.symbol)
-        symbols.append(item.symbol)
-        if len(symbols) >= request.limit:
-            break
 
     if not symbols:
         diagnostic_summary = service.summarize_multi_symbol_results(
@@ -169,7 +188,12 @@ async def run_universe_golden_cross_backtest(
             start_date=request.start_date,
             end_date=request.end_date,
             strategy_type=request.strategy_type,
-            config_summary={"label": "공격형 중단기 스윙 매도 v3", "comparison_results": []},
+            config_summary={
+                "label": "공격형 중단기 스윙 매도 v3",
+                "comparison_results": [],
+                "selection_method": selection_method,
+                "selection_note": _SELECTION_NOTE,
+            },
             portfolio_summary=portfolio_summary,
             summary=diagnostic_summary,
             diagnostic_summary=diagnostic_summary,
@@ -257,6 +281,8 @@ async def run_universe_golden_cross_backtest(
         "entry_strategy": "golden_cross_recovery_pullback",
         "entry_params": base_strategy_params,
         "comparison_results": comparison_results,
+        "selection_method": selection_method,
+        "selection_note": _SELECTION_NOTE,
     }
 
     return service.build_universe_backtest_result(
