@@ -732,18 +732,36 @@ class SellStageEnum(str, Enum):
     """
 
     HOLD = "HOLD"  # 보유 유지 (0%)
-    REDUCE_1 = "REDUCE_1"  # 1차 축소 (20~30%)
-    REDUCE_2 = "REDUCE_2"  # 2차 축소 (30~40%)
+    REDUCE_1 = "REDUCE_1"  # 1차 축소 (매도 분석 20~30% / 현금계획 기본 25%)
+    REDUCE_2 = "REDUCE_2"  # 2차 축소 (매도 분석 30~40% / 현금계획 기본 50%)
     EXIT_ALL = "EXIT_ALL"  # 전량 청산 (100%)
 
 
-# 비중축소 단계별 매도 비율 (min, max)
+# 비중축소 단계별 매도 비율 (min, max) — 종목 단위 매도 분석(final_ratio_*, 알림, replay)용.
 SELL_STAGE_RATIOS: dict[SellStageEnum, tuple[float, float]] = {
     SellStageEnum.HOLD: (0.0, 0.0),
     SellStageEnum.REDUCE_1: (0.20, 0.30),  # 20~30%
     SellStageEnum.REDUCE_2: (0.30, 0.40),  # 30~40%
     SellStageEnum.EXIT_ALL: (1.0, 1.0),  # 100%
 }
+
+# 포트폴리오 현금계획(PortfolioCashPlanner) 단계별 **기본** 권장 매도 비중 — 플래너 단일 소스.
+# 현금계획은 포트폴리오 현금 확보가 목적이라 종목 단위 SELL_STAGE_RATIOS보다 공격적이며
+# (REDUCE_2 = 50%), 수익률/ETF/긴급도에 따라 플래너가 추가로 상향한다.
+# 플래너의 하드코딩 맵과 DTO 주석(30~40%)이 따로 놀던 불일치를 이 상수로 고정한다.
+CASH_PLAN_BASE_SELL_RATIOS: dict[str, float] = {
+    "INSUFFICIENT_DATA": 0.0,
+    SellStageEnum.HOLD.value: 0.0,
+    SellStageEnum.REDUCE_1.value: 0.25,
+    SellStageEnum.REDUCE_2.value: 0.50,
+    SellStageEnum.EXIT_ALL.value: 1.0,
+}
+
+
+def format_ratio_range(ratio_min: float, ratio_max: float) -> str:
+    """(0.3, 0.4) → "30~40%", (1.0, 1.0) → "100%"."""
+    lo, hi = round(ratio_min * 100), round(ratio_max * 100)
+    return f"{lo}%" if lo == hi else f"{lo}~{hi}%"
 
 
 # Phase → Stage 매핑 (하위호환)
@@ -770,10 +788,27 @@ SELL_PHASE_INFO: dict[str, dict[str, str]] = {
 
 SELL_STAGE_INFO: dict[str, dict[str, str]] = {
     "INSUFFICIENT_DATA": {"name": "데이터 부족", "action": "분석 보류", "ratio": "-"},
-    "HOLD": {"name": "보유 유지", "action": "현 상태 유지", "ratio": "0%"},
-    "REDUCE_1": {"name": "1차 비중 축소", "action": "20~30% 매도 고려", "ratio": "20~30%"},
-    "REDUCE_2": {"name": "2차 비중 축소", "action": "30~40% 매도 권장", "ratio": "30~40%"},
-    "EXIT_ALL": {"name": "전량 청산", "action": "즉시 전량 매도", "ratio": "100%"},
+    # ratio/action 문구는 SELL_STAGE_RATIOS에서 생성한다(숫자-문구 drift 방지).
+    "HOLD": {
+        "name": "보유 유지",
+        "action": "현 상태 유지",
+        "ratio": format_ratio_range(*SELL_STAGE_RATIOS[SellStageEnum.HOLD]),
+    },
+    "REDUCE_1": {
+        "name": "1차 비중 축소",
+        "action": f"{format_ratio_range(*SELL_STAGE_RATIOS[SellStageEnum.REDUCE_1])} 매도 고려",
+        "ratio": format_ratio_range(*SELL_STAGE_RATIOS[SellStageEnum.REDUCE_1]),
+    },
+    "REDUCE_2": {
+        "name": "2차 비중 축소",
+        "action": f"{format_ratio_range(*SELL_STAGE_RATIOS[SellStageEnum.REDUCE_2])} 매도 권장",
+        "ratio": format_ratio_range(*SELL_STAGE_RATIOS[SellStageEnum.REDUCE_2]),
+    },
+    "EXIT_ALL": {
+        "name": "전량 청산",
+        "action": "즉시 전량 매도",
+        "ratio": format_ratio_range(*SELL_STAGE_RATIOS[SellStageEnum.EXIT_ALL]),
+    },
 }
 
 

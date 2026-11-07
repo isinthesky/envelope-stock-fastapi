@@ -38,6 +38,7 @@ async def test_explicit_entry_price_still_uses_persisted_position_peak() -> None
         entry_price=100.0,
         highest_price=140.0,
         trailing_stop_activated=True,
+        trailing_stop_distance=None,
     )
 
 

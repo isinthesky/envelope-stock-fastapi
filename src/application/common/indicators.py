@@ -446,6 +446,10 @@ class TechnicalIndicators:
 
         변동성을 측정하는 지표로, 동적 손절에 활용
 
+        NOTE: Wilder 평활(RMA)이 아니라 최근 ``period`` 개 True Range의 **단순 평균(SMA)**
+        이다. ``prepare_golden_cross_indicators`` 의 ``atr`` 컬럼과 같은 방식이며
+        라이브/백테스트 parity가 이 산식에 의존하므로 Wilder로 바꾸지 말 것.
+
         Args:
             high_prices: 고가 리스트
             low_prices: 저가 리스트
@@ -560,6 +564,8 @@ class TechnicalIndicators:
 
         Returns:
             tuple[bool, float, list[str]]: (피크 신호 여부, 점수, 근거 리스트)
+                점수는 거래량 배수 구간 점수(10/15/20)만 포함한다. 피크 보너스
+                (+5)는 ``sell_score_rules.volume_rule`` 에서만 가산한다.
         """
         reasons: list[str] = []
         score = 0.0
@@ -579,7 +585,8 @@ class TechnicalIndicators:
 
         is_peak = volume_ratio >= 3.0 and price_change >= price_change_threshold
         if is_peak:
-            score += 5.0
+            # 피크 보너스(+5)는 sell_score_rules.volume_rule 이 단일 소스로 가산한다
+            # (points+max 단일 소스). 여기서도 더하면 같은 조건이 이중 가산된다.
             reasons.append(f"급등+급증 피크 신호 (가격 {price_change:.1%}↑)")
 
         return is_peak, score, reasons

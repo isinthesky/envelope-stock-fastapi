@@ -26,6 +26,7 @@ from src.application.domain.strategy.dto import (
     SELL_STAGE_INFO,
     SELL_STAGE_RATIOS,
     DynamicSellThresholdConfig,
+    GoldenCrossRiskConfig,
     SellPhaseEnum,
     SellScoreResultDTO,
     SellSignalAnalysisDTO,
@@ -62,6 +63,22 @@ from src.settings.config import settings
 from src.settings.sell_score_settings import DEFAULT_PEAK_RULE_THRESHOLDS, SellScoreSettings
 
 logger = logging.getLogger(__name__)
+
+# 52주 = 252 거래일. 신고가 판정은 "오늘 제외 직전 251 거래일" 고가 최대치와 비교한다.
+HIGH_52WEEK_LOOKBACK_SESSIONS = 252
+
+# 트레일링 거리 기본값: 전략 risk_config가 전달되지 않을 때만 사용한다.
+# GoldenCrossRiskConfig.trailing_stop_distance 기본값(0.07)과 단일 소스로 맞춘다.
+DEFAULT_TRAILING_STOP_DISTANCE: float = float(
+    GoldenCrossRiskConfig.model_fields["trailing_stop_distance"].default
+)
+
+# '85% 수익 보호' 최소 피크 수익률. 피크 수익이 이보다 작으면 규칙을 적용하지 않는다.
+# 근거: 피크 +1%에서 85% 보호선은 +0.85%로, 0.15%p 되돌림(일중 노이즈 수준, 매도 비용
+# 약 0.25%보다 작음)만으로 부분 매도가 발동했다. 손실 측은 하드 손절(최고가 대비 15%)이
+# 담당하므로, 의미 있는 수익(5%)이 쌓였을 때만 수익 보호를 건다.
+PROFIT_PROTECTION_MIN_PEAK_PROFIT = 0.05
+PROFIT_PROTECTION_KEEP_RATIO = 0.85
 
 
 @dataclass
@@ -460,24 +477,37 @@ class SellStrategyService:
 
         return score, reasons
 
+    @staticmethod
+    def _prior_52week_high(df: pd.DataFrame) -> float | None:
+        """오늘(마지막 봉)을 제외한 직전 최대 251 거래일 고가의 최댓값.
+
+        오늘 고가를 포함하면 ``종가 >= max(고가)`` 는 종가 == 당일 고가일 때만 참이 되어
+        신고가 경신이 사실상 감지되지 않는다. 그래서 기준 고점은 과거 구간만으로 잡는다.
+        """
+        if "high" not in df.columns or len(df) < 2:
+            return None
+        prior = df["high"].iloc[:-1].tail(HIGH_52WEEK_LOOKBACK_SESSIONS - 1)
+        value = prior.max()
+        if value is None or pd.isna(value):
+            return None
+        return float(value)
+
     def _check_52week_high(
         self,
         symbol: str,
         current_price: float,
         df: pd.DataFrame,
     ) -> tuple[bool, float, str, str]:
-        """52주 신고가 확인"""
+        """52주 신고가 확인 (현재가 vs 직전 251 거래일 고가 최대치, 오늘 제외)"""
         min_candles = 50
         if "high" not in df.columns or len(df) < min_candles:
             logger.debug(f"52주 신고가 계산 불가: {symbol} 데이터 부족")
             return False, 0.0, "", "insufficient_data"
 
-        lookback = min(252, len(df))
-        high_52w = df["high"].tail(lookback).max()
-        if pd.isna(high_52w):
+        high_52w = self._prior_52week_high(df)
+        if high_52w is None:
             return False, 0.0, "", "insufficient_data"
 
-        high_52w = float(high_52w)
         is_new_high = current_price >= high_52w
         ratio = current_price / high_52w if high_52w > 0 else 0.0
 
@@ -529,6 +559,7 @@ class SellStrategyService:
         market: str | None = None,
         sell_mode: str = "hybrid",  # "legacy", "simple", "hybrid"
         include_overlays: bool = True,
+        trailing_stop_distance: float | None = None,
     ) -> SellSignalAnalysisDTO:
         """
         매도 시그널 분석
@@ -549,6 +580,7 @@ class SellStrategyService:
             trailing_stop_activated: 트레일링 스탑 활성화 여부
             force_refresh: True면 캐시와 관계없이 최신 데이터 요청
             include_overlays: 개인 수급·시장 신용 오버레이 포함 여부
+            trailing_stop_distance: 전략 risk_config의 트레일링 거리(None이면 기본 0.07)
 
         Returns:
             SellSignalAnalysisDTO: 매도 시그널 분석 결과
@@ -582,6 +614,7 @@ class SellStrategyService:
             name=name,
             market=market,
             sell_mode=sell_mode,
+            trailing_stop_distance=trailing_stop_distance,
         )
 
         # 9. DTO 조립
@@ -696,11 +729,11 @@ class SellStrategyService:
             current_price=ctx.close,
             df=df,
         )
-        if ctx.high_52week_note == "raw" and "high" in df.columns and len(df) > 0:
-            lookback = min(252, len(df))
-            high_52week_raw = df["high"].tail(lookback).max()
-            if high_52week_raw is not None and pd.notna(high_52week_raw):
-                ctx.high_52week_value = float(high_52week_raw)
+        if ctx.high_52week_note == "raw":
+            # _check_52week_high 와 같은 기준 고점(오늘 제외 직전 251 거래일)을 사용한다.
+            high_52week_raw = self._prior_52week_high(df)
+            if high_52week_raw is not None:
+                ctx.high_52week_value = high_52week_raw
                 if ctx.high_52week_value > 0:
                     ctx.high_52week_ratio = ctx.close / ctx.high_52week_value
 
@@ -763,6 +796,7 @@ class SellStrategyService:
         name: str | None,
         market: str | None,
         sell_mode: str,
+        trailing_stop_distance: float | None = None,
     ) -> None:
         """수익률/Phase/Stage/점수/근거를 종합해 최종 Stage와 근거를 확정."""
         volume_indicators = ctx.volume_indicators
@@ -900,6 +934,7 @@ class SellStrategyService:
             is_take_profit_triggered=ctx.is_take_profit_triggered,
             trailing_stop_activated=trailing_stop_activated,
             drawdown_from_high=ctx.drawdown_from_high,
+            trailing_stop_distance=trailing_stop_distance,
         )
         stage_reasons.extend(position_stage_reasons)
 
@@ -1216,9 +1251,16 @@ class SellStrategyService:
             adx, plus_di, minus_di, config
         )
 
+        # 리스크 조합(개인 수급+시장 신용) 입력 데이터 가용 여부 — 분모 결정용(값과 무관).
+        risk_combo_inputs_available = (
+            recent_5d_personal_net_buy is not None
+            and personal_buy_days_5d is not None
+            and market_credit_change_ratio is not None
+            and market_credit_recent_high_ratio is not None
+        )
+
         # 각 규칙이 점수(points)와 가용 최대치(max_points)를 한 곳에서 함께 산출한다.
-        # 총점/가용 최대치를 동일한 규칙 리스트에서 합산하여 기존 available_max 미러를 제거.
-        # 리스트 순서 = 기존 total_score 누적 순서(부동소수 결과 보존).
+        # 분모(available_max)는 데이터 가용성 기준 고정 max 합이다(sell_score_rules 모듈 docstring).
         rules: list[ScoreRule] = [
             stoch_rule(stoch_k, config),
             rsi_rule(rsi, config),
@@ -1244,16 +1286,23 @@ class SellStrategyService:
             adx_rule(adx, config),
             ma_rule(ma_score, ma_reasons, config),
             cross_rule(stoch_k, stoch_d, cross_detection, config),
-            overbought_bonus_rule(is_52week_high, stoch_k),
-            risk_combo_rule(risk_combo_peak, risk_combo_extreme, config),
+            overbought_bonus_rule(
+                is_52week_high,
+                stoch_k,
+                high_52week_available=high_52week_score is not None,
+            ),
+            risk_combo_rule(
+                risk_combo_peak,
+                risk_combo_extreme,
+                config,
+                inputs_available=risk_combo_inputs_available,
+            ),
             adx_penalty_rule(adx_penalty, adx_penalty_reason),
         ]
 
         total_score = 0.0
         for rule in rules:
             total_score += rule.points
-        # 개별 max 항을 순서대로 누적하여 기존 인라인 available_max 누적과
-        # bit-identical 하게 유지(거래량 weight 후 피크 +5 등 규칙 내 다중 항 포함).
         available_max = 0.0
         for rule in rules:
             for term in rule.max_contributions():
@@ -1382,10 +1431,16 @@ class SellStrategyService:
         is_take_profit_triggered: bool,
         trailing_stop_activated: bool,
         drawdown_from_high: float | None,
-        trailing_stop_distance: float = 0.07,
+        trailing_stop_distance: float | None = None,
     ) -> tuple[SellStageEnum, list[str]]:
-        """익절/트레일링 상태를 최종 Stage에 반영한다."""
+        """익절/트레일링 상태를 최종 Stage에 반영한다.
+
+        ``trailing_stop_distance`` 는 전략 risk_config(프리셋: 공격형 0.10, 보수형 0.05)의
+        값이다. 전달되지 않을 때만 ``DEFAULT_TRAILING_STOP_DISTANCE``(0.07)를 쓴다.
+        """
         reasons: list[str] = []
+        if trailing_stop_distance is None:
+            trailing_stop_distance = DEFAULT_TRAILING_STOP_DISTANCE
 
         if (
             trailing_stop_activated
@@ -2014,7 +2069,7 @@ class SellStrategyService:
         단순 매도 규칙 (사용자 지정, 수정됨 2026-07-31):
         - RSI >= 70 **AND** 하락 시작 확인 (RSI만으로는 선제 매도 안 함)
         - 최근 20일 고점(일봉 종가) 대비 15% 이탈
-        - 85% 수익 지키기 (peak profit의 85% 보호)
+        - 85% 수익 지키기 (peak profit의 85% 보호, 피크 수익 >= 5%일 때만)
         """
         reasons = []
         should_sell = False
@@ -2073,11 +2128,14 @@ class SellStrategyService:
                     f"추세 이탈: MA{settings.gc_long_ma_period} {settings.sell_trend_stop_pct:.0%} 하회"
                 )
 
-        # 3. 85% 수익 지키기 — 기계적 보호
+        # 3. 85% 수익 지키기 — 기계적 보호 (최소 피크 수익 가드)
         if entry_price and highest_price and highest_price > entry_price and current_price:
             peak_profit = (highest_price - entry_price) / entry_price
             curr_profit = (current_price - entry_price) / entry_price
-            if curr_profit < peak_profit * 0.85:
+            if (
+                peak_profit >= PROFIT_PROTECTION_MIN_PEAK_PROFIT
+                and curr_profit < peak_profit * PROFIT_PROTECTION_KEEP_RATIO
+            ):
                 should_sell = True
                 reasons.append(
                     f"85% 수익 보호 트리거 (peak={peak_profit:.1%}, 현재={curr_profit:.1%})"

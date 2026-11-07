@@ -37,6 +37,10 @@ from src.application.domain.strategy.symbol_validation import filter_tradable_it
 from src.settings.config import settings
 from src.settings.sell_score_settings import DEFAULT_PEAK_RULE_THRESHOLDS
 
+# sell_strategy_service.HIGH_52WEEK_LOOKBACK_SESSIONS(252) - 1. 그 모듈이 이 모듈을 import하므로
+# 순환 import를 피하려고 값을 복제한다(tests/domain/test_sell_calc_bugfixes.py가 정합성 고정).
+_PRIOR_52WEEK_SESSIONS = 251
+
 DEFAULT_PREREGISTERED_SYMBOL_LIMIT: Final = 50
 
 
@@ -307,9 +311,13 @@ class SellPeakRuleResearchService:
             stoch_d_period=3,
         )
         ohlcv_df["rolling_20_high"] = ohlcv_df["close"].rolling(20, min_periods=5).max()
-        ohlcv_df["high_52w"] = ohlcv_df["high"].rolling(252, min_periods=20).max()
+        # 라이브(sell_strategy_service._prior_52week_high)와 동일: 오늘 봉을 뺀 직전 251거래일 고가.
+        # 오늘 고가를 포함하면 종가 == 당일 고가일 때만 신고가로 잡혀 대부분을 놓친다.
+        ohlcv_df["high_52w"] = (
+            ohlcv_df["high"].shift(1).rolling(_PRIOR_52WEEK_SESSIONS, min_periods=20).max()
+        )
         ohlcv_df["high_52week_ratio"] = ohlcv_df["close"] / ohlcv_df["high_52w"]
-        ohlcv_df["is_52week_high"] = ohlcv_df["high_52week_ratio"] >= 0.999
+        ohlcv_df["is_52week_high"] = ohlcv_df["close"] >= ohlcv_df["high_52w"]
 
         personal_rows = await PersonalFlowSnapshotRepository(self.session).get_by_symbol_between(
             symbol=symbol,

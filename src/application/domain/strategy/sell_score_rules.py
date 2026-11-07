@@ -7,11 +7,18 @@ Sell score rules - 매도 점수 규칙 단위
 한 곳에서 함께 산출** 하도록 하여, 기존 코드에서 별도로 재구현되던
 ``available_max`` 미러(mirror)를 제거하는 것이다.
 
-동작 보존(behavior preservation):
-- 각 규칙의 산식/문구/반올림은 기존 ``calculate_sell_score`` 와 문자 단위로 동일하다.
-- 총점은 규칙 순서대로(stoch→rsi→volume→...→penalty) 누적되어 기존 누적 순서를 유지한다.
-- 가용 최대치는 각 규칙의 ``max_points`` 합으로 계산된다. 기본 가중치는 모두 정수
-  값이라 합산 순서와 무관하게 부동소수 결과가 동일하다.
+- 총점은 규칙 순서대로(stoch→rsi→volume→...→penalty) 누적된다.
+
+정규화 분모(available_max) 계약 (2026-11-06 수정):
+- 분모 = **적용 가능한(applicable) 규칙의 고정 max_points 합**이다.
+- 적용 가능 여부는 **입력 데이터 가용성만**으로 결정한다(지표 값/발동 여부와 무관).
+  예) 거래량 비율이 있으면 거래량 규칙의 max(= volume_weight + 피크 보너스 5)는 피크가
+  발생하지 않아도 분모에 포함된다. 보너스 규칙도 입력 데이터가 있으면 발동 여부와
+  무관하게 분모에 포함된다.
+- 과거에는 피크 보너스/개인 수급/신고가+과매수/리스크 조합의 max가 "발동했을 때만"
+  분모에 들어가 분모가 지표 값에 따라 흔들렸고, 발동 시 분자·분모 동반 증가로
+  정규화 점수가 부풀려졌다(같은 상황에서도 점수가 수 %p~10%p 높게 산출).
+- 감점(adx_penalty)은 분모에 기여하지 않는다.
 """
 
 from dataclasses import dataclass, field
@@ -21,6 +28,12 @@ from src.settings.sell_score_settings import (
     DEFAULT_PEAK_RULE_THRESHOLDS,
     SellScoreSettings,
 )
+
+# 거래량 피크 보너스: 이 파이프라인이 유일한 가산 소스다
+# (TechnicalIndicators.check_volume_peak_signal 은 구간 점수 10/15/20만 반환).
+VOLUME_PEAK_BONUS = 5.0
+# 52주 신고가 + Stoch 과매수 조합 보너스
+HIGH_52WEEK_OVERBOUGHT_BONUS = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,10 +48,8 @@ class ScoreRule:
         max_points: 규칙이 가용 최대치(available_max)에 기여하는 값.
         reasons: 점수 근거 문구(누적 순서 보존용, 리스트 순서 유지).
         breakdown: ``score_breakdown`` 에 병합될 키/값(반올림 완료).
-        max_terms: available_max 합산 시 순차 누적할 개별 항(부동소수 결합순서
-            보존용). ``None`` 이면 ``(max_points,)`` 단일 항으로 간주한다. 기존
-            인라인 코드가 한 규칙 안에서 여러 번 ``available_max += ...`` 하던
-            경우(예: 거래량 weight 후 피크 +5)를 bit-identical 하게 재현한다.
+        max_terms: available_max 합산 시 순차 누적할 개별 항. ``None`` 이면
+            ``(max_points,)`` 단일 항으로 간주한다(하위호환 필드).
     """
 
     points: float
@@ -95,7 +106,10 @@ def volume_rule(
     is_volume_sell_signal: bool,
     config: SellScoreSettings,
 ) -> ScoreRule:
-    """거래량 점수 + 거래량 피크 보너스(둘의 max는 volume_weight + 5.0)."""
+    """거래량 점수 + 거래량 피크 보너스(둘의 max는 volume_weight + VOLUME_PEAK_BONUS).
+
+    거래량 비율이 산출되면(데이터 가용) 피크 발생 여부와 무관하게 max 전체를 분모에 넣는다.
+    """
     volume_score = 0.0
     reasons: list[str] = []
     if volume_ratio is not None:
@@ -119,19 +133,11 @@ def volume_rule(
             volume_score = max(volume_score, peak_score)
             reasons.append("거래량 피크 점수 반영")
 
-        volume_score += 5.0
-        reasons.append("거래량 피크 보너스 (+5)")
+        volume_score += VOLUME_PEAK_BONUS
+        reasons.append(f"거래량 피크 보너스 (+{VOLUME_PEAK_BONUS:.0f})")
 
-    # 기존 인라인 순서(available_max += volume_weight → += 5.0)를 그대로
-    # 재현하기 위해 개별 항을 순서대로 보존한다(부동소수 결합순서 보존).
-    max_term_list: list[float] = []
-    if volume_ratio is not None:
-        max_term_list.append(config.volume_weight)
-    if is_volume_peak:
-        max_term_list.append(5.0)
-    max_points = 0.0
-    for term in max_term_list:
-        max_points += term
+    # 분모는 데이터 가용성(volume_ratio 산출 여부)만으로 결정한다(피크 발생 여부와 무관).
+    max_points = config.volume_weight + VOLUME_PEAK_BONUS if volume_ratio is not None else 0.0
 
     return ScoreRule(
         volume_score,
@@ -141,7 +147,6 @@ def volume_rule(
             "volume_score": round(volume_score, 2),
             "volume_peak_score": round(peak_score_raw, 2),
         },
-        max_terms=tuple(max_term_list),
     )
 
 
@@ -191,9 +196,10 @@ def personal_flow_rule(
         elif personal_buy_days_5d >= config.personal_buy_days_threshold:
             personal_flow_score = config.personal_flow_weight * 0.4
             reasons.append("개인 수급 쏠림 경고 (최근 5일 순매수 우세)")
+    # 분모는 개인 수급 데이터 가용성만으로 결정한다(순매수 부호와 무관).
     max_points = (
         config.personal_flow_weight
-        if recent_5d_personal_net_buy is not None and recent_5d_personal_net_buy > 0
+        if recent_5d_personal_net_buy is not None and personal_buy_days_5d is not None
         else 0.0
     )
     return ScoreRule(
@@ -285,14 +291,24 @@ def cross_rule(
     return ScoreRule(cross_score, max_points, reasons, {"cross_score": round(cross_score, 2)})
 
 
-def overbought_bonus_rule(is_52week_high: bool, stoch_k: float | None) -> ScoreRule:
-    """52주 신고가 + 과매수 조합 보너스."""
+def overbought_bonus_rule(
+    is_52week_high: bool,
+    stoch_k: float | None,
+    high_52week_available: bool = True,
+) -> ScoreRule:
+    """52주 신고가 + 과매수 조합 보너스.
+
+    ``high_52week_available`` 은 52주 고가 데이터 가용 여부다. 데이터와 stoch_k가 있으면
+    보너스 발동 여부와 무관하게 max를 분모에 넣는다.
+    """
     overbought_bonus = 0.0
     reasons: list[str] = []
     if is_52week_high and stoch_k is not None and stoch_k > 85:
-        overbought_bonus = 5.0
-        reasons.append("신고가 + 과매수 조합 (+5)")
-    max_points = overbought_bonus if overbought_bonus > 0 else 0.0
+        overbought_bonus = HIGH_52WEEK_OVERBOUGHT_BONUS
+        reasons.append(f"신고가 + 과매수 조합 (+{HIGH_52WEEK_OVERBOUGHT_BONUS:.0f})")
+    max_points = (
+        HIGH_52WEEK_OVERBOUGHT_BONUS if high_52week_available and stoch_k is not None else 0.0
+    )
     return ScoreRule(
         overbought_bonus,
         max_points,
@@ -305,8 +321,14 @@ def risk_combo_rule(
     risk_combo_peak: bool,
     risk_combo_extreme: bool,
     config: SellScoreSettings,
+    inputs_available: bool | None = None,
 ) -> ScoreRule:
-    """개인 수급+시장 신용(+고점권) 조합 보너스."""
+    """개인 수급+시장 신용(+고점권) 조합 보너스.
+
+    ``inputs_available`` 은 조합 판정 입력(개인 수급 + 시장 신용 데이터)의 가용 여부다.
+    가용하면 발동 여부와 무관하게 max를 분모에 넣는다. ``None`` 이면(하위호환) 발동한
+    경우에만 가용으로 간주한다.
+    """
     risk_combo_bonus = 0.0
     reasons: list[str] = []
     if risk_combo_extreme:
@@ -315,7 +337,12 @@ def risk_combo_rule(
     elif risk_combo_peak:
         risk_combo_bonus = config.risk_combo_weight * 0.5
         reasons.append("개인 수급+시장 신용 동시 과열 보너스")
-    max_points = config.risk_combo_weight if (risk_combo_peak or risk_combo_extreme) else 0.0
+    available = (
+        inputs_available
+        if inputs_available is not None
+        else (risk_combo_peak or risk_combo_extreme)
+    )
+    max_points = config.risk_combo_weight if (available or risk_combo_bonus > 0) else 0.0
     return ScoreRule(
         risk_combo_bonus,
         max_points,

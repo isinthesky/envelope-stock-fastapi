@@ -95,3 +95,13 @@ def test_portfolio_cash_plan_stop_loss_reason_keeps_15_percent_wording() -> None
         f"최고가 대비 {DEFAULT_PEAK_DRAWDOWN_STOP_RATIO:.0%} 손절 우선 (지표 데이터 부족)"
         == "최고가 대비 15% 손절 우선 (지표 데이터 부족)"
     )
+
+
+def test_sell_stage_thresholds_recalibrated_after_denominator_fix() -> None:
+    """2026-11-06 분위수 재보정값을 고정한다(근거: sell_score_settings.py 주석)."""
+    from src.settings.sell_score_settings import SellScoreSettings
+
+    fields = SellScoreSettings.model_fields
+    assert fields["reduce_1_threshold"].default == 28.0
+    assert fields["reduce_2_threshold"].default == 49.0
+    assert fields["exit_all_threshold"].default == 70.0

@@ -786,6 +786,7 @@ class StrategyService:
         merge_strategy: str = "conservative",
         sell_mode: str = "hybrid",
         include_overlays: bool = True,
+        trailing_stop_distance: float | None = None,
     ) -> SellSignalAnalysisDTO:
         """
         매도 시그널 분석 (SellStrategyService로 위임)
@@ -815,6 +816,7 @@ class StrategyService:
             merge_strategy=merge_strategy,
             sell_mode=sell_mode,
             include_overlays=include_overlays,
+            trailing_stop_distance=trailing_stop_distance,
         )
 
     # ==================== Analysis History Methods ====================
@@ -1504,10 +1506,22 @@ class StrategyService:
         if not state:
             return None
 
+        # 전략의 트레일링 거리(프리셋별 0.05/0.07/0.10)를 매도 분석에 그대로 전달한다.
+        trailing_stop_distance: float | None = None
+        strategy = await self.strategy_repo.get_by_id(strategy_id, session=session)
+        if strategy is not None and strategy.config_json:
+            try:
+                risk = json.loads(strategy.config_json).get("risk_config") or {}
+                if risk.get("trailing_stop_distance") is not None:
+                    trailing_stop_distance = float(risk["trailing_stop_distance"])
+            except (TypeError, ValueError):
+                trailing_stop_distance = None
+
         return {
             "entry_price": float(state.entry_price) if state.entry_price else None,
             "highest_price": float(state.highest_price) if state.highest_price else None,
             "trailing_stop_activated": state.trailing_stop_activated,
+            "trailing_stop_distance": trailing_stop_distance,
         }
 
     @transaction

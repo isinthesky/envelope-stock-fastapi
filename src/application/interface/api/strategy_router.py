@@ -12,6 +12,7 @@ NOTE: 라우터 순서 중요!
 """
 
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, status
 
@@ -407,6 +408,14 @@ async def analyze_sell_signal(
     strategy_id: int | None = Query(
         default=None, ge=1, description="전략 ID (보유 종목 진입가 자동 조회)"
     ),
+    highest_price: Annotated[
+        float | None,
+        Query(
+            gt=0.0,
+            description="보유 중 최고가 (고점 대비 손절/트레일링 기준). "
+            "strategy_id 상태값이 있으면 그 값과 큰 쪽",
+        ),
+    ] = None,
 ) -> ResponseDTO[SellSignalAnalysisDTO]:
     """
     매도 시그널 분석 - @transaction이 세션을 관리
@@ -436,8 +445,8 @@ async def analyze_sell_signal(
     - STRONG_SELL: 강력 매도
     """
     # 전략 ID가 제공되면 보유 종목의 진입가/최고가 자동 조회
-    highest_price: float | None = None
     trailing_stop_activated: bool = False
+    trailing_stop_distance: float | None = None
 
     if strategy_id is not None:
         try:
@@ -446,8 +455,9 @@ async def analyze_sell_signal(
                 if entry_price is None and state.get("entry_price"):
                     entry_price = state["entry_price"]
                 if state.get("highest_price"):
-                    highest_price = state["highest_price"]
+                    highest_price = max(highest_price or 0.0, state["highest_price"])
                 trailing_stop_activated = state.get("trailing_stop_activated", False)
+                trailing_stop_distance = state.get("trailing_stop_distance")
         except Exception as exc:
             raise ServiceUnavailableError(
                 f"Failed to load persisted position state for strategy {strategy_id}"
@@ -460,6 +470,7 @@ async def analyze_sell_signal(
         entry_price=entry_price,
         highest_price=highest_price,
         trailing_stop_activated=trailing_stop_activated,
+        trailing_stop_distance=trailing_stop_distance,
     )
 
     # 종목명 조회 및 추가 (DB 우선, API 폴백 - ETF 지원)

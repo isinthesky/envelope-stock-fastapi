@@ -76,10 +76,15 @@ class SellScoreSettings(BaseSettings):
     adx_penalty_strong: float = Field(default=-20.0, description="강한 상승 추세 감점")
     adx_penalty_moderate: float = Field(default=-10.0, description="상승 추세 감점")
 
-    # Stage 임계값 (정규화 점수 기준)
+    # Stage 임계값 (정규화 점수 기준) — 매도 Stage 임계값의 단일 출처(SSOT).
+    # 2026-11-06 재보정: 정규화 분모 버그 수정(점수 중앙값 ×0.925)에 맞춰, 수정 전 코드(HEAD 016ea8f)와
+    # 수정 후 코드로 같은 데이터(활성 ETF 148종, 2023-06~2026-11, 5거래일 간격 24,864점, 오버레이 없음)를
+    # 재생해 **각 Stage 발생 빈도가 같아지는 분위수**로 맞췄다(REDUCE_1↑ 20.4%, REDUCE_2↑ 1.8%, EXIT_ALL↑ 0.03%).
+    # 30→27.8, 50→48.9, 70→69.9 → 28 / 49 / 70. 이 값은 "기존 운영 빈도 보존"이지 수익 검증값이 아니다:
+    # 같은 재생에서 점수가 높을수록 20일 선행수익률이 오히려 높았다(55점+ 평균 +6.2% vs 전체 +1.3%).
     exit_all_threshold: float = Field(default=70.0, description="EXIT_ALL 임계값")
-    reduce_2_threshold: float = Field(default=50.0, description="REDUCE_2 임계값")
-    reduce_1_threshold: float = Field(default=30.0, description="REDUCE_1 임계값")
+    reduce_2_threshold: float = Field(default=49.0, description="REDUCE_2 임계값")
+    reduce_1_threshold: float = Field(default=28.0, description="REDUCE_1 임계값")
 
     # 거래량 구간 (비율 기준)
     volume_ratio_high: float = Field(default=4.0, description="거래량 폭증 기준 (400%)")

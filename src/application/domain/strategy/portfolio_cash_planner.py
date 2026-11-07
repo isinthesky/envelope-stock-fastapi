@@ -9,7 +9,11 @@ urgency 점수/비중 맵/과열 임계값/노트는 원본과 100% 동일하게
 import json
 from datetime import datetime
 
-from src.application.domain.strategy.dto import PortfolioCashActionDTO, PortfolioCashPlanDTO
+from src.application.domain.strategy.dto import (
+    CASH_PLAN_BASE_SELL_RATIOS,
+    PortfolioCashActionDTO,
+    PortfolioCashPlanDTO,
+)
 from src.application.domain.strategy.risk_contract import (
     DEFAULT_PEAK_DRAWDOWN_STOP_RATIO,
     is_peak_drawdown_stop_triggered,
@@ -126,13 +130,8 @@ class PortfolioCashPlanner:
                 score += 8
                 reasons.append("ETF/레버리지 계열은 회전이 빨라 선제 축소")
 
-            suggested_ratio = {
-                "INSUFFICIENT_DATA": 0.0,
-                "HOLD": 0.0,
-                "REDUCE_1": 0.25,
-                "REDUCE_2": 0.50,
-                "EXIT_ALL": 1.0,
-            }.get(final_stage, 0.0)
+            # 단계별 기본 비중은 dto.CASH_PLAN_BASE_SELL_RATIOS 단일 소스(REDUCE_2 = 50%).
+            suggested_ratio = CASH_PLAN_BASE_SELL_RATIOS.get(final_stage, 0.0)
             if profit_ratio is not None and profit_ratio >= 0.08 and final_stage == "REDUCE_1":
                 suggested_ratio = max(suggested_ratio, 0.30)
             if profit_ratio is not None and profit_ratio >= 0.12 and final_stage == "REDUCE_2":
