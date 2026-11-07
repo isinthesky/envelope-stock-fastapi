@@ -22,7 +22,7 @@ Golden Cross Live-Parity Backtest - 라이브 패리티 골든크로스 백테�
       `allocation_ratio`를 `int(allocation/price)`로 나눈 단일 주문이며, parity도
       단일 주문·`allocation_ratio` 기준으로 동일한 "1 심볼 1 포지션" 규칙을 따른다.
       (엔진의 3-lot 분할 매수는 사용하지 않는다.)
-    - 체결 시점은 시그널 발생 바의 종가(same_close). 라이브는 15:35 종가 지정가.
+    - 체결 시점은 시그널 발생 바의 종가(same_close). 라이브는 15:35 실행 후 장후 시간외 종가(ORD_DVSN 06)로 같은 종가에 체결된다.
 """
 
 from dataclasses import dataclass

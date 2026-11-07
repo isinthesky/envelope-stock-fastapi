@@ -219,7 +219,7 @@ class OHLCVCacheScheduler:
                 manager = OHLCVCacheManager(session)
                 policy = CacheRetentionPolicyDTO(
                     retention_days=settings.ohlcv_retention_days,
-                    cleanup_batch_size=1000,
+                    cleanup_batch_size=settings.ohlcv_cleanup_batch_size,
                 )
                 result = await manager.cleanup_old_data(policy, dry_run=False)
 
@@ -241,7 +241,7 @@ class OHLCVCacheScheduler:
             async with get_async_session() as session:
                 service = OHLCVWarmupService(session)
                 result = await service.update_stale_symbols(
-                    freshness_days=3,
+                    freshness_days=settings.ohlcv_warmup_freshness_days,
                     concurrency=3,
                 )
 
@@ -265,7 +265,7 @@ class OHLCVCacheScheduler:
                 manager = OHLCVCacheManager(session)
                 policy = CacheRetentionPolicyDTO(
                     retention_days=settings.ohlcv_retention_days,
-                    cleanup_batch_size=1000,
+                    cleanup_batch_size=settings.ohlcv_cleanup_batch_size,
                 )
                 result = await manager.cleanup_old_data(policy, dry_run=False)
 
@@ -288,7 +288,7 @@ class OHLCVCacheScheduler:
             async with get_async_session() as session:
                 service = OHLCVWarmupService(session)
                 result = await service.update_stale_symbols(
-                    freshness_days=3,
+                    freshness_days=settings.ohlcv_warmup_freshness_days,
                     concurrency=3,
                 )
 

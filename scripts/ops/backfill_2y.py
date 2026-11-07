@@ -2,7 +2,9 @@
 """상위 N종목 2년치 일봉을 KIS에서 받아 DB에 적재 (백테스트용).
 
 전제: retention 730일(config), load_from_api date→datetime 버그 수정 완료.
-Run: ./.venv/bin/python scripts/backfill_2y.py --symbols 100 --days 760 --concurrency 3
+Run:
+  # KIS를 호출하므로 토큰 캐시 볼륨을 공유하는 api 이미지 컨테이너(appuser, HOME=/home/appuser)에서 실행:
+  docker compose run --rm -v "$PWD/scripts":/app/scripts:ro api /app/.venv/bin/python scripts/ops/backfill_2y.py --symbols 100 --days 760 --concurrency 3
 """
 import argparse
 import asyncio

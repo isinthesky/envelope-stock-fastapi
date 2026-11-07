@@ -41,9 +41,7 @@ class StockUniverseModel(Base, BaseModel):
         String(20), nullable=False, unique=True, index=True, comment="종목코드"
     )
 
-    name: Mapped[str] = mapped_column(
-        String(100), nullable=False, comment="종목명"
-    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False, comment="종목명")
 
     market: Mapped[str] = mapped_column(
         String(20), nullable=False, index=True, comment="시장 구분 (KOSPI/KOSDAQ)"
@@ -53,9 +51,7 @@ class StockUniverseModel(Base, BaseModel):
         String(100), nullable=True, index=True, comment="섹터"
     )
 
-    industry: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, comment="산업"
-    )
+    industry: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="산업")
 
     # ==================== 시가총액 & 거래량 ====================
     market_cap: Mapped[Decimal | None] = mapped_column(
@@ -148,14 +144,15 @@ class StockUniverseModel(Base, BaseModel):
 
     @property
     def is_eligible(self) -> bool:
-        """스크리닝 통과 여부"""
-        return (
-            self.is_active
-            and self.is_tradable
-            and not self.is_excluded
-            and self.passed_market_cap is True
-            and self.passed_volume is True
-        )
+        """스크리닝 통과 여부.
+
+        ETF는 저장소 `get_eligible_stocks(market=ETF)`와 같이 활성·거래가능·비제외만 본다
+        (ETF는 시총 데이터가 없어 개별주 기준을 적용하면 항상 False였다).
+        """
+        base = self.is_active and self.is_tradable and not self.is_excluded
+        if self.market == MarketType.ETF.value:
+            return bool(base)
+        return bool(base and self.passed_market_cap is True and self.passed_volume is True)
 
     @property
     def market_cap_in_billion(self) -> float | None:

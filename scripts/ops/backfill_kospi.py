@@ -5,7 +5,9 @@
 올바른 지수 계약: path=inquire-daily-indexchartprice, TR=FHKUP03500100,
 FID_COND_MRKT_DIV_CODE='U', FID_INPUT_ISCD='0001', 필드=bstp_nmix_*.
 
-Run: ./.venv/bin/python scripts/backfill_kospi.py --days 760
+Run:
+  # KIS를 호출하므로 토큰 캐시 볼륨을 공유하는 api 이미지 컨테이너(appuser, HOME=/home/appuser)에서 실행:
+  docker compose run --rm -v "$PWD/scripts":/app/scripts:ro api /app/.venv/bin/python scripts/ops/backfill_kospi.py --days 760
 """
 import argparse
 import asyncio

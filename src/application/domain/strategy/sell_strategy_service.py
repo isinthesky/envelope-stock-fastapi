@@ -2068,7 +2068,7 @@ class SellStrategyService:
         """
         단순 매도 규칙 (사용자 지정, 수정됨 2026-07-31):
         - RSI >= 70 **AND** 하락 시작 확인 (RSI만으로는 선제 매도 안 함)
-        - 최근 20일 고점(일봉 종가) 대비 15% 이탈
+        - 보유 중 최고가 대비 −15% 하드 손절(is_peak_drawdown_stop_triggered) + 장기추세 이탈(MA{long} 대비 sell_trend_stop_pct 하회)
         - 85% 수익 지키기 (peak profit의 85% 보호, 피크 수익 >= 5%일 때만)
         """
         reasons = []
@@ -2158,7 +2158,7 @@ class SellStrategyService:
     ) -> dict:
         """하이브리드: 기존 Legacy Phase + 단순 규칙 (보수적 overlay)
 
-        - 20일 15% 이탈, 85% 수익보호: 기계적 강제 (리스크 관리)
+        - 보유 최고가 대비 −15% 손절·장기추세 이탈, 85% 수익보호(피크 ≥5%): 기계적 강제 (리스크 관리)
         - RSI >=70 + 하락 시작: Legacy가 이미 약한 매도 신호를 낼 때만 업그레이드
         - 전체적으로 Legacy의 보수성을 최대한 유지 (적은 거래 선호)
         """

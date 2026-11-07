@@ -387,7 +387,7 @@ class BacktestService:
 
         final_capital = cash
         total_return = self._percentage_change(initial_capital, final_capital)
-        benchmark_return = self._average_benchmark_return(multi_result)
+        benchmark_return = self._average_benchmark_return(multi_result, prices)
         winning_trades = sum(1 for trade in completed_trades if trade.profit > 0)
         losing_trades = sum(1 for trade in completed_trades if trade.profit < 0)
         total_trades = len(completed_trades)
@@ -588,15 +588,30 @@ class BacktestService:
             return 0.0
         return round(float((final_value - initial_value) / initial_value * Decimal("100")), 2)
 
-    def _average_benchmark_return(self, multi_result: MultiSymbolBacktestResultDTO) -> float:
-        benchmark_returns = [
-            result.benchmark_return
-            for result in multi_result.results.values()
-            if result.benchmark_return is not None
-        ]
-        if not benchmark_returns:
+    def _average_benchmark_return(
+        self,
+        multi_result: MultiSymbolBacktestResultDTO,
+        prices: dict[str, dict[date, Decimal]] | None = None,
+    ) -> float:
+        """종목별 매수후보유(B&H) 수익률의 단순 평균(%) — 같은 기간 균등 보유 기준선.
+
+        엔진은 종목별 ``benchmark_return``을 채우지 않으므로(이전엔 항상 0 → excess=총수익) 종가 시계열의
+        백테스트 기간 첫/마지막 종가로 계산한다. 값이 있으면 그 값을 우선한다.
+        """
+        prices = prices or {}
+        returns: list[float] = []
+        for result in multi_result.results.values():
+            if result.benchmark_return is not None:
+                returns.append(float(result.benchmark_return))
+                continue
+            series = prices.get(result.symbol) or {}
+            start, end = _day(result.start_date), _day(result.end_date)
+            window = [series[d] for d in sorted(series) if start <= d <= end]
+            if len(window) >= 2 and window[0] > 0:
+                returns.append(self._percentage_change(window[0], window[-1]))
+        if not returns:
             return 0.0
-        return round(sum(benchmark_returns) / len(benchmark_returns), 2)
+        return round(sum(returns) / len(returns), 2)
 
     def _calculate_portfolio_mdd(self, equity_points: list[Decimal]) -> float:
         peak = equity_points[0] if equity_points else Decimal("0")

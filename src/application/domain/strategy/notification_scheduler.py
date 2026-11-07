@@ -230,8 +230,11 @@ class NotificationScheduler:
             self.scheduler.start()
             self.is_running = True
             logger.info(
-                "[NotificationScheduler] Started - "
-                "Buy only (sell scheduler removed): 11:20/11:30, 14:20/14:30 (Mon-Fri)"
+                "[NotificationScheduler] Started - buy=%s (11:30/14:30), sell=%s (09:30/12:30), "
+                "jobs=%d (Mon-Fri)",
+                "on" if settings.buy_notification_enabled else "off",
+                "on" if settings.sell_notification_enabled else "off",
+                len(self.scheduler.get_jobs()),
             )
 
         except ImportError:

@@ -8,7 +8,8 @@ walk-forward 검증 하네스가 사용할 데이터를 실 OHLCV로 적재하�
 커버리지 분모는 벤치마크(기본 069500 KODEX 200)의 실제 거래일 달력을 사용한다.
 
 ⚠️ 런타임 전용: KIS 토큰 + Postgres + Redis가 필요하므로 컨테이너에서 실행한다.
-  docker compose exec api python scripts/backfill_universe_with_coverage.py \
+  # KIS를 호출하므로 토큰 캐시 볼륨을 공유하는 api 이미지 컨테이너(appuser, HOME=/home/appuser)에서 실행:
+  docker compose run --rm -v "$PWD/scripts":/app/scripts:ro api /app/.venv/bin/python scripts/ops/backfill_universe_with_coverage.py \
       --start 2019-01-01 --concurrency 3
 
 옵션:
@@ -36,7 +37,8 @@ from src.application.domain.backtest.coverage_gate import (
 from src.application.domain.ohlcv.core_loader import OHLCVCoreLoader
 from src.settings.config import settings
 
-REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
+# 저장소 루트 reports/ (이전: parent.parent = scripts/ → scripts/reports/에 저장되던 버그)
+REPORTS_DIR = Path(__file__).resolve().parents[2] / "reports"
 
 
 async def _load_symbol(sym: str, start, end, write_cache: bool):

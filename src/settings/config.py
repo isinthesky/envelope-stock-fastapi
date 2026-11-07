@@ -181,18 +181,6 @@ class Settings(BaseSettings):
     order_max_amendments_per_order: int = Field(
         default=5, ge=1, description="단일 주문번호당 정정/취소 최대 횟수"
     )
-    risk_max_exposure_per_symbol: float = Field(
-        default=0.08, ge=0.0, le=1.0, description="종목당 최대 계좌 노출 비율"
-    )
-    risk_max_risk_per_trade: float = Field(
-        default=0.02, ge=0.0, le=1.0, description="단일 트레이드 리스크 한도 (계좌 대비)"
-    )
-    risk_max_concurrent_positions: int = Field(
-        default=3, ge=1, description="동시 보유 최대 종목 수"
-    )
-    risk_daily_loss_stop: float = Field(
-        default=0.04, ge=0.0, le=1.0, description="일일 손실 중단 한도 (계좌 대비)"
-    )
 
     # ==================== 자동매매 설정 ====================
     trading_environment: Literal["prod", "vps"] = Field(
@@ -201,14 +189,8 @@ class Settings(BaseSettings):
     auto_reauth: bool = Field(default=True, description="토큰 자동 갱신 여부")
     smart_sleep: float = Field(default=0.1, ge=0.0, description="API 호출 간격 (초)")
 
-    # ==================== 리스크 관리 ====================
-    risk_daily_loss_limit: int = Field(
-        default=1000000, ge=0, description="일일 최대 손실 한도 (원)"
-    )
-    risk_max_positions: int = Field(default=10, ge=1, description="최대 보유 종목 수")
-    risk_max_order_amount: int = Field(
-        default=10000000, ge=0, description="단일 주문 최대 금액 (원)"
-    )
+    # 리스크 한도의 단일 출처는 domain/risk/dto.py(SafetyGuard)와 전략 config(position.max_position_count)다.
+    # 이전 risk_* 설정 7종은 어디서도 참조되지 않아 2026-11-07 제거(.env에 남아 있어도 extra="ignore"로 무해).
 
     # ==================== CORS 설정 ====================
     cors_origins: list[str] = Field(

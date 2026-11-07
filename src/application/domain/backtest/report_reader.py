@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -26,6 +27,8 @@ from src.application.domain.backtest.dto import (
     WalkForwardStatsDTO,
     WalkForwardWindowDTO,
 )
+
+_BASELINE_NAME = re.compile(r"^walk_forward_\d{8}_\d{6}\.json$")
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +66,11 @@ class WalkForwardReportReader:
     def _latest_path(self) -> Path | None:
         if not self._reports_dir.is_dir():
             return None
-        files = sorted(self._reports_dir.glob("walk_forward_*.json"))
+        # 기준선 리포트만: walk_forward_YYYYMMDD_HHMMSS.json. A/B 변형(walk_forward_regime_ab_*,
+        # walk_forward_sector_cap_ab_* 등)은 이름이 사전순으로 뒤라 "최신"으로 잘못 잡히던 문제.
+        files = sorted(
+            p for p in self._reports_dir.glob("walk_forward_*.json") if _BASELINE_NAME.match(p.name)
+        )
         return files[-1] if files else None
 
     def _to_dto(self, raw: dict, path: Path, now: datetime | None) -> WalkForwardReportDTO:

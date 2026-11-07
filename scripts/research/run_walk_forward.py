@@ -7,7 +7,11 @@ P1에서 DB에 적재된 실 OHLCV(98종목)를 backfill 없이 읽어, 검증�
 ⚠️ 런타임 전용: Postgres 접속이 필요하므로 컨테이너에서 실행한다. **KIS API는
 호출하지 않는다**(DB 캐시만 읽음 → 토큰 발급 없음).
 
-  docker compose exec api uv run python scripts/run_walk_forward.py
+  # DB만 읽는 연구 스크립트: compose 네트워크의 일회성 컨테이너에서 실행(api 컨테이너 안 `uv run`은 /app/.venv 쓰기 권한 때문에 실패)
+  docker run --rm --network kis-strategy-alert-server_kis-network -v "$PWD":/work -w /work \
+    -e PYTHONPATH=/work -e UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv \
+    -e DATABASE_URL="$(docker exec kis-strategy-alert-server printenv DATABASE_URL)" \
+    kis-strategy-alert-server-api uv run python scripts/research/run_walk_forward.py --output-dir /work/reports
 
 옵션:
   --coverage    included 종목을 읽을 P1 커버리지 JSON(기본: reports/ 최신)

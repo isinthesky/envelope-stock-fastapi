@@ -22,7 +22,6 @@ from src.application.interface.page.main_page_router import router as main_page_
 from src.application.interface.page.market_data_page_router import (
     router as market_data_page_router,
 )
-from src.application.interface.page.ohlcv_page_router import router as ohlcv_page_router
 from src.application.interface.page.order_page_router import router as order_page_router
 from src.application.interface.page.ops_page_router import router as ops_page_router
 from src.application.interface.page.public_strategy_page_router import (
@@ -69,7 +68,6 @@ mypage_routers = [
     backtest_page_router,
     research_page_router,
     websocket_page_router,
-    ohlcv_page_router,
     access_logs_page_router,
 ]
 
@@ -97,7 +95,6 @@ __all__ = [
     "backtest_page_router",
     "research_page_router",
     "websocket_page_router",
-    "ohlcv_page_router",
     "access_logs_page_router",
     "public_strategy_page_router",
     "mypage_routers",

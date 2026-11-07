@@ -116,7 +116,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if settings.telegram_enabled:
             print(
                 "✅ Telegram notification scheduler started "
-                "(Buy only: 11:20/11:30, 14:20/14:30 (sell scheduler removed))"
+                f"(buy={'on' if settings.buy_notification_enabled else 'off'}: 11:30/14:30, "
+                f"sell={'on' if settings.sell_notification_enabled else 'off'}: 09:30/12:30)"
             )
         else:
             print("⏭️  Telegram notification is disabled")
@@ -130,7 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         ohlcv_scheduler = get_ohlcv_scheduler()
         await ohlcv_scheduler.start()
-        print("✅ OHLCV cache scheduler started (cleanup: 02:00, update: 16:30)")
+        print("✅ OHLCV cache scheduler started (cleanup 02:00, warmup 08:00, update 16:00)")
     except Exception as e:
         print(f"⚠️  OHLCV cache scheduler start failed: {e}")
 
