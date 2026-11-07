@@ -16,11 +16,11 @@ domain/
 ├── admin_auth/           # 관리자 ID/PW 로그인·Redis 세션·실패 잠금 (주문 경로 게이트)
 ├── account/              # 계좌 잔고/포지션 조회
 ├── auth/                 # KIS 인증/토큰/승인키 관리
-├── backtest/             # 백테스트 엔진/데이터 로더
+├── backtest/             # 백테스트 엔진/데이터 로더/walk-forward/라이브 패리티 리플레이
 ├── market_data/          # 현재가/호가/차트 조회
 ├── ohlcv/                # OHLCV 캐시 매니저/워밍업/스케줄러
 ├── order/                # 주문 생성/조회/취소/정정
-├── paper_trade/          # 모의매매
+├── paper_trade/          # 페이퍼 트레이딩 원장/브리지(라이브 스케줄러에 미배선)
 ├── recommendation/       # 추천 후보/룰셋/walk-forward 검증
 ├── risk/                 # 리스크 가드(예: SafetyGuard)
 ├── screener/             # 네이버 기반 가치주 스크리닝
@@ -61,10 +61,11 @@ domain/
 - `data_loader.py`: OHLCV 로더
 - `position_manager.py` / `order_manager.py`: 가상 포지션/주문 관리
 - `service.py`: 백테스트 퍼사드
+- 연구/검증용: `golden_cross_parity.py`(라이브 FSM 리플레이 `GoldenCrossParityReplay`), `portfolio_parity_engine.py`(공유 현금북 포트폴리오), `walk_forward*.py`, `regime_filter.py`(ADX `wilder_adx_series`), `entry_guard.py`(SafetyGuard 백테스트 재현), `state_overlay.py`/`leverage_overlay.py`/`exit_overlay.py`, `cost_schedule.py`, `statistics.py`
 
 ### risk/
 - 재사용되는 리스크 가드 모듈
-- 예: `safety_guard.py` (현재 GoldenCross 엔진에서 사용)
+- `safety_guard.py`: GoldenCross 엔진의 신규 매수 사전 점검. 실효 가드는 **시장 급락**(벤치 당일 수익률 ≤ −2%, 엔진 `_benchmark_change_today`)과 **일 신규 진입 3건 상한**(`record_entry`)뿐이다. 일·주·월 손실/연속 손실 가드와 자체 `max_concurrent_positions`(3)·투자비중 한도는 계좌 상태를 채우지 않아 사실상 비활성 — 최대 보유는 전략 config `position.max_position_count`(5)를 엔진이 직접 적용한다(근거 `reports/entry_guard_eval_20261107.json`). 매도(위험 축소)는 막지 않는다.
 
 ### strategy/
 - `dto.py`: 전략/유니버스/시그널 DTO
@@ -80,7 +81,11 @@ domain/
 - `stock_screener.py`: 종목 스크리닝 기준
 - `signal_evaluator.py` / `presets.py` / `symbol_validation.py`: 시그널 평가/프리셋/심볼 검증
 - `ohlcv_data_loader.py`: DB 캐시 + KIS API OHLCV 로딩
-- `golden_cross_engine.py`, `state_machine.py`: 골든크로스 실행/상태 관리
+- `golden_cross_engine.py`, `state_machine.py`: 골든크로스 실행/상태 관리. 엔진은 kill-switch(`STRATEGY_LIVE_TRADING_ENABLED`) → 직전 주문 대사 → MA drift 점검 → 레짐 게이트(실주문 fail-closed) → 후보(ETF 모드면 활성 ETF 전체, 보유 종목 먼저·종목코드 순) 처리 순이며, 주문은 기본 장후 시간외 종가(`ORD_DVSN 06`)로 접수해 `PENDING`+`order_no`로 남기고 `reconcile_open_orders`(16:10 job)가 `EXECUTED`/`CANCELLED`로 확정한다
+- `market_regime.py`: 시장 국면(ADX) 게이트 공용 모듈 `build_regime_filter`/`market_regime_ok` — 스캔/알림 fail-open, 실주문 fail-closed
+- `risk_contract.py`: 고점 대비 낙폭 손절 계약(`peak_drawdown_ratio` 등) 공용 함수
+- `public_strategy_service.py` / `public_dto.py`: 공개 포털(`/page`, `/api/v1/public/strategies`) 제한형 스캔·매도분석(쿨다운·전역 락)
+- `analysis_history_validation.py`: 분석 이력 검증
 - `scheduler.py`: 전략 실행 스케줄러(`create_async_scheduler`/`register_cron_job` 공용 팩토리)
 - `notification_scheduler.py`: Telegram 알림 스케줄러(wiring) — `alert_builders.py`(payload 조립)·`notification_dedupe.py`(freshness/dedupe)로 분리
 

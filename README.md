@@ -7,8 +7,8 @@
 - 계좌/포지션/주문 조회
 - 골든크로스 기반 매수 후보 스캔
 - 매도 추적 이력/사전 현금화 계획
-- 전략 스케줄러(08:00 유니버스 갱신, 15:35 전략 실행)
-- 알림 스케줄러(09:30/11:30/12:30/14:30 Telegram 알림)
+- 전략 스케줄러(08:00 유니버스 갱신, 15:35 전략 실행, 16:10 주문 체결 대사)
+- 알림 스케줄러(매수 11:30/14:30, 매도 09:30/12:30 Telegram 알림 — `BUY_/SELL_NOTIFICATION_ENABLED`로 on/off, 현재 운영 env는 둘 다 OFF)
 - `/ops` 운영 대시보드와 `/api/v1/ops/*` 운영 요약 API
 
 ## 핵심 운영 포인트
@@ -21,7 +21,7 @@
   - `docs_url=None`
   - `redoc_url=None`
   - `openapi_url=None`
-- `/api/v1/ops/*` 와 `/ops` 는 **IP allowlist 기반 관리자 보호**를 사용합니다.
+- `/api/v1/ops/*` 와 `/ops` 는 전역 로그인 게이트에 더해 **IP allowlist(`AdminAccessDep`/`verify_admin_access`)** 를 거칩니다. 현재 `ADMIN_ALLOWED_IPS`는 전 대역이라 실질 방어선은 로그인 세션입니다.
 - `main.py` 기준 `/mypage/*`는 include-level 관리자 보호를 사용하고, `/page/*` 공개 페이지는 별도로 열어둡니다.
 - 접근 로그는 현재 전체 API가 아니라 **`/page` 공개 경로 중심**으로 수집됩니다.
 - 전략 스케줄러와 알림 스케줄러는 별개입니다.
@@ -41,7 +41,11 @@ kis-strategy-alert-server/
 │   ├── adapters/                   # DB, Redis, KIS, Telegram 연동
 │   └── settings/                   # 설정, 예외 처리, 로깅
 ├── templates/                      # HTML 템플릿
+├── static/                         # 페이지 JS/CSS
+├── docs/base/                      # 아키텍처/서비스/컨벤션 SSoT
 ├── docs/ops/                       # 운영 backlog / README 개편안 / ops 설계 / 운영 루틴
+├── scripts/                        # common/ · research/(오프라인 연구) · ops/(백필·시딩·관리자 해시)
+├── reports/                        # 연구·walk-forward 리포트(api 컨테이너에 마운트)
 ├── tests/                          # pytest 테스트
 ├── docker-compose.yml
 └── README.md
@@ -56,9 +60,11 @@ kis-strategy-alert-server/
 - `GET /api/v1/ops/notification-scheduler-status`
 
 ### 인증/환경
+- `POST /api/v1/admin-auth/login` · `POST /api/v1/admin-auth/logout` · `GET /api/v1/admin-auth/me` (관리자 로그인 세션)
 - `POST /api/v1/auth/token`
 - `POST /api/v1/auth/token/refresh`
 - `GET /api/v1/auth/token/status`
+- `POST /api/v1/auth/websocket/approval`
 - `GET /api/v1/auth/environment`
 
 ### 계좌/주문
@@ -77,6 +83,7 @@ kis-strategy-alert-server/
 - `GET /api/v1/strategies/portfolio-cash-plan`
 - `GET /api/v1/strategies/universe/golden-cross-recommendations`
 - `GET /api/v1/strategies/analysis-history`
+- `POST /api/v1/strategies/{id}/execute` (`dry_run=false`도 `STRATEGY_LIVE_TRADING_ENABLED` kill-switch가 막음)
 
 ### 페이지
 - 공개 페이지: `/page/*`
@@ -118,8 +125,8 @@ TELEGRAM_CHAT_ID=...
 ```
 
 > 토큰은 `kis_token_cache` named volume에 보존되므로 재빌드는 안전합니다.
-> 마운트 경로는 컨테이너 실행 사용자의 `HOME`이 결정합니다 — 현재 배포본은 root 기준 `/root/KIS/config`이고,
-> 아래 「컨테이너 하드닝 적용 절차」를 적용하면 비루트 `uid 10001` 기준 `/home/appuser/KIS/config`가 됩니다.
+> 마운트 경로는 컨테이너 실행 사용자의 `HOME`이 결정합니다 — 하드닝 배포(2026-09-08) 이후 현재 배포본은 비루트 `uid 10001` 기준
+> `/home/appuser/KIS/config`이며, 아래 「컨테이너 하드닝 적용 절차」의 롤백을 하면 root 기준 `/root/KIS/config`로 돌아갑니다.
 > 볼륨 이름은 그대로이므로 토큰 파일은 어느 방향으로도 이동/복사되지 않습니다.
 
 검증:
@@ -144,7 +151,7 @@ curl -fsS http://localhost:${API_PORT:-10131}/health
 | 토큰 캐시 | 파일 35개 mtime·해시 **전부 불변** — 재발급 없음(2회차 재기동으로 확정) |
 | `/health` | `database/redis: connected`, `kis_api: authenticated` |
 | Redis 인증 | 비밀번호 없이 `NOAUTH Authentication required` |
-| 포트 | postgres/redis `127.0.0.1` 전용, api `0.0.0.0`(공개 포털) |
+| 포트 | postgres/redis `127.0.0.1` 전용, api `0.0.0.0`(당시) → 2026-11-06부터 api도 `127.0.0.1:10131` 전용(`API_BIND_HOST`, 외부는 nginx-proxy HTTPS) |
 
 ⚠️ KIS 토큰은 **1일 1회 발급 원칙**입니다. 아래 절차는 장 마감 후 또는 주말에 1회만 수행하고,
 `force_refresh=True`를 임의로 추가하지 않습니다. 재기동 1회차에는 프로세스 시작 시각 기준 토큰 파일이
@@ -180,8 +187,9 @@ docker exec kis-strategy-alert-server sh -c \
 ⚠️ **`git checkout -- <path>` 는 쓰지 마세요.** 그 명령은 index(= 커밋된 내용)로 되돌리므로,
 하드닝이 커밋된 뒤에는 하드닝 버전을 그대로 복원하는 **무동작**이 됩니다(에러도 나지 않습니다).
 그 상태에서 아래 `chown 0:0` 만 적용되면 컨테이너는 `uid 10001` 인데 토큰 캐시는 `root:root 0700` 이 되어
-**토큰 파일을 읽지도 쓰지도 못합니다.** 이때 `auth.py` 의 `_load_token_from_file()` 은 읽기 실패를
-"토큰 없음"으로 삼키고(`except Exception: return None`) 조용히 **새 토큰을 발급**하므로 1일 1회 발급 원칙이 깨집니다.
+**토큰 파일을 읽지도 쓰지도 못합니다.** 이때 `auth.py` 는 토큰 파일 읽기 실패를
+"토큰 없음"으로 삼키고(`_parse_cache_file()` 의 `except Exception: return None`) 조용히 **새 토큰을 발급**하므로 1일 1회 발급 원칙이 깨집니다
+(디렉터리 자체를 못 읽으면 `_load_token_from_file()` 의 `iterdir()` 가 `PermissionError` 로 실패해 토큰 확보가 아예 실패합니다).
 
 하드닝 직전 커밋은 `f12f240`(`Dockerfile`/`docker-compose.yml` 를 마지막으로 변경한 커밋)입니다.
 커밋 전/후 모두에서 동작하도록 SHA 를 명시해 되돌립니다.
@@ -232,7 +240,8 @@ docker exec kis-strategy-alert-server sh -c 'ls -la /root/KIS/config'
 
 ```bash
 curl -fsS http://localhost:${API_PORT:-10131}/health
-curl -fsS http://localhost:${API_PORT:-10131}/api/v1/ops/summary
+# /health 외 API는 로그인 세션 필요: 로그인 응답 쿠키(kis_admin_session)를 저장해 -b 로 전달
+curl -fsS -b cookies.txt http://localhost:${API_PORT:-10131}/api/v1/ops/summary
 ```
 
 `/health`는 DB(`SELECT 1`)·Redis(`ping`)·KIS 토큰 유효성만 보는 연결 수준 점검입니다.
@@ -243,33 +252,39 @@ WebSocket/전략 스케줄/알림 스케줄의 세부 상태는 `/api/v1/ops/sum
 ### 2. 전략 스케줄러 확인
 
 ```bash
-curl -fsS http://localhost:${API_PORT:-10131}/api/v1/strategies/scheduler/status
+curl -fsS -b cookies.txt http://localhost:${API_PORT:-10131}/api/v1/strategies/scheduler/status
 ```
 
-현재 코드 기준 전략 스케줄러는 다음 두 작업을 다룹니다.
+현재 코드 기준 전략 스케줄러(월~금)는 다음 세 작업을 다룹니다.
 
-- `08:00` 유니버스 갱신
-- `15:35` 일일 전략 실행
+- `08:00` 유니버스 갱신(`daily_universe_refresh`)
+- `15:35` 일일 전략 실행(`daily_strategy_execution`, misfire 90초)
+- `16:10` 주문 체결 대사(`daily_order_reconcile`, `STRATEGY_RECONCILE_HOUR/MINUTE`) — 장후 시간외 종가 주문의 `PENDING` 시그널을 `EXECUTED`/`CANCELLED`로 확정
+
+OHLCV 캐시 스케줄러는 별도로 `02:00` 정리·`08:00` 워밍업(매일), `16:00` 증분 업데이트(월~금)를 돈다.
 
 ### 3. 알림 스케줄러 확인
 
 ```bash
-curl -fsS http://localhost:${API_PORT:-10131}/api/v1/ops/notification-scheduler-status
+curl -fsS -b cookies.txt http://localhost:${API_PORT:-10131}/api/v1/ops/notification-scheduler-status
 ```
 
-현재 알림 슬롯:
+알림 슬롯(설정 기본값):
 
-- 매도 알림: `09:30`, `12:30`
-- 매수 알림: `11:30`, `14:30`
+- 매도 알림: `09:30`, `12:30` (`SELL_NOTIFICATION_ENABLED`, 기본 false)
+- 매수 알림: `11:30`, `14:30` (`BUY_NOTIFICATION_ENABLED`, 기본 true)
 - 각 알림 10분 전 데이터 갱신 수행
+- 플래그가 꺼진 종류는 job 자체를 등록하지 않는다. 현재 운영 env는 매수·매도 모두 OFF다.
 
 ### 4. 운영 허브 페이지 확인
 
-브라우저에서 아래 주소를 열면 운영 요약 대시보드를 볼 수 있습니다.
+브라우저에서 아래 주소를 열면(미로그인 시 `/mypage/login/`으로 이동) 운영 요약 대시보드를 볼 수 있습니다.
 
 ```text
-http://localhost:${API_PORT:-10131}/ops
+https://stock.lgetech.co.kr/ops
 ```
+
+> 세션 쿠키가 `Secure`(`ADMIN_SESSION_COOKIE_SECURE=true`)라 `http://localhost:10131`에서는 브라우저 로그인이 유지되지 않을 수 있습니다.
 
 표시 항목:
 - service / env / 거래환경
@@ -298,7 +313,7 @@ http://localhost:${API_PORT:-10131}/ops
 docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -e PYTHONPATH=/work -e UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv kis-strategy-alert-server-api uv run pytest tests/ -q
 ```
 
-현재 확인값: `790 passed, 13 skipped` (2026-09-08 실측, 이전 베이스라인 `731 passed, 13 skipped`).
+현재 확인값: `963 passed, 13 skipped` (2026-11-07 실측, `--no-cov`; 이전 `790 passed, 13 skipped` 2026-09-08).
 
 > 이 이미지는 비루트(`uid 10001`)로 실행되지만 위 명령은 **`--user root` 없이 그대로 동작합니다**
 > (2026-09-08 실측: 794 passed). `UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv`가 venv를 쓰기 가능한
@@ -308,10 +323,11 @@ docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -
 ## 알려진 함정
 
 - ⚠️ 월~금 `15:35` 활성 `golden_cross` 전략 실행은 `STRATEGY_LIVE_TRADING_ENABLED=true`일 때만 실주문한다. 기본값은 `false`이며 운영 검증과 명시적 승인 뒤에만 켠다.
-- ⚠️ **`STRATEGY_LIVE_TRADING_ENABLED`는 서버 전체의 주문 차단기가 아니다.** 강제 지점은 `GoldenCrossEngine.execute`(`domain/strategy/golden_cross_engine.py:137`) **한 곳**뿐이므로, 이 스위치가 막는 것은 전략 자동 실행(15:35 스케줄러)과 `POST /api/v1/strategies/{id}/execute` 경로다. `POST /api/v1/orders`(`order_router` → `OrderService.create_order`)는 이 검사를 전혀 거치지 않는 **별개의 실주문 경로**이며, 관리자 IP allowlist를 통과한 요청은 스위치가 OFF여도 KIS 실전 주문을 낼 수 있다. 즉 실질 방어선은 `ADMIN_ALLOWED_IPS` 범위 + 관리자 로그인 세션(`require_admin_session`)이다.
+- ⚠️ **`STRATEGY_LIVE_TRADING_ENABLED`는 서버 전체의 주문 차단기가 아니다.** 강제 지점은 `GoldenCrossEngine.execute`(`domain/strategy/golden_cross_engine.py`) 첫 분기 **한 곳**뿐이므로, 이 스위치가 막는 것은 전략 자동 실행(15:35 스케줄러)과 `POST /api/v1/strategies/{id}/execute` 경로다. `POST /api/v1/orders`(`order_router` → `OrderService.create_order`)는 이 검사를 전혀 거치지 않는 **별개의 실주문 경로**이며, 관리자 IP allowlist와 로그인 세션을 통과한 요청은 스위치가 OFF여도 KIS 실전 주문을 낼 수 있다. 즉 실질 방어선은 `ADMIN_ALLOWED_IPS` 범위 + 관리자 로그인 세션(`require_admin_session`)이다.
+- ⚠️ 전략 현황(2026-11-07): 골든크로스 전략은 `status=paused`, 연구 결론 **NO-GO**(`reports/research_2026-11-06_summary.md`; state overlay CONDITIONAL, 2x 레버리지 NO-GO는 `docs/plans/*-result.md`). 재개하면 실주문은 장후 시간외 종가(`STRATEGY_ORDER_PRICE_TYPE=closing`, KIS `ORD_DVSN 06`)로 접수되고 16:10 대사로 확정된다. 시장 국면 게이트(`GC_REGIME_FILTER_ENABLED=true`, ADX14≥20, 벤치 069500)는 실주문에서 fail-closed로 신규 매수만 막는다. MA는 55/165 단일 기준(불일치 시 엔진이 `MA drift` 에러 로그).
 - ⚠️ `analysis_history`의 종목코드 칸에는 `MEMO-BROADCAST-1` 같은 메모 행을 넣지 않는다. 파이프라인이 `^[0-9A-Z]{6}$`로 자동 필터하지만, 종목코드 칸은 종목코드 전용이다.
 - ⚠️ 실운영 `KIS_API_RATE_LIMIT=8`은 KIS 실전 한도 `20/s`의 40%로 설정한 보수값이다. `EGW00201`은 `0.5 → 1.0 → 2.0`초 지수 백오프로 최대 3회 재시도한다.
-- ⚠️ 알림은 `09:20/11:20/12:20/14:20` 데이터 갱신 뒤 `09:30/11:30/12:30/14:30`에 전송한다. 20분 내 성공 갱신이 없으면 조용히 skip하고, 동일 시그니처는 6시간 동안 중복 차단한다.
+- ⚠️ 알림은 플래그가 켜진 슬롯만(매수 `11:20→11:30`/`14:20→14:30`, 매도 `09:20→09:30`/`12:20→12:30`) 데이터 갱신 뒤 전송한다(현재 운영 env는 매수·매도 모두 OFF). 20분 내 성공 갱신이 없으면 조용히 skip하고, 동일 시그니처는 6시간 동안 중복 차단한다.
 - ⚠️ 매도 판단 엔진은 3벌(E1 실주문 / E2 화면·API·텔레그램 분석 / E3 백테스트)이고 규칙이 서로 다르다. 각 화면 상단의 엔진 배지로 출처를 확인한다. 상세는 `docs/sell-strategy.md` §1, 화면↔엔진 매핑은 `docs/buy-sell-usage-guide.md` §2.
 - ⚠️ 컨테이너 하드닝(비루트 `uid 10001` 실행 · Redis 비밀번호 필수 · DB/Redis `127.0.0.1` 전용 바인딩)은 2026-09-08에 **적용 완료**됐다. 컨테이너 안에서 `uv run`은 `/app/.venv` 쓰기 실패로 죽으므로 `/app/.venv/bin/<cmd>`를 직접 실행한다(단 위 호스트 테스트 명령은 `UV_PROJECT_ENVIRONMENT`가 `/tmp`를 가리켜 그대로 동작한다). 되돌리려면 「컨테이너 하드닝 적용 절차」의 롤백 순서를 지킨다.
 
@@ -322,14 +338,13 @@ docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -
   - 다만 기록되는 클라이언트 IP는 2026-09-08에 신뢰 프록시 기반 공통 판정(`application/common/client_ip.py`)으로 통일되어, 관리자 IP 검증·공개 스캔 쿨다운·WebSocket 접근 제어와 같은 값을 씁니다.
 - `/api/v1/ops/summary` 는 여러 서비스 호출을 집계하므로, 일부 외부 API 상태가 나쁘면 응답이 느려질 수 있습니다.
 - 애플리케이션 로깅은 `src/settings/logging_config.py`의 `setup_logging()`이 `src/main.py` 최상단에서 적용합니다. `scripts/` CLI 진입점은 아직 이 부트스트랩을 호출하지 않아 백테스트/스캔/백필 실행 시 INFO 로그가 보이지 않습니다.
-- `ADMIN_ALLOWED_IPS`를 전 대역(`0.0.0.0/0`)으로 열어 두면 `/mypage/*`·`/api/v1/ops/*`·`/api/v1/access-logs`의 IP 보호가 무력화됩니다. 운영 `.env` 값을 주기적으로 점검하세요.
+- 현재 운영 `ADMIN_ALLOWED_IPS`는 전 대역(`0.0.0.0/0`, `::/0`)이라 `/mypage/*`·`/api/v1/ops/*`·`/api/v1/access-logs`의 IP 보호는 무력하고, 방어선은 전역 로그인 게이트(관리자 계정 비밀번호 + IP별 5회 실패 시 최대 15분 잠금)뿐입니다.
 
 ## 다음 우선 개발 후보
 
 - `/ops` summary 경량화 및 부분 실패 tolerant aggregation
-- `/mypage/*` route-level 관리자 보호 확대 + `ADMIN_ALLOWED_IPS` 범위 재조정
+- `ADMIN_ALLOWED_IPS` 범위 재조정(로그인 게이트와 이중 방어)
 - access log 범위를 `/api`, `/mypage` 까지 확장
 - `scripts/` CLI 진입점에 `setup_logging()` 배선
-- 사용하지 않는 JWT 의존성(`python-jose`, `passlib[bcrypt]`) 제거 및 `uv.lock` 재생성 — 설정은 이미 제거됨
 - notification scheduler 결과 이력 영속화
 - README와 운영 문서의 지속 동기화

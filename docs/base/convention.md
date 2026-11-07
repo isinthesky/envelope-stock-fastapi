@@ -1,5 +1,9 @@
 # 한국투자증권 OpenAPI 코드 컨벤션
 
+> **적용 범위**: 아래 「폴더/파일 명명 규칙」·「한줄호출함수/체크함수」는 KIS 샘플 코드(`examples/examples_llm/<카테고리>/<api>/<api>.py` + `chk_<api>.py`, `examples/examples_user/`)에 적용한다.
+> 서버 코드(`src/`)는 KIS REST 경로별 파일을 만들지 않고 `src/adapters/external/kis_api/client.py`(`KISAPIClient`)를 도메인 서비스가 호출하는 구조이며, 레이어 규칙은 `src/**/CLAUDE.md`를 따른다.
+> 네이밍·주석·타입·import·에러 처리 규칙은 양쪽 모두에 적용한다.
+
 
 ## 정의
 - 한줄호출함수: 사용자 코드에 import 해서 한줄로 API를 실행할 수 있도록 만들어 주는 함수들이 담긴 파일이다
@@ -110,3 +114,9 @@ url: /uapi/domestic-stock/v1/quotations/comp-program-trade-daily
 ## 에러 처리
 - try-except 블록을 사용하되, 구체적인 예외 타입을 명시할 것
 - 중요한 이벤트, 에러, 상태 변경 등을 “logging” 을 사용하여 기록 할 것
+
+
+## 코드 스타일/테스트 도구 (`pyproject.toml` 기준)
+- Black·isort: line-length 100, isort `profile = "black"`
+- mypy: `disallow_untyped_defs`/`disallow_incomplete_defs`/`check_untyped_defs` + pydantic 플러그인(테스트는 untyped def 허용)
+- pytest: `asyncio_mode = "auto"`, 기본 `--cov=src`; 전체 실행은 루트 `CLAUDE.md`의 docker 명령을 사용

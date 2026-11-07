@@ -14,6 +14,7 @@ application/
   interface/
     api/          # REST/WS 라우터
     page/         # Jinja2 페이지 라우터
+    admin_session_gate.py  # 전역 관리자 로그인 게이트 미들웨어
   domain/         # 서비스/엔진/스케줄러 + 서브도메인 패키지들
   common/         # DTO/DI/데코레이터/유틸
 ```

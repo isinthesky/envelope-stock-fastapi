@@ -8,13 +8,14 @@ framework-free and route-free.
 ```text
 domain/
 |-- access_log/    # access log query, stats, retention cleanup
+|-- admin_auth/    # admin ID/PW login, Redis session, IP lockout (fail-closed)
 |-- account/       # balance and position use cases
 |-- auth/          # KIS token and approval-key use cases
-|-- backtest/      # simulation engine, data loader, order/position managers
+|-- backtest/      # simulation engine, data loader, order/position managers, walk-forward, live-parity replay
 |-- market_data/   # current price, orderbook, candles
 |-- ohlcv/         # cache manager, warmup/core loaders, scheduler
 |-- order/         # order lifecycle and pacing/risk workflow
-|-- paper_trade/   # paper trading
+|-- paper_trade/   # paper ledger/bridge (not wired to the live scheduler)
 |-- recommendation/ # candidate scan, rule sets, walk-forward validation
 |-- risk/          # reusable guards such as SafetyGuard
 |-- screener/      # Naver/value stock screening
@@ -32,6 +33,9 @@ domain/
 | Telegram/ops alerts | `strategy/notification_scheduler.py` | wiring; payloads in `alert_builders.py`, dedupe in `notification_dedupe.py` |
 | OHLCV cache warmup | `ohlcv/warmup_service.py`, `ohlcv/core_loader.py` | KIS paging and freshness policy |
 | Backtest facade | `backtest/service.py` | wraps engine and result summaries |
+| Live golden-cross execution | `strategy/golden_cross_engine.py` | kill-switch, regime gate, closing-auction orders, `reconcile_open_orders` |
+| Market regime gate | `strategy/market_regime.py` | shared ADX gate; scan/alerts fail-open, live fail-closed |
+| Risk guard | `risk/safety_guard.py` | effective: market-crash (-2%) and daily entry cap 3; other limits inert |
 | Order operations | `order/service.py` | KIS order calls and repository updates |
 | Common indicators | `../common/indicators.py` | shared technical indicators, not strategy-only |
 | Access log use cases | `access_log/service.py` | owns its own session via `@transaction`; called from `api/access_log_router.py` |

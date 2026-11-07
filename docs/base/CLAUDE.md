@@ -15,8 +15,8 @@
   - 서비스/유즈케이스 구현 가이드(예: Domain Service에서 정책 결정, Adapter에서 I/O)
   - Repository/Client 조합 방식, 예외 변환, 응답/DTO 계약
 - **`convention.md`**
-  - 모듈/파일 네이밍, 경로 규칙(특히 KIS REST path ↔ adapter 파일명 매핑)
-  - 코드 스타일/테스트 규칙(Black/isort/mypy/pytest)
+  - 모듈/파일 네이밍, 경로 규칙(KIS REST path ↔ `examples/` 샘플 폴더/파일명 매핑 — 서버 `src/`는 경로별 파일을 만들지 않음)
+  - 코드 스타일/테스트 규칙(Black/isort/mypy/pytest, `pyproject.toml` 기준)
 
 ## 문서 작성/갱신 규칙
 - **문서의 “사실”은 코드가 기준**: 폴더/클래스/함수명은 실제 경로와 일치해야 함
@@ -29,5 +29,6 @@
 ## 빠른 네비게이션
 - 프로젝트 개요: `/<repo>/CLAUDE.md`
 - 소스 엔트리포인트/라우터: `src/CLAUDE.md`
-- 레이어별 상세: `src/**/CLAUDE.md`
+- 레이어별 상세: `src/**/CLAUDE.md`, 에이전트용 요약: `AGENTS.md`, `src/**/AGENTS.md`, `tests/AGENTS.md`, `scripts/AGENTS.md`
+- 운영 문서: `README.md`, `docs/ops/`
 

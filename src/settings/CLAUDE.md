@@ -30,8 +30,9 @@ settings/
 - 앱/서버 (`app_name`, `app_version`, `env`, `host`, `port`)
 - DB/Redis (`database_url`, `redis_url`, `redis_max_connections`)
 - 캐시 TTL (`cache_ttl_*`, `cache_retention_*`)
+- OHLCV 캐시 (`ohlcv_cache_freshness_days`, `ohlcv_warmup_freshness_days`, `ohlcv_retention_days`(기본 3650 — 줄이면 02:00 정리 job이 2018~ 연구 데이터를 지운다), `ohlcv_max_api_days_per_call`(≤100))
 - KIS 인증/URL/Rate Limit (`kis_*`, `kis_api_*`, `order_*`)
-- 거래 환경/리스크 (`trading_environment`, `risk_*`)
+- 거래 환경 (`trading_environment`, `auto_reauth`, `smart_sleep`) — 리스크 한도는 `domain/risk/dto.py`(SafetyGuard)와 전략 config가 담당(`risk_*` 설정은 2026-11-07 제거)
 - CORS/로깅 (`cors_*`, `log_level`, `log_to_file`, `log_file`, `log_max_bytes`, `log_backup_count`)
   - 실제 적용은 `logging_config.setup_logging()` 이 하며 `src/main.py` 최상단에서 호출된다(라우터/서비스 import 보다 앞).
   - 콘솔(stdout) 핸들러는 항상 유지, 파일 핸들러는 `log_to_file=true` 일 때만 추가된다(컨테이너는 별도 볼륨 마운트 필요).
@@ -39,15 +40,21 @@ settings/
   - `sqlalchemy.engine` 도 같은 pin 을 걸지만 **기본 경로만 막을 뿐 `DATABASE_ECHO=true` 는 이 설정을 우회한다.** SQLAlchemy 는 `create_async_engine(echo=True)` 일 때 `InstanceLogger.log()` 가 로거 레벨 검사를 건너뛰고 `logger._log()` 를 직접 호출하며 자체 stdout 핸들러까지 붙이므로, SQL 전문과 바인드 파라미터(주문 수량/가격, 계좌번호)가 그대로 출력된다. 실계좌(`TRADING_ENVIRONMENT=prod`) 환경에서는 `DATABASE_ECHO` 를 켜지 않는다.
   - ⚠️ JWT 설정(`jwt_*`)은 구현된 적 없는 예정 기능이었고 2026-09-08에 `config.py`와 `.env.example`에서 제거됐다. `extra="ignore"` 때문에 `.env` 에 `JWT_*` 가 남아 있어도 무해하다.
 - 관리자 접근 제어/프록시 신뢰 (`admin_allowed_ips`, `trusted_proxy_ips`, `enable_admin_strategy_routes`)
-  - `trusted_proxy_ips` 기본값은 `["127.0.0.0/8", "::1/128"]` 이며 `application/common/client_ip.py` 가 단일 출처로 소비한다.
+  - `trusted_proxy_ips` 기본값은 `["127.0.0.0/8", "::1/128"]` 이며 `application/common/client_ip.py` 가 단일 출처로 소비한다. 운영은 nginx-proxy 경유 연결이 kis-network 게이트웨이 `172.18.0.1`로 보이므로 이를 추가해 둔다.
+- 관리자 로그인 (`admin_username`, `admin_password_hash`(scrypt), `admin_session_ttl_seconds`(43200), `admin_session_cookie_secure`(기본 False, 운영 HTTPS는 true), `admin_login_max_failures`(5), `admin_login_lockout_seconds`(900)) — 아이디/해시 중 하나라도 비면 로그인 비활성(fail-closed)
 - 대시보드/WS/uvicorn/Telegram (`dashboard_*`, `ws_*`, `uvicorn_*`, `telegram_*`)
-- 전략 실행/유니버스 스케줄 (`strategy_execution_hour/minute`, `strategy_execution_misfire_grace_seconds`(≥1), `universe_refresh_hour/minute`)
-- 전략 실행 경로 kill-switch (`strategy_live_trading_enabled`, env `STRATEGY_LIVE_TRADING_ENABLED`, 기본 `False`) — 강제 지점은 `domain/strategy/golden_cross_engine.py:137` 한 곳이다.
+- 매수 전략/레짐/ETF (`gc_short_ma_period`/`gc_long_ma_period` 기본 55/165, `gc_regime_*`(필터 기본 OFF·mode `adx`·ADX14≥20·벤치 `069500`, 운영 env는 ON), `etf_universe_enabled`/`etf_universe_symbols`(221종), `gc_require_rsi_oversold`/`gc_rsi_threshold`, `fear_buy_*`, `sell_regime_aware_enabled`, `sell_trend_stop_pct`)
+- 전략 실행/유니버스 스케줄 (`strategy_execution_hour/minute` 15:35, `strategy_execution_misfire_grace_seconds`(기본 90, ≥1), `strategy_reconcile_hour/minute` 16:10, `universe_refresh_hour/minute` 08:00)
+- 전략 실주문 체결 모델 (`strategy_order_price_type`: 기본 `closing`=장후 시간외 종가 `ORD_DVSN 06` | `limit`, `live_commission_rate` 0.00015 — 실현손익 추정용)
+- 전략 실행 경로 kill-switch (`strategy_live_trading_enabled`, env `STRATEGY_LIVE_TRADING_ENABLED`, 기본 `False`) — 강제 지점은 `GoldenCrossEngine.execute`(`domain/strategy/golden_cross_engine.py`) 첫 분기 한 곳이다.
   - ⚠️ **서버 전체의 실주문 차단기가 아니다.** 이 스위치가 덮는 범위는 골든크로스 엔진을 타는 경로(15:35 스케줄러 실행, `POST /api/v1/strategies/{id}/execute`)뿐이다.
   - `POST /api/v1/orders`(`interface/api/order_router.py` → `domain/order/service.py`)는 이 검사를 거치지 않고 KIS `order-cash`(`TTTC0802U`/`TTTC0801U`)를 직접 호출하는 **별개의 실주문 경로**이며, 보호 장치는 `AdminAccessDep`(`ADMIN_ALLOWED_IPS` + 쓰기용 `X-Requested-With` 헤더)와 관리자 로그인 세션(`ADMIN_USERNAME`/`ADMIN_PASSWORD_HASH`, 미설정 시 fail-closed)이다. 스위치를 "마스터"로 서술하지 말 것.
-- 알림 스케줄러 (`buy_notification_slots`/`sell_notification_slots`(시/분 범위 validator), `etf_leader_map`, `buy_notification_stoch_threshold`, `buy_notification_top_n`/`top_industries_n`/`scan_limit`)
+- 알림 스케줄러 (`buy_notification_enabled`(기본 True)/`sell_notification_enabled`(기본 False) — 꺼지면 해당 job 미등록, `buy_notification_slots`/`sell_notification_slots`(시/분 범위 validator), `etf_leader_map`, `buy_notification_stoch_threshold`, `buy_notification_top_n`/`top_industries_n`/`scan_limit`)
+- 공개 포털 (`public_strategy_*`, `public_sell_analysis_*`: 스캔 상한·동시성·IP 쿨다운·전역 락·스냅샷 TTL)
+- DART (`dart_open_api_key`, `dart_api_*`)
 
 > 매도 점수 관련 설정(가중치·거래량 구간·개인수급/신용 피크 임계값)은 `sell_score_settings.py`의 `SellScoreSettings`/`PeakRuleThresholds`에 있다.
+> Stage 임계값 SSOT도 여기다: `reduce_1_threshold` 28 / `reduce_2_threshold` 49 / `exit_all_threshold` 70(2026-11-06 분모 수정 후 분위수 매칭으로 30/50/70에서 재보정).
 
 > `PeakRuleThresholds.personal_strong_gate_ratio`(0.15)와 `SellScoreSettings.personal_buy_ratio_high`(0.20)는 **drift가 아니라 서로 다른 판정기**다.
 > 전자는 peak 규칙 성립 여부를 가르는 이진 게이트, 후자는 매도 점수 티어 경계다. 통일하면 라이브 매도 Stage 판정이 바뀐다.
@@ -60,6 +67,8 @@ settings/
 - `current_kis_app_key`, `current_kis_app_secret`, `current_kis_account_no`
 
 ### Validators
+- 골든크로스 MA 기간 검증(`gc_short_ma_period < gc_long_ma_period`)
+- 알림 슬롯 시(0~23)/분(0~59) 범위 검증
 - 계좌번호 길이 검증(8자리)
 - 상품 코드 유효성 검증
 - `DATABASE_URL`을 asyncpg 드라이버로 자동 보정

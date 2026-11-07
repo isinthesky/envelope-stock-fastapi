@@ -1,401 +1,150 @@
-# 증권 자동매매 API 서버 서비스 구현 가이드
+# 증권 전략·알림 서버 서비스 구현 가이드
 
-> **증권 자동매매 서비스**의 도메인별 구현 규칙 및 개발 가이드
+> **KIS Strategy & Alert Server**의 도메인별 구현 규칙 및 개발 가이드 (현재 코드 기준, 2026-11-07 재동기화)
 
 ## 📋 프로젝트 개요
 
 ### 서비스 정보
 - **서비스명**: KIS Strategy & Alert Server
-- **포트**: 8000 (개발), 8080 (운영)
+- **포트**: 컨테이너 내부 `8000`(`settings.port`), 호스트 `127.0.0.1:10131`(`API_BIND_HOST`/`API_PORT`). 외부 접근은 `https://stock.lgetech.co.kr`(nginx-proxy)만
 - **역할**: 한국투자증권 Open API 기반 전략 실행 및 알림 서비스
-- **기술스택**: FastAPI, PostgreSQL, SQLAlchemy(async), Redis, WebSocket, UV
+- **기술스택**: FastAPI, PostgreSQL + SQLAlchemy(async, asyncpg) + Alembic, Redis, httpx, APScheduler, Jinja2, UV
 
 ### 주요 기능
-- ✅ **다중 상품 거래** - 국내/해외 주식, 선물옵션, 채권, ETF 등
-- ✅ **실시간 시세** - WebSocket 기반 실시간 호가/체결 정보
-- ✅ **자동매매 전략** - 조건 기반 자동 주문 실행
-- ✅ **계좌 관리** - 잔고, 포지션, 손익 분석
-- ✅ **리스크 관리** - 손실 제한, 포지션 관리
-- ✅ **대시보드** - 실시간 모니터링 및 관리
+- ✅ **골든크로스 전략** — 매수 스캔/추천, FSM 기반 실행 엔진(실주문은 kill-switch로 기본 차단, 현재 전략 `paused`)
+- ✅ **매도 분석** — `ScoreRule` 파이프라인 점수 → Stage(REDUCE_1 28 / REDUCE_2 49 / EXIT_ALL 70)
+- ✅ **계좌/주문** — 잔고·포지션 조회, 수동 주문(관리자 로그인 필요)
+- ✅ **알림** — Telegram 매수/매도 알림 슬롯(플래그로 on/off)
+- ✅ **검증** — 백테스트, walk-forward, 라이브 패리티 리플레이
+- ✅ **대시보드** — `/mypage/*`·`/ops`(관리자), `/page/*`(공개 포털)
 
 ---
 
 ## 🏛️ 아키텍처 개요
 
-### 헥사고날 아키텍처 + 현대적 패턴
+### 헥사고날 아키텍처
 
 ```
 📁 src/
-├── 🔌 adapters/           # 외부 시스템 연동
-│   ├── database/          # Repository + Models
-│   ├── external/          # KIS API + WebSocket
-│   └── cache/             # Redis 캐시
-├── 🏢 application/        # 애플리케이션 로직
-│   ├── common/            # 공통 유틸리티와 패턴
-│   │   ├── base_repository.py    # BaseRepository 패턴
-│   │   ├── dependencies.py       # 통합 의존성 관리
-│   │   └── context.py            # @transaction 등
-│   ├── domain/            # 도메인별 서비스 + DTO
-│   │   ├── auth/          # 인증 관리
-│   │   ├── order/         # 주문 처리
-│   │   ├── account/       # 계좌 관리
-│   │   ├── market_data/   # 시세 관리
-│   │   ├── strategy/      # 전략 실행
-│   │   └── websocket/     # 실시간 데이터
-│   └── interface/         # API + WebSocket 라우터
-└── ⚙️  settings/           # 환경 설정
+├── 🔌 adapters/           # 외부 시스템 연동(순수 I/O)
+│   ├── database/          # connection.py, models/, repositories/(BaseRepository + Mixin)
+│   ├── external/          # kis_api/, websocket/, telegram/, naver/, dart_api/, krx/, kofia_client.py
+│   └── cache/             # redis_client.py
+├── 🏢 application/
+│   ├── common/            # dto.py, dependencies.py, decorators.py(@transaction 등), exceptions.py, ...
+│   ├── domain/            # access_log, account, admin_auth, auth, backtest, market_data, ohlcv,
+│   │                      # order, paper_trade, recommendation, risk, screener, strategy
+│   └── interface/         # api/(REST·WS), page/(Jinja2), admin_session_gate.py
+└── ⚙️  settings/           # config.py, sell_score_settings.py, logging_config.py, exception_handlers.py
 
 📁 templates/              # Jinja2 템플릿 (대시보드)
 📁 static/                 # 정적 파일 (CSS/JS)
 ```
 
+> WebSocket은 별도 도메인이 아니라 `adapters/external/websocket/` + `interface/api/websocket_router.py`로 구성됩니다.
+
 ### 핵심 아키텍처 패턴
-- **BaseRepository Pattern**: Mixin 기반 중복 제거 (40% 코드 감소)
-- **통합 Service Pattern**: 복잡한 비즈니스 로직을 Service에서 통합 처리
-- **@transaction 데코레이터**: 외부 호출 메서드만 적용, 내부 헬퍼는 분리
-- **Session 관리 단순화**: Service layer만 session 관리
-- **KIS API Client 분리**: 인증/API/WebSocket 계층 분리
-- **Event-Driven**: 시세 변동, 체결 알림 등 이벤트 기반 처리
-- **Async/Await**: 비동기 처리로 동시성 향상
-- **Connection Pooling**: HTTP/WebSocket 연결 재사용
+- **BaseRepository Pattern**: `BaseRepository[Model]` + `SearchableMixin`/`PaginationMixin`/`StatsMixin`
+- **Facade Service**: `StrategyService`는 CRUD/분석 이력 facade, 유니버스·추천·현금계획은 협력 서비스에 위임
+- **@transaction 데코레이터**: 외부 호출 public 메서드에만 적용(세션 생성·commit/rollback)
+- **KIS API Client 분리**: `KISAuth`(토큰) / `KISAPIClient`(REST·레이트리밋) / `KISWebSocket`
+- **스케줄러 기반 처리**: APScheduler(KST, coalesce, 기본 misfire 300초)로 전략·알림·OHLCV 작업 실행
+- **Async/Await**: 모든 I/O 비동기
 
 ---
 
 ## 🎯 도메인별 구현 가이드
 
-### 1. Auth Domain (인증 관리)
+### 1. Auth / AdminAuth Domain (인증)
 
 #### 핵심 기능
-- OAuth2 기반 토큰 발급 및 갱신
-- 실전/모의 환경 전환
-- 토큰 자동 갱신 (24시간 유효)
-
-#### Service 구현 패턴
-```python
-from adapters.external.kis_api import KISAPIClient
-from application.common.decorators import transaction
-
-class AuthService:
-    def __init__(self, kis_client: KISAPIClient):
-        self.kis_client = kis_client
-
-    @transaction
-    async def get_access_token(self, app_key: str, app_secret: str) -> str:
-        """접근 토큰 발급"""
-        token = await self.kis_client.get_token(app_key, app_secret)
-        # Redis에 토큰 캐싱 (24시간)
-        await self.cache_token(token)
-        return token
-
-    async def auto_refresh_token(self):
-        """토큰 자동 갱신 (백그라운드 작업)"""
-        # 만료 1시간 전 자동 갱신
-        pass
-```
+- KIS 접근 토큰 발급/재사용(`AuthService` → `KISAuth`): 1일 1회 발급 원칙, 캐시 디렉터리의 `KIS{YYYYMMDD}` 파일 중 유효·최장 만료 토큰 재사용, 만료는 KST aware
+- WebSocket 승인키 발급
+- 관리자 로그인(`AdminAuthService`): scrypt 해시 검증(`common/password_hash.py`), Redis 세션(SHA-256 키, 절대 TTL 12h), IP별 5회 실패 시 잠금, 미설정·Redis 장애 시 fail-closed
 
 #### API 엔드포인트
-- `POST /api/v1/auth/token` - 토큰 발급
-- `POST /api/v1/auth/refresh` - 토큰 갱신
-- `PUT /api/v1/auth/environment` - 환경 전환 (실전/모의)
+- `POST /api/v1/auth/token` — 토큰 발급
+- `POST /api/v1/auth/token/refresh` — 토큰 갱신
+- `GET /api/v1/auth/token/status` — 토큰 상태
+- `POST /api/v1/auth/websocket/approval` — 승인키
+- `GET /api/v1/auth/environment` — 거래 환경 조회(전환 API 없음, `TRADING_ENVIRONMENT`로 결정)
+- `POST /api/v1/admin-auth/login` · `POST /logout` · `GET /me` — 관리자 세션
 
 ---
 
 ### 2. Order Domain (주문 처리)
 
 #### 핵심 기능
-- 매수/매도 주문 생성
-- 주문 정정/취소
-- 체결 상태 추적
-- 주문 내역 조회
-
-#### Service 구현 패턴
-```python
-class OrderService:
-    def __init__(
-        self,
-        order_repo: OrderRepository,
-        account_repo: AccountRepository,
-        kis_client: KISAPIClient
-    ):
-        self.order_repo = order_repo
-        self.account_repo = account_repo
-        self.kis_client = kis_client
-
-    @transaction
-    async def create_order(
-        self,
-        account_id: str,
-        symbol: str,
-        order_type: str,  # "buy" or "sell"
-        quantity: int,
-        price: Optional[int] = None  # None = 시장가
-    ) -> Order:
-        """주문 생성 및 KIS API 전송"""
-        # 1. 계좌 잔고 확인
-        account = await self.account_repo.get_by_id(account_id)
-
-        # 2. 주문 가능 여부 검증
-        await self._validate_order(account, symbol, quantity, price)
-
-        # 3. KIS API 주문 전송
-        kis_order_result = await self.kis_client.place_order(
-            account_no=account.account_no,
-            symbol=symbol,
-            order_type=order_type,
-            quantity=quantity,
-            price=price
-        )
-
-        # 4. DB에 주문 저장
-        order = Order(
-            account_id=account_id,
-            symbol=symbol,
-            order_type=order_type,
-            quantity=quantity,
-            price=price,
-            order_no=kis_order_result["order_no"],
-            status="pending"
-        )
-        await self.order_repo.create(order)
-
-        return order
-
-    async def _validate_order(self, account, symbol, quantity, price):
-        """주문 가능 여부 검증"""
-        # 매수력, 리스크 제한 등 검증
-        pass
-```
+- 현금 주문(`OrderService.create_order` → KIS `order-cash`, 실전 `TTTC0802U`/`TTTC0801U`), 가격 유형 `limit`/시장가/`closing`(장후 시간외 종가 `ORD_DVSN 06`)
+- 주문 조회·목록, 취소, 정정, 체결 상태 갱신(`inquire-daily-ccld`)
+- ⚠️ 이 경로는 전략 kill-switch(`STRATEGY_LIVE_TRADING_ENABLED`)를 거치지 않는다 — 보호는 로그인 세션(`require_admin_session`) + `AdminAccessDep`
 
 #### API 엔드포인트
-- `POST /api/v1/orders` - 주문 생성
-- `PUT /api/v1/orders/{id}/modify` - 주문 정정
-- `DELETE /api/v1/orders/{id}/cancel` - 주문 취소
-- `GET /api/v1/orders/{id}` - 주문 조회
-- `GET /api/v1/orders` - 주문 목록 조회
+- `POST /api/v1/orders` — 주문 생성
+- `GET /api/v1/orders` — 주문 목록
+- `GET /api/v1/orders/{order_id}` — 주문 조회
+- `PATCH /api/v1/orders/{order_id}` — 주문 정정
+- `POST /api/v1/orders/{order_id}/cancel` — 주문 취소
+- `POST /api/v1/orders/{order_id}/refresh-status` — 체결 상태 갱신
 
 ---
 
 ### 3. Account Domain (계좌 관리)
 
 #### 핵심 기능
-- 계좌 잔고 조회
-- 보유 포지션 관리
-- 손익 분석
-- 거래 내역 조회
-
-#### Service 구현 패턴
-```python
-class AccountService:
-    def __init__(
-        self,
-        account_repo: AccountRepository,
-        position_repo: PositionRepository,
-        kis_client: KISAPIClient,
-        cache: RedisCache
-    ):
-        self.account_repo = account_repo
-        self.position_repo = position_repo
-        self.kis_client = kis_client
-        self.cache = cache
-
-    @transaction
-    async def get_balance(self, account_id: str) -> AccountBalance:
-        """계좌 잔고 조회 (캐싱)"""
-        # 1. Redis 캐시 확인
-        cached = await self.cache.get(f"balance:{account_id}")
-        if cached:
-            return AccountBalance(**cached)
-
-        # 2. KIS API 조회
-        account = await self.account_repo.get_by_id(account_id)
-        kis_balance = await self.kis_client.get_balance(account.account_no)
-
-        # 3. Redis에 캐싱 (30초 TTL)
-        await self.cache.set(
-            f"balance:{account_id}",
-            kis_balance,
-            ttl=30
-        )
-
-        return AccountBalance(**kis_balance)
-
-    @transaction
-    async def get_positions(self, account_id: str) -> List[Position]:
-        """보유 포지션 조회"""
-        positions = await self.position_repo.get_by_account(account_id)
-
-        # 현재가 조회 및 평가손익 계산
-        for position in positions:
-            current_price = await self._get_current_price(position.symbol)
-            position.calculate_pnl(current_price)
-
-        return positions
-```
+- 잔고: 합계는 주식잔고조회(TTTC8434R) `output2`, 주문가능현금은 매수가능조회(TTTC8908R) `ord_psbl_cash`(`available_amount`)
+- 보유 포지션 조회, Redis 캐시(`cache_ttl_account` 30초, 엔진은 `use_cache=False`)
 
 #### API 엔드포인트
-- `GET /api/v1/accounts/{id}/balance` - 잔고 조회
-- `GET /api/v1/accounts/{id}/positions` - 포지션 조회
-- `GET /api/v1/accounts/{id}/pnl` - 손익 분석
-- `GET /api/v1/accounts/{id}/transactions` - 거래 내역
+- `GET /api/v1/accounts/balance` — 잔고 조회
+- `GET /api/v1/accounts/positions` — 포지션 조회
 
 ---
 
-### 4. MarketData Domain (시세 관리)
+### 4. MarketData / OHLCV Domain (시세)
 
 #### 핵심 기능
-- 현재가 조회
-- 호가 정보 조회
-- 차트 데이터 조회
-- 시세 캐싱
-
-#### Service 구현 패턴
-```python
-class MarketDataService:
-    def __init__(
-        self,
-        kis_client: KISAPIClient,
-        cache: RedisCache
-    ):
-        self.kis_client = kis_client
-        self.cache = cache
-
-    async def get_current_price(self, symbol: str) -> MarketPrice:
-        """현재가 조회 (캐싱)"""
-        # 1. Redis 캐시 확인 (5초 TTL)
-        cached = await self.cache.get(f"price:{symbol}")
-        if cached:
-            return MarketPrice(**cached)
-
-        # 2. KIS API 조회
-        kis_price = await self.kis_client.get_price(symbol)
-
-        # 3. Redis에 캐싱
-        await self.cache.set(f"price:{symbol}", kis_price, ttl=5)
-
-        return MarketPrice(**kis_price)
-
-    async def get_orderbook(self, symbol: str) -> OrderBook:
-        """호가 정보 조회"""
-        kis_orderbook = await self.kis_client.get_orderbook(symbol)
-        return OrderBook(**kis_orderbook)
-```
+- 현재가·호가·차트(`MarketDataService`, Redis TTL: 시세 5초, 호가 스냅샷 15초, 일봉 86400초, 분봉 900초)
+- 일봉 DB 캐시(`OHLCVRepository`, 로더 `OHLCVDataLoader`): KIS 1콜 100행 제한으로 청크 조회, 15:31 KST 전 당일 일봉은 저장하지 않음, 보존 3650일
+- OHLCV 스케줄러: 정리 02:00, 워밍업 08:00, 증분 16:00(월~금)
 
 #### API 엔드포인트
-- `GET /api/v1/market/price/{symbol}` - 현재가 조회
-- `GET /api/v1/market/orderbook/{symbol}` - 호가 조회
-- `GET /api/v1/market/chart/{symbol}` - 차트 데이터
+- `GET /api/v1/market/price/{symbol}` — 현재가 조회
+- `GET /api/v1/market/orderbook/{symbol}` — 호가 조회
+- `GET /api/v1/market/chart/{symbol}` — 차트 데이터
 
 ---
 
-### 5. Strategy Domain (전략 실행)
+### 5. Strategy Domain (전략)
 
 #### 핵심 기능
-- 자동매매 전략 생성
-- 조건 검증 및 실행
-- 전략 상태 관리
-- 리스크 관리
+- **실행 엔진**(`GoldenCrossEngine.execute`): kill-switch → 직전 주문 대사 → MA drift 경고(55/165 단일 기준) → 벤치 당일 수익률(급락 가드 −2%) → 시장 국면 게이트(ADX14≥20, 실주문 fail-closed, 신규 매수만 차단) → 후보(ETF 모드: 활성 거래가능 ETF 전체, 보유 종목 먼저·종목코드 순) → FSM 전이 → 최대 보유 5 / `SafetyGuard`(일 신규 진입 3) → 주문 접수(`PENDING`+`order_no`)
+- **체결 대사**(`reconcile_open_orders`, 16:10 job 및 다음 실행 시작 시): `EXECUTED`(실제 체결가·수량, 매도는 비용 반영 실현손익, ETF 매도세 면제) 또는 `CANCELLED`(매수 → WAITING, 매도 → 브로커 잔고 기준 IN_POSITION)
+- **매수 스캔/추천**(`BuyStrategyService`, `RecommendationService`), **매도 분석**(`SellStrategyService` + `sell_score_rules.py`), **유니버스 갱신**(`UniverseService`), **현금화 계획**(`PortfolioCashPlanner`), **알림**(`NotificationScheduler`)
+- **스케줄러**(`StrategyScheduler`, 월~금): 08:00 유니버스, 15:35 전략 실행(`status=active`만, misfire 90초), 16:10 대사
 
-#### Service 구현 패턴
-```python
-class StrategyService:
-    def __init__(
-        self,
-        strategy_repo: StrategyRepository,
-        order_service: OrderService,
-        market_data_service: MarketDataService
-    ):
-        self.strategy_repo = strategy_repo
-        self.order_service = order_service
-        self.market_data_service = market_data_service
-
-    @transaction
-    async def execute_strategy(self, strategy_id: str):
-        """전략 실행"""
-        strategy = await self.strategy_repo.get_by_id(strategy_id)
-
-        # 1. 조건 검증
-        if await self._check_conditions(strategy):
-            # 2. 주문 실행
-            order = await self.order_service.create_order(
-                account_id=strategy.account_id,
-                symbol=strategy.symbol,
-                order_type=strategy.order_type,
-                quantity=strategy.quantity,
-                price=strategy.price
-            )
-
-            # 3. 전략 상태 업데이트
-            strategy.last_executed_at = datetime.now()
-            strategy.status = "executed"
-            await self.strategy_repo.update(strategy)
-
-    async def _check_conditions(self, strategy: Strategy) -> bool:
-        """전략 조건 검증"""
-        # 가격 조건, 기술적 지표 등 검증
-        current_price = await self.market_data_service.get_current_price(
-            strategy.symbol
-        )
-
-        # 조건 로직 실행
-        return self._evaluate_conditions(strategy, current_price)
-```
-
-#### API 엔드포인트
-- `POST /api/v1/strategies` - 전략 생성
-- `POST /api/v1/strategies/{id}/execute` - 전략 실행
-- `GET /api/v1/strategies/{id}` - 전략 조회
-- `PUT /api/v1/strategies/{id}` - 전략 수정
-- `DELETE /api/v1/strategies/{id}` - 전략 삭제
+#### API 엔드포인트 (관리자, `/api/v1/strategies`)
+- `GET /api/v1/strategies` · `GET /{strategy_id}` — 전략 목록/조회
+- `POST /{strategy_id}/start|pause|stop`, `PATCH /{strategy_id}/config` — 상태/설정 변경
+- `POST /{strategy_id}/execute` — 전략 실행(기본 dry-run)
+- `GET /{strategy_id}/signals`, `/symbol-states`, `/signals/statistics`
+- `GET /scheduler/status`, `/universe*`, `/sell-signal/{symbol}`, `/analysis-history*`, `/portfolio-cash-plan`, `/presets`
+- 생성/삭제·알림 수동 실행·캐시 백필은 `ENABLE_ADMIN_STRATEGY_ROUTES=true`일 때만 마운트
 
 ---
 
-### 6. WebSocket Domain (실시간 데이터)
+### 6. 기타 도메인
 
-#### 핵심 기능
-- 실시간 시세 수신
-- 실시간 체결 알림
-- 이벤트 핸들링
-- 구독 관리
-
-#### Service 구현 패턴
-```python
-class WebSocketService:
-    def __init__(self, kis_ws_client: KISWebSocketClient):
-        self.kis_ws_client = kis_ws_client
-        self.subscribers = {}
-
-    async def connect(self):
-        """WebSocket 연결"""
-        await self.kis_ws_client.connect()
-
-    async def subscribe_price(self, symbol: str, callback):
-        """실시간 시세 구독"""
-        if symbol not in self.subscribers:
-            self.subscribers[symbol] = []
-
-        self.subscribers[symbol].append(callback)
-
-        # KIS WebSocket 구독 요청
-        await self.kis_ws_client.subscribe({
-            "tr_id": "H0STCNT0",  # 실시간 체결가
-            "tr_key": symbol
-        })
-
-    async def handle_message(self, message: dict):
-        """수신 메시지 처리"""
-        symbol = message.get("tr_key")
-        data = message.get("data")
-
-        # 구독자들에게 데이터 전달
-        if symbol in self.subscribers:
-            for callback in self.subscribers[symbol]:
-                await callback(data)
-```
-
-#### WebSocket 엔드포인트
-- `WS /ws/connect` - WebSocket 연결
-- `WS /ws/subscribe` - 종목 구독
-- `WS /ws/unsubscribe` - 구독 해제
+| 도메인 | 서비스 | 경로 |
+|--------|--------|------|
+| risk | `SafetyGuard` — 실효 가드는 시장 급락·일 신규 진입 3건, 손실/연속손실·자체 포지션 한도는 사실상 비활성 | (엔진 내부) |
+| backtest | `BacktestService`, `BacktestEngine`, `PortfolioParityEngine`, walk-forward | `/api/v1/backtest/*` (raw DTO 응답) |
+| recommendation | `RecommendationScanService`, `RecommendationRuleSetService`, `RecommendationRuleSetValidationService` | `/api/v1/recommendations/*` |
+| screener | `ValueScreenerService`(Naver) | `/api/v1/screener/*` |
+| access_log | `AccessLogService`(`@transaction`) | `/api/v1/access-logs*` |
+| 공개 포털 | `PublicStrategyService`(쿨다운·전역 락·고정 한도) | `/api/v1/public/strategies/*`, `/page/*` |
+| ops | 운영 요약/알림 스케줄러 상태 | `/api/v1/ops/summary`, `/api/v1/ops/notification-scheduler-status`, `/ops` |
+| WebSocket | `KISWebSocket` + `websocket_manager` | `WS /ws/realtime`, `GET /ws/info` |
 
 ---
 
@@ -403,52 +152,17 @@ class WebSocketService:
 
 ### 환경 설정
 ```bash
-# 프로젝트 초기화
-uv sync
-
-# 개발 서버 실행
-uvicorn src.main:app --reload --port 8000
-
-# 데이터베이스
-alembic upgrade head
-alembic revision --autogenerate -m "description"
-
-# 테스트 및 코드 품질
-pytest
-mypy src/
-black src/
-isort src/
+uv sync                                   # 의존성 설치
+uvicorn src.main:app --reload             # 개발 서버
+alembic upgrade head                      # DB 마이그레이션
+# 전체 테스트(호스트에 uv 없음): 루트 CLAUDE.md의 docker run ... pytest 명령 사용
+black src/ tests/ && isort src/ tests/ && mypy src/
 ```
 
 ### 환경 변수 (.env)
-```env
-# Database
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/kis_trading
-
-# Redis
-REDIS_URL=redis://localhost:6379/0
-
-# KIS API (실전투자)
-KIS_APP_KEY=your_app_key
-KIS_APP_SECRET=your_app_secret
-KIS_ACCOUNT_NO=12345678
-KIS_PRODUCT_CODE=01
-
-# KIS API (모의투자)
-KIS_PAPER_APP_KEY=your_paper_app_key
-KIS_PAPER_APP_SECRET=your_paper_app_secret
-KIS_PAPER_ACCOUNT_NO=11111111
-
-# Security / 접근 제어
-# (SECRET_KEY / API_KEY_SALT 는 config.py 에 존재하지 않는 키였으므로 2026-09-08 제거)
-ADMIN_ALLOWED_IPS=["127.0.0.1", "::1"]
-TRUSTED_PROXY_IPS=["127.0.0.0/8", "::1/128"]
-
-# Redis 인증 (docker compose 사용 시 필수)
-REDIS_PASSWORD=change-me-redis-password
-```
-
-> 실제 환경 변수 계약의 SSoT는 `src/settings/config.py` + `.env.example` 입니다. 위 블록은 예시입니다.
+- 계약의 SSoT는 `src/settings/config.py` + `.env.example`이며, 새 키는 두 곳에 함께 추가합니다(실제 값은 커밋 금지).
+- 주요 그룹: DB/Redis(`DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`), KIS 실전/모의(`KIS_*`, `KIS_PAPER_*`, `TRADING_ENVIRONMENT`), 접근 제어(`ADMIN_ALLOWED_IPS`, `TRUSTED_PROXY_IPS`, `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `ADMIN_SESSION_COOKIE_SECURE`), 전략(`STRATEGY_LIVE_TRADING_ENABLED`, `STRATEGY_ORDER_PRICE_TYPE`, `GC_*`, `ETF_UNIVERSE_ENABLED`), 알림(`TELEGRAM_*`, `BUY_/SELL_NOTIFICATION_ENABLED`), OHLCV(`OHLCV_RETENTION_DAYS`)
+- 상세는 `src/settings/CLAUDE.md`
 
 ---
 
@@ -457,203 +171,86 @@ REDIS_PASSWORD=change-me-redis-password
 ### 1. Service Layer 규칙
 
 **✅ DO:**
-- Service는 비즈니스 로직만 처리
-- 여러 Repository를 주입받아 복잡한 로직 통합
-- @transaction 데코레이터로 트랜잭션 관리
-- 외부 API 호출은 Adapter를 통해서만
+- Service가 정책(캐시 TTL, 리스크 한도, 스캔 필터, 재시도 예산)을 결정
+- 여러 Repository/Client를 조합하고, 세션 경계는 DI(`DatabaseSession`) 또는 `@transaction`으로 관리
+- 외부 API 호출은 adapters를 통해서만
 
 **❌ DON'T:**
-- Service에서 직접 HTTP 요청 금지
-- Service 간 직접 호출 최소화 (의존성 주입 활용)
+- domain에서 FastAPI `Request`/`Response`/`APIRouter` 사용 금지
+- 스캔·연구·알림 경로에서 실주문 부수효과 금지
 - 복잡한 비즈니스 로직을 Router에 작성 금지
 
 ### 2. Repository Layer 규칙
-
-**BaseRepository 활용:**
-```python
-class OrderRepository(BaseRepository[Order]):
-    async def get_by_status(self, status: str) -> List[Order]:
-        """상태별 주문 조회"""
-        query = select(Order).where(Order.status == status)
-        result = await self.session.execute(query)
-        return result.scalars().all()
-```
-
-**Mixin 활용:**
-```python
-class SearchableMixin:
-    async def search(self, keyword: str):
-        # 검색 로직
-        pass
-
-class OrderRepository(BaseRepository[Order], SearchableMixin):
-    # 자동으로 search 메서드 상속
-    pass
-```
+- `<entity>_repository.py` / `<Entity>Repository`, `BaseRepository[Model]` 상속 + 필요한 Mixin 조합
+- 저장 형태만 다루고 DTO 변환·정책 계산은 domain에서 수행
+- 스키마 변경은 Alembic revision과 짝지어 커밋
 
 ### 3. Router Layer 규칙
-
-**의존성 주입 패턴:**
-```python
-from application.common.dependencies import get_order_service
-
-@router.post("/orders")
-async def create_order(
-    order_data: OrderCreate,
-    order_service: Annotated[OrderService, Depends(get_order_service)]
-):
-    """주문 생성"""
-    order = await order_service.create_order(**order_data.dict())
-    return OrderResponse.from_orm(order)
-```
+- 입력 파싱 → 서비스 호출 → `ResponseDTO.success_response(...)` 반환(예외: `backtest_router`는 raw DTO)
+- DI는 `application.common.dependencies`의 Annotated 별칭 우선, 클라이언트 IP는 `get_client_ip()`만 사용
+- 관리자 라우트는 전역 로그인 게이트로 자동 보호되며, 공개 라우트는 `admin_session_gate.py` 화이트리스트에 명시
 
 ### 4. DTO 규칙
-
-**요청/응답 DTO 분리:**
-```python
-# Request DTO
-class OrderCreate(BaseModel):
-    account_id: str
-    symbol: str
-    order_type: Literal["buy", "sell"]
-    quantity: int
-    price: Optional[int] = None
-
-# Response DTO
-class OrderResponse(BaseModel):
-    id: str
-    account_id: str
-    symbol: str
-    order_type: str
-    quantity: int
-    price: Optional[int]
-    status: str
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-```
+- 공통 응답 계약은 `common/dto.py`(`BaseDTO`, `ResponseDTO[T]`, `PaginatedResponseDTO[T]` 등)
+- 도메인 DTO는 `domain/<domain>/dto.py`. `strategy/dto.py`는 라우터·템플릿·스크립트가 필드명에 의존하는 교차 계약이므로 변경 시 소비처 확인
 
 ### 5. 에러 처리 규칙
-
-**계층별 에러 처리:**
-```python
-# Service Layer
-class OrderService:
-    async def create_order(self, ...):
-        try:
-            # KIS API 호출
-            result = await self.kis_client.place_order(...)
-        except KISAPIError as e:
-            # KIS API 에러 → 도메인 에러로 변환
-            raise OrderCreationError(f"주문 실패: {e.message}")
-
-# Router Layer
-@router.post("/orders")
-async def create_order(...):
-    try:
-        order = await order_service.create_order(...)
-        return order
-    except OrderCreationError as e:
-        # 도메인 에러 → HTTP 에러로 변환
-        raise HTTPException(status_code=400, detail=str(e))
-```
+- 외부/인프라 예외는 `common/exceptions.py`의 `ApplicationError` 계열(`KISAPIServiceError`, `OrderError`, `RateLimitExceededError` 등)로 변환
+- HTTP 변환은 `settings/exception_handlers.py`의 전역 핸들러(`application_error_handler`, `http_exception_handler`, `validation_error_handler`, `generic_exception_handler`)가 담당 — 라우터에서 개별 `HTTPException` 변환을 반복하지 않음
 
 ---
 
 ## 📊 성능 최적화 전략
 
-### 1. 캐싱 전략
-- **시세 데이터**: Redis 5초 TTL
+### 1. 캐싱 전략 (설정 기본값)
+- **시세 데이터**: Redis 5초 TTL / **호가 스냅샷** 15초
 - **계좌 정보**: Redis 30초 TTL
-- **토큰 정보**: Redis 24시간 TTL
+- **일봉/분봉**: 86400초 / 900초, 일봉은 DB(`OHLCVRepository`) 캐시가 1차 저장소
 
 ### 2. Connection Pooling
-- **HTTP**: aiohttp ClientSession 재사용
-- **WebSocket**: 연결 풀링 및 재연결 로직
-- **Database**: SQLAlchemy async pool (pool_size=20)
+- **HTTP**: httpx `AsyncClient` 재사용(`KISAuth`/`KISAPIClient`, 종료 시 `aclose`)
+- **Database**: SQLAlchemy async pool(`pool_size=10`, `max_overflow=20`, `pool_pre_ping`)
+- **Redis**: `redis_max_connections` 50
 
-### 3. 비동기 처리
-- **동시 요청**: asyncio.gather로 병렬 처리
-- **백그라운드 작업**: BackgroundTasks 활용
-- **스트리밍**: Server-Sent Events (SSE) 활용
+### 3. 비동기/동시성
+- 스캔 동시 처리 `SCAN_CONCURRENCY_LIMIT`(기본 5), 공개 스캔 동시성 2 + IP 쿨다운 + 전역 락
+- KIS 레이트리밋: 운영 `KIS_API_RATE_LIMIT=8`/s(설정 기본 10), EGW00201 지수 백오프
 
 ---
 
 ## 🔒 보안 및 리스크 관리
 
 ### 보안 규칙
-- API 키는 환경 변수로만 관리
-- 토큰은 Redis에 암호화 저장
-- WebSocket 연결 시 approval_key 검증
-- Rate Limiting 적용 (분당 20회)
+- API 키·계좌·토큰은 `.env`/토큰 캐시 볼륨에만, 로그에 자격증명 금지(`httpx` 등 로거 WARNING 고정)
+- 전역 로그인 게이트 + IP allowlist(현재 운영 전 대역) + 쓰기 메서드 CSRF 헤더
+- 프록시 헤더는 `TRUSTED_PROXY_IPS`에서 온 연결만 신뢰
+- Swagger/ReDoc/OpenAPI 비활성
 
 ### 리스크 관리
-- 일일 손실 제한 (계좌별 설정)
-- 최대 보유 종목 수 제한
-- 주문 금액 한도 설정
-- 긴급 정지 기능 (전체 주문 취소)
+- 전략 실주문 kill-switch `STRATEGY_LIVE_TRADING_ENABLED`(기본 false) — 서버 전체 차단기는 아님(`POST /api/v1/orders` 별도)
+- 시장 국면 게이트, 시장 급락 가드(−2%), 일 신규 진입 3건, 최대 보유 5(전략 config)
+- 중복 주문 가드(`order_no` 존재 시 `CANCELLED` 외 재주문 금지)
+- 리스크 한도의 단일 출처는 `domain/risk/dto.py`(SafetyGuard)와 전략 config(`max_position_count`)다. 미사용이던 `risk_*` 설정 7종은 2026-11-07 제거
 
 ---
 
 ## 📚 테스트 전략
 
-### 단위 테스트
-```python
-import pytest
-from application.domain.order.order_service import OrderService
-
-@pytest.mark.asyncio
-async def test_create_order(mock_order_repo, mock_kis_client):
-    service = OrderService(mock_order_repo, mock_kis_client)
-
-    order = await service.create_order(
-        account_id="test",
-        symbol="005930",
-        order_type="buy",
-        quantity=10,
-        price=70000
-    )
-
-    assert order.status == "pending"
-```
-
-### 통합 테스트
-```python
-@pytest.mark.asyncio
-async def test_order_flow(client):
-    # 1. 주문 생성
-    response = await client.post("/api/v1/orders", json={...})
-    assert response.status_code == 200
-
-    # 2. 주문 조회
-    order_id = response.json()["id"]
-    response = await client.get(f"/api/v1/orders/{order_id}")
-    assert response.status_code == 200
-```
+- 위치: `tests/domain/`(서비스·엔진·스케줄러), `tests/interface/`(라우터·보안 경계), `tests/adapters/`(클라이언트), `tests/application/`(common 유틸), 최상위 `test_*.py`(백테스트 등)
+- 공유 `conftest.py` 없음 — 모듈 로컬 픽스처, fake client/repository, monkeypatch 사용
+- 실주문·실계좌·실 Telegram 발송 금지
+- 현재 확인값: `963 passed, 13 skipped`(2026-11-07, `--no-cov`). 상세는 `tests/AGENTS.md`
 
 ---
 
 ## 🎯 다음 개발 단계
 
-### 우선순위 높음
-- [ ] 기본 아키텍처 구현 (Adapter, Service, Repository)
-- [ ] Auth Domain 구현 (토큰 발급/갱신)
-- [ ] Order Domain 구현 (주문 생성/조회)
-- [ ] Account Domain 구현 (잔고/포지션 조회)
-- [ ] MarketData Domain 구현 (시세 조회)
-
-### 우선순위 중간
-- [ ] Strategy Domain 구현 (자동매매 전략)
-- [ ] WebSocket Domain 구현 (실시간 시세)
-- [ ] 대시보드 페이지 구현
-- [ ] 리스크 관리 기능
-
-### 우선순위 낮음
-- [ ] 백테스팅 기능
-- [ ] 알림 시스템 (Telegram, Email)
-- [ ] 다중 계좌 지원
-- [ ] AI 기반 전략 추천
+- `/ops` summary 경량화 및 부분 실패 tolerant aggregation
+- `ADMIN_ALLOWED_IPS` 범위 재조정
+- access log 범위를 `/api`, `/mypage`까지 확장
+- `scripts/` CLI 진입점에 `setup_logging()` 배선
+- notification scheduler 결과 이력 영속화
+- 전략: 연구 결론 NO-GO(`reports/research_2026-11-06_summary.md`) — 새 가설은 사전등록(`docs/plans/`) 후 검증
 
 ---
 
@@ -666,4 +263,4 @@ async def test_order_flow(client):
 
 ---
 
-**💡 중요**: 이 서비스는 **금융 자동매매**를 위한 시스템으로, **안정성과 정확성**이 최우선입니다. 모든 주문은 **충분한 테스트** 후 실행하며, **리스크 관리** 규칙을 반드시 준수해야 합니다. 실전 투자 전 **모의투자 환경**에서 충분히 검증하시기 바랍니다.
+**💡 중요**: 이 서비스는 **금융 자동매매**를 다루므로 **안정성과 정확성**이 최우선입니다. 실주문 경로를 여는 변경(kill-switch, 전략 `status`, 주문 API)은 테스트·소액 검증·명시적 승인 후에만 적용합니다.

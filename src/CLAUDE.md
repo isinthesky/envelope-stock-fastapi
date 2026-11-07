@@ -22,14 +22,16 @@ src/
   - `settings.logging_config.setup_logging()` 호출 — dictConfig 로 콘솔(stdout) 로깅을 설정하고, `LOG_TO_FILE=true` 면 회전 파일 핸들러를 추가한다. 라우터/서비스 import 보다 반드시 앞서야 한다.
   - `AccessLoggingMiddleware` 등록(`/page` 경로만 DB 기록, 클라이언트 IP는 `common/client_ip.py` 규칙).
   - `AdminSessionGateMiddleware` 등록(최외곽): 공개 경로 외 전 HTTP/WS 요청에 관리자 로그인 세션 요구(`interface/admin_session_gate.py`).
+  - 보안 헤더 미들웨어(`_security_headers`: `frame-ancestors 'self'`, `X-Frame-Options: SAMEORIGIN`, `nosniff`), 정적 파일 `/static/styles`·`/static/js` 마운트.
 - **lifespan(startup)**
   - DB 연결 점검(`SELECT 1`)
   - Redis 연결 점검(`ping`)
-  - `settings.auto_reauth`가 true면 KIS 토큰 발급 및 자동갱신 태스크 시작
-  - 전략 스케줄러/알림/캐시 스케줄러 시작
-    - `domain.strategy.scheduler` (Golden Cross)
-    - `domain.strategy.notification_scheduler` (Telegram)
-    - `domain.ohlcv.scheduler` (OHLCV cache)
+  - `settings.auto_reauth`가 true면 KIS 토큰 확보(캐시 재사용 우선, 로그 `KIS API token ready (source=cache|issued, ...)`) 및 자동갱신 태스크 시작
+  - 전략 스케줄러/알림/캐시 스케줄러 시작(전부 KST)
+    - `domain.strategy.scheduler` (Golden Cross, 월~금): `daily_universe_refresh` 08:00, `daily_strategy_execution` 15:35(misfire 90초), `daily_order_reconcile` 16:10
+    - `domain.strategy.notification_scheduler` (Telegram, 월~금): `BUY_/SELL_NOTIFICATION_ENABLED`가 켜진 슬롯만 등록(매수 11:30/14:30, 매도 09:30/12:30, 각 10분 전 데이터 갱신)
+    - `domain.ohlcv.scheduler` (OHLCV cache): `ohlcv_cleanup` 02:00·`ohlcv_warmup_until_yesterday` 08:00(매일), `ohlcv_update` 16:00(월~금)
+    - 기동 print·로그는 위 실제 시각과 알림 플래그(on/off)를 그대로 출력한다(2026-11-07 정정 — 이전 `update: 16:30`, `Buy only` 문구는 틀렸다)
 - **라우터 등록**
   - REST:
     - `/api/v1/auth` (Auth)
@@ -39,15 +41,15 @@ src/
     - `/api/v1/admin-auth` (AdminAuth: 관리자 ID/PW 로그인/로그아웃/me, 라우터 내부 prefix)
     - `/api/v1/strategies` (Strategy: 라우터 단위 `verify_admin_access` 보호. 전략 CRUD admin 라우터는 `enable_admin_strategy_routes=True` 일 때만 추가 마운트)
     - `/api/v1/strategies` (SellRuleResearch: 라우터 내부 prefix)
-    - `/api/v1/ops` (Operations: `AdminAccessDep` 보호)
+    - `/api/v1/ops` (Operations: 라우터 내부 prefix, 엔드포인트별 `AdminAccessDep` 보호)
     - `/api/v1/public/strategies` (공개 전략 스캔: 라우터 내부 prefix)
     - `/api/v1/screener` (Screener: 라우터 내부 prefix)
     - `/api/v1/recommendations` (Recommendation: 라우터 내부 prefix)
     - `/api/v1/backtest` (Backtest: 라우터 내부 prefix)
     - `/api/v1/access-logs` (AccessLogs: 라우터 내부 prefix, 관리자 IP 전용)
-  - WebSocket: `/ws`
+  - WebSocket: `/ws` (`/ws/realtime` WS, `/ws/info` GET)
   - Page(Jinja2): **두 개의 별도 루프**로 등록한다(각 라우터가 자체 prefix 보유).
-    - `mypage_routers` → `dependencies=[Depends(verify_admin_access)]` 와 함께 include(= `/mypage/*`와 `/ops`의 include-level IP 게이트)
+    - `mypage_routers` → `dependencies=[Depends(verify_admin_access)]` 와 함께 include(= `/mypage/*`와 `/ops`의 include-level IP 게이트, 로그인 페이지 `/mypage/login/` 포함)
     - `public_page_routers` → 의존성 없이 include(`/page/*` 공개 포털)
     - `page/__init__.py`의 `page_routers`는 두 리스트를 합친 하위호환 별칭이며 `main.py`는 사용하지 않는다. 새 페이지는 반드시 위 두 리스트 중 하나에 넣어야 등록된다.
 - **기본 엔드포인트**

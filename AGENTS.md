@@ -1,8 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-07-21
-**Commit:** 26e0226
-**Branch:** main
+**Generated:** 2026-07-21 (commit 26e0226, branch main)
+**Last synced with code:** 2026-11-07
 
 ## OVERVIEW
 FastAPI server for Korea Investment Securities (KIS) strategy execution, screening,
@@ -18,12 +17,13 @@ kis-strategy-alert-server/
 |   |   |-- common/              # ResponseDTO, DI aliases, exceptions, decorators, metrics
 |   |   |-- domain/
 |   |   |   |-- access_log/      # access log query, stats, retention cleanup
+|   |   |   |-- admin_auth/      # admin ID/PW login, Redis session, IP lockout
 |   |   |   |-- account/, auth/, backtest/, market_data/, ohlcv/, order/
 |   |   |   |-- paper_trade/     # paper trading
 |   |   |   |-- recommendation/  # readiness, scan, rule-set services and DTOs
 |   |   |   |-- risk/            # SafetyGuard and risk/position-sizing DTOs
-|   |   |   |-- screener/, strategy/  # strategies, schedulers, symbol validation
-|   |   |-- interface/
+|   |   |   |-- screener/, strategy/  # strategies, schedulers, symbol validation, market regime
+|   |   |-- interface/           # + admin_session_gate.py (global login gate middleware)
 |   |       |-- api/             # REST and WebSocket routers, including ops/recommendation
 |   |       `-- page/            # Jinja page routers, including /ops
 |   |-- adapters/
@@ -33,7 +33,7 @@ kis-strategy-alert-server/
 |-- templates/                   # Jinja page templates used by interface/page routers
 |-- static/                      # dashboard JavaScript and CSS
 |-- tests/                       # pytest suite; domain/adapters/interface grouping
-|-- scripts/                     # manual backtest, scan, DB init, and backfill entrypoints
+|-- scripts/                     # common/ helpers, research/ (offline), ops/ (backfill, seed, scan, admin hash)
 |-- alembic/                     # async SQLAlchemy migrations
 |-- docs/base/                   # architecture, service, and convention SSoT
 `-- examples/                    # KIS endpoint examples and chk_* samples
@@ -45,7 +45,7 @@ Ignore generated or local-state directories when mapping the project: `.venv/`, 
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| App startup/shutdown | `src/main.py` | DB/Redis checks, KIS token task, strategy/notification/OHLCV schedulers |
+| App startup/shutdown | `src/main.py` | DB/Redis checks, KIS token task, strategy/notification/OHLCV schedulers, `AdminSessionGateMiddleware` |
 | REST endpoint | `src/application/interface/api/*_router.py` | Thin routers; usually return `ResponseDTO` |
 | Admin/public page | `src/application/interface/page/*_page_router.py` | Page routers render `templates/page/*.html` and use `static/` assets |
 | Strategy behavior | `src/application/domain/strategy/` | Golden-cross, sell-signal, universe, scheduler, notification logic |
@@ -75,11 +75,13 @@ Ignore generated or local-state directories when mapping the project: `.venv/`, 
 | `BuyStrategyService` | service | `src/application/domain/strategy/buy_strategy_service.py` | golden-cross scan and candidate filtering |
 | `SellStrategyService` | service | `src/application/domain/strategy/sell_strategy_service.py` | sell signal scoring (`ScoreRule` pipeline in `sell_score_rules.py`) and overlays |
 | `fetch_kind_corp_list` | adapter | `src/adapters/external/krx/kind_client.py` | KRX KIND corp-list scraping (pure I/O, moved out of the domain) |
-| `StrategyScheduler` | scheduler | `src/application/domain/strategy/scheduler.py` | 08:00 universe refresh and 15:35 golden-cross execution |
-| `NotificationScheduler` | scheduler | `src/application/domain/strategy/notification_scheduler.py` | 09:20/11:20/12:20/14:20 data refresh and 09:30/11:30/12:30/14:30 Telegram alerts |
+| `StrategyScheduler` | scheduler | `src/application/domain/strategy/scheduler.py` | 08:00 universe refresh, 15:35 golden-cross execution (misfire 90s), 16:10 order reconcile (`daily_order_reconcile`) |
+| `NotificationScheduler` | scheduler | `src/application/domain/strategy/notification_scheduler.py` | buy 11:20→11:30/14:20→14:30, sell 09:20→09:30/12:20→12:30; jobs registered only when `BUY_/SELL_NOTIFICATION_ENABLED` (both off in current prod env) |
 | `is_valid_krx_symbol` | function | `src/application/domain/strategy/symbol_validation.py` | `^[0-9A-Z]{6}$` KRX symbol check; filters memo rows before the pipeline |
 | `RecommendationScanService` | service | `src/application/domain/recommendation/recommendation_scan_service.py` | recommendation scan/readiness orchestration |
-| `SafetyGuard` | guard | `src/application/domain/risk/safety_guard.py` | GoldenCross order pre-check using `RiskLimitConfigDTO` and `PositionSizingConfigDTO` for daily/weekly/monthly loss, consecutive losses, cooldown, and max positions |
+| `SafetyGuard` | guard | `src/application/domain/risk/safety_guard.py` | GoldenCross new-buy pre-check. Effective guards: market crash (benchmark day return <= -2%) and daily new-entry cap 3 (`record_entry`). Loss/consecutive-loss guards and its own `max_concurrent_positions`(3) are effectively inert; max holdings = strategy config `max_position_count`(5) enforced in `GoldenCrossEngine` |
+| `GoldenCrossEngine` | engine | `src/application/domain/strategy/golden_cross_engine.py` | live/dry-run execution: kill-switch, regime gate (fail-closed), closing-auction orders (ORD_DVSN 06), `reconcile_open_orders` |
+| `market_regime_ok` | function | `src/application/domain/strategy/market_regime.py` | shared ADX regime gate (scan/alerts fail-open, live fail-closed) |
 | `OrderService` | service | `src/application/domain/order/service.py` | order create/query/cancel/modify workflow |
 | `BacktestService` | service | `src/application/domain/backtest/service.py` | backtest facade and summary generation |
 | `OHLCVRepository` | repository | `src/adapters/database/repositories/ohlcv_repository.py` | OHLCV cache persistence |
@@ -142,11 +144,11 @@ docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -
 ## NOTES
 - ⚠️ `force_refresh=True`를 남발하지 않는다. KIS 토큰은 1일 1회 발급 원칙이다.
 - `docker compose build`와 `docker compose up -d --build`는 `kis_token_cache` named volume을 유지하므로 토큰 재발급 없이 안전하다.
-  마운트 경로는 실행 사용자의 `HOME`이 결정한다: 현재 배포본(root)은 `/root/KIS/config`, 컨테이너 하드닝 적용 후(비루트 `uid 10001`)는 `/home/appuser/KIS/config`.
+  마운트 경로는 실행 사용자의 `HOME`이 결정한다: 하드닝 배포(2026-09-08) 이후 비루트 `uid 10001` 기준 `/home/appuser/KIS/config`다(롤백 시에만 root `/root/KIS/config`).
 - 컨테이너 하드닝(비루트 `uid 10001` 실행, Redis 비밀번호 필수, DB/Redis 로컬 전용 바인딩)은 2026-09-08에 **배포 완료**됐다. 컨테이너 안에서 `uv run`은 실패하므로 `/app/.venv/bin/<cmd>`를 직접 실행한다. 롤백 절차는 `README.md`의 「컨테이너 하드닝 적용 절차」를 따른다.
-- 하드닝 적용 후 api 컨테이너 안에서 `uv run ...` 은 `/app/.venv` 쓰기 때문에 실패한다. `/app/.venv/bin/python` 또는 `/app/.venv/bin/<cmd>` 를 직접 쓰거나 `docker compose exec --user root api ...` 를 사용한다.
-- 전체 테스트의 현재 확인값은 `790 passed, 13 skipped`다(2026-09-08 실측).
-- `/ops`, `/api/v1/ops/summary`, `/api/v1/ops/notification-scheduler-status`는 구현되어 있으며 `AdminAccessDep`로 보호된다.
-  단 보호 강도는 `ADMIN_ALLOWED_IPS` 값에 전적으로 의존한다 — 전 대역을 허용하면 사실상 무보호다.
+- 하드닝 적용 후 api 컨테이너 안에서 `uv run ...` 은 `/app/.venv` 쓰기 때문에 실패한다. `/app/.venv/bin/python` 또는 `/app/.venv/bin/<cmd>` 를 직접 쓴다. `docker compose exec --user root api ...` 는 `HOME`을 바꾸지 않아 토큰 캐시에 root 소유 파일을 남길 수 있으므로 기본 수단으로 쓰지 않는다(README 「컨테이너 하드닝 적용 절차」).
+- 전체 테스트의 현재 확인값은 `963 passed, 13 skipped`다(2026-11-07 실측, `--no-cov`).
+- `/ops`, `/api/v1/ops/summary`, `/api/v1/ops/notification-scheduler-status`는 구현되어 있으며 전역 로그인 게이트(`AdminSessionGateMiddleware`) + `AdminAccessDep`(IP allowlist)로 보호된다.
+  `ADMIN_ALLOWED_IPS`는 현재 전 대역이라 실질 방어선은 관리자 로그인 세션이다.
 - 클라이언트 IP 판정은 `src/application/common/client_ip.py` 단일 출처를 쓴다(관리자 IP 검증·접근 로그·공개 스캔 쿨다운·WebSocket 공통). 프록시 헤더는 `TRUSTED_PROXY_IPS` 에 속한 직접 연결에서만 신뢰한다.
 - 로깅 부트스트랩은 `src/settings/logging_config.py`의 `setup_logging()`이며 `src/main.py` 최상단에서 호출된다.

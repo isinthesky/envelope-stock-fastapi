@@ -7,8 +7,9 @@ policy to domain services.
 ## STRUCTURE
 ```text
 interface/
-|-- api/    # REST and WebSocket routers
-`-- page/   # Jinja page routers registered through page_routers
+|-- api/                   # REST and WebSocket routers
+|-- page/                  # Jinja page routers registered through mypage_routers / public_page_routers
+`-- admin_session_gate.py  # global login-gate middleware (default deny)
 ```
 
 Related assets outside this tree: `templates/page/*.html`, `templates/layouts/*.html`,
@@ -19,13 +20,15 @@ Related assets outside this tree: `templates/page/*.html`, `templates/layouts/*.
 |------|----------|-------|
 | Router mount table | `src/main.py` | prefixes, tags, admin route gating |
 | API dependencies | `../common/dependencies.py` | `DatabaseSession`, `KISClientDep`, `RedisDep`, `AdminAccessDep` |
-| Strategy API | `api/strategy_router.py` | public router plus `admin_router` gated in `main.py` |
+| Strategy API | `api/strategy_router.py` | `router` (admin-only: `verify_admin_access` at include level) plus `admin_router` (CRUD) mounted only when `enable_admin_strategy_routes=True` |
 | Backtest API | `api/backtest_router.py` | legacy/raw DTO responses, internal prefix |
-| Ops API | `api/ops_router.py` | `/api/v1/ops` prefix and admin protection from `main.py` |
+| Ops API | `api/ops_router.py` | internal `/api/v1/ops` prefix; per-endpoint `AdminAccessDep` |
 | Access log API | `api/access_log_router.py` | `/api/v1/access-logs`, admin-gated; delegates to `domain/access_log/service.py` |
 | Public page | `page/public_strategy_page_router.py` | `/page/*`, intentionally public |
 | Admin pages | `page/*_page_router.py` | `/mypage/*`, include-level admin protection |
-| Page registry | `page/__init__.py` | `page_routers` list consumed by `main.py` |
+| Page registry | `page/__init__.py` | `main.py` consumes `mypage_routers` (with `verify_admin_access`) and `public_page_routers`; `page_routers` is a legacy alias NOT used by `main.py` |
+| Login gate | `admin_session_gate.py` | `PUBLIC_EXACT_PATHS`/`PUBLIC_PATH_PREFIXES` whitelist; everything else needs an admin session |
+| Admin login API | `api/admin_auth_router.py` | `/api/v1/admin-auth/{login,logout,me}`; cookie `kis_admin_session` |
 
 ## CONVENTIONS
 - Routers parse inputs, call a service, and return a response. Business rules and query
@@ -49,8 +52,10 @@ Related assets outside this tree: `templates/page/*.html`, `templates/layouts/*.
 - Do not add `/mypage/*` routes outside the protected include path in `src/main.py`.
 - Do not accidentally wrap `/page/*` public routes in admin dependencies.
 - Do not re-enable OpenAPI docs from routers; docs are disabled at the FastAPI app level.
+- Do not widen the login-gate whitelist without updating `tests/interface/test_admin_login_boundary.py`.
 
 ## TESTING NOTES
 - Interface tests live under `tests/interface/`.
-- Existing tests cover admin access, exception handlers, mypage/public boundary, ops page, sell
-  strategy page, strategy router security, and Telegram notifier behavior.
+- Existing tests cover admin access, admin login boundary/global gate, exception handlers,
+  mypage/public boundary, ops page, sell strategy page, strategy router security, and Telegram
+  notifier behavior.

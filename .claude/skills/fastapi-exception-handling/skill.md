@@ -12,6 +12,18 @@ description: FastAPI 예외 처리 아키텍처. 커스텀 예외 클래스, 글
 
 ---
 
+## 이 프로젝트 적용 현황 (2026-11-07 기준)
+
+| 항목 | 실제 위치 |
+|------|----------|
+| 예외 정의 (SSOT) | `src/application/common/exceptions.py` (`ApplicationError` 외 `OrderError`, `PositionNotFoundError`, `StrategyExecutionError`, `KISAPIServiceError`, `DatabaseError`, `CacheError`, `BacktestError`, `BacktestDataError` 등 도메인 예외 포함) |
+| 핸들러 | `src/settings/exception_handlers.py` — `application_error_handler`, `http_exception_handler`, `validation_error_handler`, `generic_exception_handler`, `register_exception_handlers` |
+| 등록 | `src/main.py`에서 `register_exception_handlers(app)` |
+| 테스트 | `tests/interface/test_exception_handlers.py` |
+| 관리자 접근 의존성 | `src/application/common/dependencies.py` `verify_admin_access`(IP allowlist + 비안전 메서드에 `X-Requested-With: XMLHttpRequest` 요구, 위반 시 `AuthorizationError` 403), `require_admin_session`(미로그인 시 `AuthenticationError` 401) — HTTPException 대신 도메인 예외 사용 |
+
+알려진 예외(원칙 위반, 미정리): `src/application/interface/api/backtest_router.py`(MA 기간 검증 `HTTPException(422)`), `src/application/interface/api/sell_rule_research_router.py`(`HTTPException(400)`). 응답 포맷은 `http_exception_handler`로 통일되므로 동작상 문제는 없음.
+
 ## 핵심 원칙
 
 1. **HTTPException 제거** - 라우트/서비스에서 HTTPException 직접 사용 금지
@@ -106,15 +118,6 @@ class ApplicationError(Exception):
 
     def __str__(self) -> str:
         return f"[{self.code}] {self.message}"
-
-    def to_dict(self) -> dict[str, Any]:
-        """예외를 딕셔너리로 변환"""
-        return {
-            "code": self.code,
-            "message": self.message,
-            "status_code": self.status_code,
-            "details": self.details,
-        }
 ```
 
 ### 속성 설명
@@ -252,175 +255,21 @@ src/
 
 ### 핸들러 구조
 
-```python
-# exception_handlers.py
+구현은 `src/settings/exception_handlers.py` 참조. 등록 순서 = 우선순위:
 
-import logging
-
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-
-from your_app.exceptions import ApplicationError  # 경로는 프로젝트에 맞게 수정
-
-logger = logging.getLogger(__name__)
-
-
-async def application_error_handler(request: Request, exc: ApplicationError) -> JSONResponse:
-    """
-    ApplicationError 핸들러
-
-    모든 도메인 예외를 통일된 JSON 응답 포맷으로 변환합니다.
-    """
-    logger.warning(
-        "ApplicationError: [%s] %s (path=%s)",
-        exc.code,
-        exc.message,
-        request.url.path,
-    )
-
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "success": False,
-            "message": exc.message,
-            "data": None,
-            "error": {
-                "code": exc.code,
-                "message": exc.message,
-                "details": jsonable_encoder(exc.details),
-            },
-        },
-    )
-
-
-async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    """
-    HTTPException 핸들러
-
-    FastAPI 기본 HTTPException을 통일된 JSON 응답 포맷으로 변환합니다.
-    (의존성, 미들웨어 등에서 발생하는 HTTPException 처리)
-    """
-    logger.warning(
-        "HTTPException: status=%s, detail=%s (path=%s)",
-        exc.status_code,
-        exc.detail,
-        request.url.path,
-    )
-
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "success": False,
-            "message": str(exc.detail),
-            "data": None,
-            "error": {
-                "code": "HTTP_EXCEPTION",
-                "message": str(exc.detail),
-                "details": {},
-            },
-        },
-    )
-
-
-async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """
-    RequestValidationError 핸들러
-
-    Pydantic 검증 실패를 통일된 JSON 응답 포맷으로 변환합니다.
-    """
-    errors = exc.errors()
-    first_error = errors[0] if errors else {}
-    field = ".".join(str(loc) for loc in first_error.get("loc", ["unknown"]))
-    msg = first_error.get("msg", "Validation error")
-
-    logger.warning(
-        "ValidationError: field=%s, msg=%s (path=%s)",
-        field,
-        msg,
-        request.url.path,
-    )
-
-    return JSONResponse(
-        status_code=422,
-        content={
-            "success": False,
-            "message": f"Validation error: {msg}",
-            "data": None,
-            "error": {
-                "code": "VALIDATION_ERROR",
-                "message": f"Invalid input for field: {field}",
-                "details": jsonable_encoder({"errors": errors}),
-            },
-        },
-    )
-
-
-async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """
-    범용 예외 핸들러 (Fallback)
-
-    예상치 못한 예외를 처리합니다.
-    프로덕션에서는 상세 정보를 숨기고, 개발 환경에서만 노출합니다.
-    """
-    import os
-    debug = os.getenv("DEBUG", "false").lower() == "true"
-
-    logger.exception(
-        "Unhandled exception: %s (path=%s)",
-        str(exc),
-        request.url.path,
-    )
-
-    detail = str(exc) if debug else "An unexpected error occurred"
-
-    return JSONResponse(
-        status_code=500,
-        content={
-            "success": False,
-            "message": "Internal Server Error",
-            "data": None,
-            "error": {
-                "code": "INTERNAL_SERVER_ERROR",
-                "message": detail,
-                "details": {},
-            },
-        },
-    )
-
-
-def register_exception_handlers(app: FastAPI) -> None:
-    """
-    예외 핸들러 일괄 등록
-
-    등록 순서가 우선순위를 결정합니다.
-    더 구체적인 예외 타입을 먼저 등록합니다.
-
-    Args:
-        app: FastAPI 앱 인스턴스
-    """
-    # 1. 커스텀 도메인 예외 (가장 높은 우선순위)
-    app.add_exception_handler(ApplicationError, application_error_handler)
-
-    # 2. FastAPI HTTPException (의존성/미들웨어에서 발생)
-    app.add_exception_handler(HTTPException, http_exception_handler)
-
-    # 3. Pydantic 검증 에러
-    app.add_exception_handler(RequestValidationError, validation_error_handler)
-
-    # 4. 예상치 못한 예외 (Fallback, 가장 낮은 우선순위)
-    app.add_exception_handler(Exception, generic_exception_handler)
-
-    logger.info("Exception handlers registered")
-```
+| 순서 | 예외 | 핸들러 | 응답 |
+|------|------|--------|------|
+| 1 | `ApplicationError` | `application_error_handler` | `exc.status_code`, `error.code=exc.code`, `details`는 `jsonable_encoder` |
+| 2 | `HTTPException` | `http_exception_handler` | `exc.status_code`, `error.code="HTTP_EXCEPTION"` |
+| 3 | `RequestValidationError` | `validation_error_handler` | 422, `error.code="VALIDATION_ERROR"`, 첫 에러 필드를 메시지에 사용 |
+| 4 | `Exception` | `generic_exception_handler` | 500, `settings.debug`(get_settings)일 때만 상세 메시지 노출 |
 
 ### 핸들러 등록 (main.py)
 
 ```python
 # main.py
 from fastapi import FastAPI
-from your_app.exception_handlers import register_exception_handlers
+from src.settings.exception_handlers import register_exception_handlers
 
 app = FastAPI(...)
 
@@ -662,6 +511,8 @@ async def get_user(user_id: int, service: UserService):
 
 ### 2. 예외 클래스 작성
 
+(아래 `InsufficientBalanceError`는 이 프로젝트 `exceptions.py`에 이미 존재 — 형태 참고용)
+
 ```python
 # exceptions.py
 
@@ -689,7 +540,7 @@ class PaymentFailedError(ExternalServiceError):
 ### 3. 서비스에서 사용
 
 ```python
-from your_app.exceptions import InsufficientBalanceError
+from src.application.common.exceptions import InsufficientBalanceError
 
 class PaymentService:
     async def process_payment(self, user_id: int, amount: float):
@@ -706,18 +557,18 @@ class PaymentService:
 ### 예외 핸들러 테스트
 
 ```python
-# tests/test_exception_handlers.py
+# tests/interface/test_exception_handlers.py (실제 테스트 파일)
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from your_app.exceptions import (
+from src.application.common.exceptions import (
     NotFoundError,
     ResourceNotFoundError,
     BusinessLogicError,
 )
-from your_app.exception_handlers import register_exception_handlers
+from src.settings.exception_handlers import register_exception_handlers
 
 
 def create_test_app() -> FastAPI:

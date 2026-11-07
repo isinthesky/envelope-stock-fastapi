@@ -6,6 +6,8 @@ allowed-tools: Bash, Read, Glob, Grep
 
 # Synthetic Data Generator Skill
 
+구현: `scripts/common/data_generator.py` (`MarketScenario`, `SyntheticDataGenerator`, `SyntheticMarket`, `StockMetadata`).
+
 백테스트 및 전략 검증을 위한 합성 OHLCV 데이터를 생성합니다.
 
 ## Python 사용법
@@ -94,6 +96,11 @@ print(f"Generated {len(datasets)} datasets")
 | `periods` | 캔들 개수 | 250 |
 | `seed` | 랜덤 시드 | 이름 해시 |
 | `scenario_type` | 시나리오 유형 | "random" |
+| `avg_volume` | 평균 거래량 (None이면 `volume_range` 균등) | None |
+| `volume_noise_ratio` | 거래량 노이즈 비율 | 0.2 |
+| `volume_range` | 거래량 범위 | (100_000, 1_000_000) |
+
+> `scenario_type`이 `random`이 아니면 `trend`/`volatility`/`start_price`/거래량 파라미터는 무시되고 해당 패턴 함수(`generate_gc_scenario` 등)로 위임됩니다. `SyntheticMarket.add_stock`의 `volatility`/`per` 등은 메타데이터(스크리닝용)이며, `generate_all`은 `volatility`만 시나리오에 반영합니다.
 
 ## 시나리오 유형
 

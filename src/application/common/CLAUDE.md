@@ -6,15 +6,17 @@
 
 ```text
 common/
-  dto.py                 # BaseDTO, ResponseDTO, Pagination DTO
-  dependencies.py        # FastAPI DI: DB/KIS/Redis/Settings/일부 서비스 + verify_admin_access
+  dto.py                 # BaseDTO, ResponseDTO, PaginationDTO/PaginatedResponseDTO 등 공통 DTO
+  dependencies.py        # FastAPI DI: DB/KIS/Redis/Settings/일부 서비스 + verify_admin_access(AdminAccessDep)
+                         #   + 관리자 세션 require_admin_session(AdminSessionDep)/OptionalAdminSessionDep
   decorators.py          # @transaction, @retry, @cache, @log_execution, @validate_input
   exceptions.py          # 공통 예외(도메인에서 래핑/변환에 사용)
   client_ip.py           # 신뢰 프록시 기반 클라이언트 IP 추출(SSOT)
+  password_hash.py       # 관리자 비밀번호 scrypt 해시/검증(hash_password/verify_password)
   middleware/            # AccessLoggingMiddleware 등 공통 미들웨어
-  indicators.py          # 기술적 지표 계산
-  performance_metrics.py # 성과 지표 계산
-  trading_calendar.py    # 거래일/영업일 계산 유틸
+  indicators.py          # 기술적 지표 계산(SMA/RSI/Stochastic/ATR/ADX/골든크로스 지표 등)
+  performance_metrics.py # 성과 지표 계산(Sharpe는 calculate_daily_sharpe_ratio — 일별 수익률 기반)
+  trading_calendar.py    # 거래일/영업일 계산 + is_provisional_daily_bar(15:31 KST 전 당일 일봉 = 잠정 봉)
   background_tasks.py    # 토큰 자동 갱신 등 백그라운드 태스크
 ```
 

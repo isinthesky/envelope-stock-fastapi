@@ -7,7 +7,7 @@ migrations. It stores state; it does not decide trading policy.
 ## STRUCTURE
 ```text
 database/
-|-- connection.py      # async engine/session factories and close_db
+|-- connection.py      # async engine/session factories (get_db, get_async_session) and close_db
 |-- models/            # SQLAlchemy ORM models
 `-- repositories/      # repository pattern over AsyncSession
 ```
@@ -17,10 +17,10 @@ Migrations live in `alembic/versions/` and must track model/schema changes.
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Engine/session setup | `connection.py` | `AsyncSessionLocal`, `get_db`, `close_db` |
+| Engine/session setup | `connection.py` | `AsyncSessionLocal`, `get_db`, `get_async_session`, `close_db` (pool_size 10 / max_overflow 20) |
 | Base CRUD | `repositories/base_repository.py` | shared CRUD, pagination/search/stat mixins |
 | Strategy persistence | `models/strategy*.py`, `repositories/strategy*_repository.py` | strategy and symbol state tables |
-| OHLCV cache | `models/ohlcv.py`, `repositories/ohlcv_repository.py` | used by backtest and OHLCV services |
+| OHLCV cache | `models/ohlcv.py`, `repositories/ohlcv_repository.py` | used by backtest and OHLCV services; `save_candles_bulk` refuses same-day 1d bars before 15:31 KST (`common/trading_calendar.is_provisional_daily_bar`) and upserts bump `updated_at` |
 | Analysis history | `models/analysis_history.py`, `repositories/analysis_history_repository.py` | strategy analysis persistence |
 | Access logs | `models/access_log.py`, `repositories/access_log_repository.py` | public-page access log surface |
 | Personal/credit snapshots | `models/personal_flow_snapshot.py`, `models/market_credit_snapshot.py` | sell-risk inputs |
@@ -43,5 +43,5 @@ Migrations live in `alembic/versions/` and must track model/schema changes.
 ## TESTING NOTES
 - Adapter tests live in `tests/adapters/`; repository-heavy tests currently sit mostly in
   `tests/domain/`.
-- CodeGraph flagged `OHLCVRepository` as central with no direct covering test; verify callers when
-  changing it.
+- `OHLCVRepository` is central but has no direct repository test; only the provisional-bar helper is
+  pinned (`tests/adapters/test_ohlcv_provisional_bar_guard.py`). Verify callers when changing it.

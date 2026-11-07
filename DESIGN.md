@@ -1,6 +1,6 @@
 # KIS Strategy Alert Design System
 
-> 토큰은 backtest.css·recommendation.css에만 적용됨. mypage/strategy/sell_strategy.css는 hex 하드코딩(리팩터 대상)
+> 아래 토큰(`--surface-*` 등)은 **어디에도 `:root`로 정의되어 있지 않고**, `backtest.css`·`recommendation.css`가 `var(--token, <Light 값>)` 폴백 형태로만 참조한다 — 즉 실제 렌더링은 항상 Light 값이며 Dark 열은 미구현(목표값)이다. `mypage.css`·`strategy.css`·`sell_strategy.css`는 hex 하드코딩(리팩터 대상), 공개 포털 `public_strategy.css`는 자체 로컬 토큰(`--bg`, `--surface`, `--brand` 등)을 쓴다.
 
 ## 1. Atmosphere & Identity
 
@@ -29,9 +29,9 @@ A compact operations dashboard for trading strategy checks. It should feel quiet
 | Status/warning-bg | --status-warning-bg | #fef3c7 | #78350f | Warning badges |
 | Status/error | --status-error | #dc2626 | #ef4444 | Bearish, fail, destructive |
 | Status/error-bg | --status-error-bg | #fee2e2 | #7f1d1d | Error badges |
-| Status/pink | --status-pink | #ec4899 | #f472b6 | MA5 strategy accent |
-| Strategy/golden | --strategy-golden | #1e3a5f | #1e3a5f | Golden-cross strategy panel |
-| Strategy/golden-end | --strategy-golden-end | #2d5a87 | #2d5a87 | Golden-cross panel gradient |
+| Status/pink | --status-pink | #ec4899 | #f472b6 | (미사용 — MA5 전략 UI 제거됨, 예약) |
+| Strategy/golden | --strategy-golden | #1e3a5f | #1e3a5f | Golden-cross strategy panel (`strategy.css` `.strategy-info`, `public_strategy.css`에 hex로 사용) |
+| Strategy/golden-end | --strategy-golden-end | #2d5a87 | #2d5a87 | Golden-cross panel gradient (hex로 사용) |
 
 ### Rules
 
@@ -95,7 +95,7 @@ All spacing derives from a base of 4px.
 
 ### Stock Table
 
-- **Structure**: `.stock-table` with semantic `thead`, `tbody`, `th`, and `td`.
+- **Structure**: `.stock-table` (`static/styles/strategy.css`) with semantic `thead`, `tbody`, `th`, and `td`.
 - **Variants**: strategy scan, universe list, history list.
 - **Spacing**: 10px vertical and 12px horizontal cell padding.
 - **States**: hover row background, selected row background, placeholder row for empty/loading.
@@ -104,8 +104,8 @@ All spacing derives from a base of 4px.
 
 ### Status Badge
 
-- **Structure**: inline `.state-badge` with semantic status classes.
-- **Variants**: strategy state, financial state, MA5 state.
+- **Structure**: inline `.state-badge` (`strategy.css`; 공개 포털은 `public_strategy.css`에 별도 정의) with semantic status classes.
+- **Variants**: strategy state, financial state.
 - **Spacing**: 4px by 10px padding.
 - **States**: static status display.
 - **Accessibility**: text label must not rely on color alone.

@@ -1,6 +1,19 @@
 # 백테스트 성능 테스트 결과
 
-## 테스트 환경
+> **현황(2026-11-07)** — 아래 수치는 2025-10-23 측정 **이력**이다(재측정하지 않음).
+> - 측정 대상: `tests/test_backtest_performance.py`(합성 데이터 + 온디맨드 `BacktestEngine`, 7개 테스트).
+>   시간 상한(30일 0.5s / 180일 2s / 365일 5s / 730일 10s / 트렌드별 1s / 동시 3종목 3s)은 현재 코드와 동일.
+> - 측정 당시 시그널 생성기는 이후 제거된 볼린저+엔벨로프 계열로 추정되며(약 80% 확신), 현재 엔진은 골든크로스 생성기만 지원한다.
+>   거래 횟수·수익률·승률은 현재 코드와 다르다.
+> - **지표 정의 변경**: 기록된 `Sharpe -11.45`는 구 정의 `(CAGR−3%)/연변동성`(제거됨) 기준이다.
+>   현재는 일별 초과수익 기준(`calculate_daily_sharpe_ratio`) — [PERFORMANCE_METRICS.md](./PERFORMANCE_METRICS.md).
+> - **승률 신뢰 불가**: 2026-11 이전 엔진은 부분익절 시 분할 lot 전부가 같은 날 청산되는 결함(사실상 고정 +10% 익절)이
+>   있어 승률이 과대 계상될 수 있었다(예: 365일 84.2%). 수정: `BacktestEngine.partial_tp_stage`.
+> - "실전 준비 완료/프로덕션 배포 가능"은 **처리 속도**에 대한 평가일 뿐 전략 유효성과 무관하다
+>   (골든크로스는 walk-forward NO-GO). 연구용 대량 실행은 `PortfolioParityEngine` 경로를 쓴다.
+> - 재실행: `docker run --rm -v <repo>:/work -w /work -e PYTHONPATH=/work -e UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv kis-strategy-alert-server-api uv run pytest tests/test_backtest_performance.py -q`
+
+## 테스트 환경 (2025-10-23 측정 당시)
 
 - **플랫폼**: macOS (Darwin 24.6.0)
 - **Python**: 3.11.12
@@ -53,9 +66,9 @@
 처리 시간: 0.026초
 일평균 처리: 0.07ms
 거래 횟수: 19회
-승률: 84.2%
+승률: 84.2%   # 2026-11 이전 엔진 결함(부분익절 lot 동시청산) 영향 가능 — 신뢰 불가
 MDD: -0.39%
-Sharpe Ratio: -11.45
+Sharpe Ratio: -11.45   # 구 정의 (CAGR−3%)/연변동성 — 현재 정의와 비교 불가
 ```
 
 **분석**:
@@ -117,8 +130,7 @@ CAGR: -0.25%
 ```
 
 **분석**:
-- 3개 종목 동시 처리 가능
-- 병렬 처리로 효율성 향상
+- 3개 종목 동시 처리 가능(테스트는 asyncio 동시 실행 — CPU 바운드라 실제 병렬 이득은 제한적)
 - 다중 종목 백테스트에 적합
 
 ## 성능 특성 분석
@@ -165,6 +177,8 @@ CAGR: -0.25%
 ## 병목 구간 분석
 
 성능 프로파일링 결과, 주요 시간 소비 구간:
+
+(⚠️ 프로파일링 산출물은 저장소에 남아 있지 않아 아래 비율은 검증 불가)
 
 1. **성과 지표 계산** (~40%)
    - MDD, Sharpe Ratio, Sortino Ratio 등 복잡한 계산

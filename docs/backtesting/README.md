@@ -1,334 +1,95 @@
 # 백테스팅 시스템 문서
 
-## 📋 개요
-
-이 문서는 **볼린저 밴드 + 엔벨로프 전략**의 백테스팅 시스템 구축을 위한 종합 가이드입니다.
-
-과거 데이터를 활용하여 전략의 성과를 검증하고, 파라미터를 최적화하며, 실전 투자 전 리스크를 평가하는 체계적인 방법을 제공합니다.
-
-## 🎯 백테스팅의 목적
-
-### 1. 전략 검증
-- 과거 데이터에서 전략이 실제로 수익을 냈는지 확인
-- 다양한 시장 환경(상승장, 하락장, 횡보장)에서의 성과 평가
-- 전략의 강점과 약점 파악
-
-### 2. 파라미터 최적화
-- 볼린저 밴드 기간 (10일, 20일, 30일 등)
-- 표준편차 배수 (1.5, 2.0, 2.5 등)
-- 엔벨로프 비율 (1%, 2%, 3% 등)
-- 손절/익절 비율
-
-### 3. 리스크 관리
-- 최대 낙폭(MDD) 확인
-- 변동성 측정
-- 연속 손실 기간 파악
-- 적정 포지션 크기 결정
-
-### 4. 현실적인 기대치 설정
-- 실제 예상 수익률
-- 드로다운 대비 능력
-- 평균 보유 기간
-- 매매 빈도
+> **현황(2026-11-07)**: 대상 전략은 **골든크로스(MA55/MA165 + Stochastic 눌림목)** 하나다.
+> 볼린저+엔벨로프 평균회귀 전략과 관련 코드·예제(`StrategyConfigDTO(bollinger_band=…)` 등)는 완전 제거됐다.
+> 연구 결론: 골든크로스 **NO-GO**(실 데이터 walk-forward에서 OOS 엣지 없음,
+> `reports/research_2026-11-06_summary.md`). 이전 판의 `WORK_PLAN.md`·`strategy_guide.md` 링크는 존재하지 않는다.
 
 ## 📚 문서 구조
 
-본 백테스팅 시스템은 다음 문서들로 구성되어 있습니다:
+| 문서 | 내용 |
+|---|---|
+| [PERFORMANCE_METRICS.md](./PERFORMANCE_METRICS.md) | 성과·과적합 지표 정의(계산식 + 구현 심볼) |
+| [DATA_VALIDATION.md](./DATA_VALIDATION.md) | 데이터 소스, ohlcv_cache, 로더 검증, 커버리지 게이트 |
+| [PERFORMANCE_TEST_RESULTS.md](./PERFORMANCE_TEST_RESULTS.md) | (이력) 2025-11 파라미터 비교 결과 |
+| [실행_결과_및_제한사항.md](./실행_결과_및_제한사항.md) | (이력) 2025-10 초기 실행 결과·제한사항 |
+| [gc_rsi_mixed_buy_signal_review.md](./gc_rsi_mixed_buy_signal_review.md) | GC+RSI 혼합 매수 신호 검토 |
+| [examples/backtest/README.md](../../examples/backtest/README.md) | 탐색용 예제 |
 
-### 1. [WORK_PLAN.md](./WORK_PLAN.md)
-**세부 작업 계획 및 일정**
+## 🔀 두 가지 실행 경로
 
-구현할 기능들을 단계별로 나누고, 각 단계의 예상 소요 시간과 우선순위를 정의합니다.
+| 경로 | 시그널 | 용도 |
+|---|---|---|
+| **온디맨드 엔진** `BacktestEngine` (`domain/backtest/engine.py`) | 레거시 `generators/golden_cross.GoldenCrossSignalGenerator` — **라이브와 불일치**(시그널 Jaccard 46/314) | API·`/mypage/backtest` 진단용 |
+| **라이브 패리티** `GoldenCrossParityReplay` (`golden_cross_parity.py`) + `PortfolioParityEngine` (`portfolio_parity_engine.py`) | 실주문 FSM(`GoldenCrossStateMachine`) 그대로 리플레이 — 라이브 시그널 100% 일치(182/182) | **검증·연구는 반드시 이 경로** |
 
-📖 포함 내용:
-- Phase별 구현 계획 (5단계)
-- 각 Phase의 세부 태스크
-- 예상 소요 시간
-- 의존성 관계
-- 마일스톤
+성과 집계는 두 경로 모두 `result_builder.build_backtest_result` 단일 출처.
 
-### 2. [DATA_VALIDATION.md](./DATA_VALIDATION.md)
-**데이터 수집 및 검증 방법**
+### 온디맨드 엔진 주요 규칙(2026-11 수정 반영)
+- 체결 시점 `BacktestConfigDTO.execution_timing`: `next_open`(기본) | `next_close` | `same_close`.
+- 부분익절은 **포지션 단위로 추적**(`BacktestEngine.partial_tp_stage`): 1차(`partial_take_profit_1`, 기본 +10%)에
+  첫 lot, 2차(기본 +16%)에 다음 lot만 청산. 이전에는 3개 lot이 같은 날 모두 청산돼 사실상 고정 +10% 익절이었고
+  **승률이 부풀려졌다**.
+- 리스크 청산 후 재진입은 **새 골든크로스** 필요(`require_fresh_cross_after_exit=True`, 라이브 FSM 정합).
+- 유니버스 백테스트(`/run-universe-golden-cross`, `/universe/golden-cross`): 종목은 요청 `symbols` 또는
+  종목코드 순 선택(오늘의 GC 상태·전체기간 수익률 랭킹 미사용), 포트폴리오는 진입일→종목코드 우선순위,
+  **일별 MTM MDD**, 기간 종료 시 미청산분은 비용 차감 순청산가로 평가(`BacktestService.simulate_universe_portfolio`).
 
-백테스팅의 신뢰도는 데이터 품질에 달려있습니다. 데이터 수집, 저장, 검증 방법을 상세히 설명합니다.
+### 연구 옵션 (opt-in, `PortfolioExecutionOptions`)
+기본값 = 기존 동작. `fill_timing`(`same_close`|`next_open`), `sizing_mode`(`cash_ratio`|`equal_weight_equity`),
+`cash_interest`(`cash_interest.py`), `liquidate_at_end`, `exit_overlay`(`exit_overlay.py`),
+`entry_guard`(SafetyGuard 재현, `entry_guard.py`, `same_close` 전용).
+별도 연구 모듈: `momentum_rotation.py`, `state_overlay.py`, `leverage_overlay.py`,
+`regime_filter.py`(`RegimeEntryFilter`, `use_di_direction`, `wilder_dmi_series`; di_sum=0은 NaN 처리).
 
-📖 포함 내용:
-- KIS API 차트 데이터 수집
-- 데이터 저장 형식 (CSV/Database)
-- 결측치 및 이상치 처리
-- 주식 분할/병합 조정
-- 휴장일 처리
-- 데이터 품질 검증 체크리스트
+## 💸 거래 비용 (`domain/backtest/cost_schedule.py`, `order_manager.py`)
 
-### 3. [PERFORMANCE_METRICS.md](./PERFORMANCE_METRICS.md)
-**성과 지표 계산 방법**
+- 매도세(증권거래세+농특세, 주식): 2018 0.30% → 2019-06-03 0.25% → 2020 0.25% → 2021 0.23% →
+  2023 0.20% → 2024 0.18% → 2025 0.15% → 2026 0.20%(약 80% 확신, 확정치 재확인 필요).
+  2018-01-01 이전 날짜는 `UnsupportedBacktestCostDateError`.
+- **국내 ETF 매도세 면제**: `etf_tax_exempt=True`(기본), 대상 `tax_exempt_symbols`(None이면 `settings.etf_universe_symbols`).
+- 수수료 0.015%, 슬리피지 0.05%(기본, `BacktestConfigDTO`로 오버라이드 가능). 확인: `scripts/common/print_backtest_cost_schedule.py`.
+- 해외/채권형 ETF 매매차익 배당소득세(15.4%)는 반영하지 않는다.
 
-백테스팅 결과를 정량적으로 평가하기 위한 다양한 성과 지표와 계산 방법을 제시합니다.
+## 🚀 실행
 
-📖 포함 내용:
-- 수익 지표 (수익률, 연환산 수익률)
-- 리스크 지표 (MDD, 변동성, Sharpe Ratio)
-- 거래 통계 (승률, Profit Factor)
-- 벤치마크 비교
-- 지표별 계산식 및 Python 예제
+| 대상 | 방법 |
+|---|---|
+| 단일/다종목 | `POST /api/v1/backtest/run`, `/run-multi` |
+| 유니버스 | `POST /api/v1/backtest/run-universe-golden-cross`, `GET /api/v1/backtest/universe/golden-cross` |
+| 데이터 품질 | `POST /api/v1/backtest/validate-data` |
+| 최신 walk-forward 리포트(read-only) | `GET /api/v1/backtest/walk-forward/latest` (기준선 `reports/walk_forward_YYYYMMDD_HHMMSS.json`만 — A/B 변형 리포트 제외) |
+| 페이지 | `/mypage/backtest` (관리자 로그인 필요) |
+| Walk-forward | `scripts/research/run_walk_forward.py` — `--n-trials`(누적 시도 수, DSR), `--output-dir`, `--regime-ab`, `--sector-cap-ab` 등 |
 
-## 🚀 빠른 시작
+- API는 관리자 로그인 세션 + `AdminAccessDep`(IP allowlist, 쓰기 메서드는 `X-Requested-With: XMLHttpRequest`) 필요.
+- 연구 스크립트는 DB 캐시만 읽는다(KIS 미호출). 실행 패턴: `scripts/research/research_suite_20261106.py` 상단 docstring.
 
-### 백테스팅 실행 순서
+## 📊 연구 결론 요약 (2026-11-07)
 
-```mermaid
-graph TD
-    A[1. 데이터 수집] --> B[2. 데이터 검증]
-    B --> C[3. 전략 설정]
-    C --> D[4. 백테스팅 실행]
-    D --> E[5. 결과 분석]
-    E --> F{만족?}
-    F -->|No| G[파라미터 조정]
-    G --> C
-    F -->|Yes| H[실전 투자]
+| 주제 | 판정 | 근거 |
+|---|---|---|
+| 골든크로스 | NO-GO | `reports/research_2026-11-06_summary.md` |
+| 모멘텀 로테이션 | B&H 하회 | 동일 |
+| State overlay | CONDITIONAL | `reports/state_overlay_prereg_result.md` |
+| 2x 레버리지 overlay | NO-GO | `reports/leverage_overlay_prereg_result.md` |
+| SafetyGuard 연결 | 연결(dev OOS Sharpe 0.128→0.435) | `reports/entry_guard_eval_20261107.json` |
+
+## ⚠️ 주의사항
+- 과최적화: 파라미터 스윕은 walk-forward OOS + DSR(누적 `--n-trials`) + PBO로 검증. 게이트는 `gates.py`.
+- 생존 편향: 유니버스·적격성은 현재 스냅샷.
+- Look-ahead: 일봉 신호 종가 체결(`same_close`)은 장후 시간외 종가 주문을 전제로 한다.
+- 데이터: 당일 15:31 이전 잠정 봉은 캐시되지 않는다. 보존 3650일.
+
+## 🧪 테스트
+
+```bash
+docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -e PYTHONPATH=/work -e UV_PROJECT_ENVIRONMENT=/tmp/kis-test-venv kis-strategy-alert-server-api uv run pytest tests/ -q
 ```
-
-### 최소 요구사항
-
-```python
-# 백테스팅 실행을 위한 최소 데이터
-백테스팅 기간: 최소 1년 (권장 3-5년)
-데이터 주기: 일봉
-데이터 항목: 시가, 고가, 저가, 종가, 거래량
-초기 자본: 1,000만원 이상 권장
-```
-
-### 간단한 예제
-
-```python
-import asyncio
-from src.application.domain.backtest.service import BacktestService
-from src.application.domain.strategy.dto import StrategyConfigDTO
-
-
-async def run_backtest_example():
-    """백테스팅 실행 예제"""
-    # 전략 설정
-    config = StrategyConfigDTO(
-        bollinger_band={"period": 20, "std_multiplier": 2.0},
-        envelope={"period": 20, "percentage": 2.0},
-        position={"allocation_ratio": 0.1},
-        risk_management={
-            "use_stop_loss": True,
-            "stop_loss_ratio": -0.03,
-            "use_take_profit": True,
-            "take_profit_ratio": 0.05
-        }
-    )
-
-    # 백테스팅 실행
-    service = BacktestService()
-    result = await service.run_backtest(
-        symbol="005930",  # 삼성전자
-        start_date="2023-01-01",
-        end_date="2024-12-31",
-        initial_capital=10_000_000,
-        config=config
-    )
-
-    # 결과 출력
-    print(f"총 수익률: {result.total_return:.2f}%")
-    print(f"MDD: {result.mdd:.2f}%")
-    print(f"승률: {result.win_rate:.2f}%")
-    print(f"Sharpe Ratio: {result.sharpe_ratio:.2f}")
-
-
-if __name__ == "__main__":
-    asyncio.run(run_backtest_example())
-```
-
-## 📊 백테스팅 결과 해석
-
-### 좋은 전략의 기준
-
-| 지표 | 우수 | 양호 | 부족 |
-|-----|------|------|------|
-| **연환산 수익률** | > 20% | 10-20% | < 10% |
-| **MDD** | < 15% | 15-25% | > 25% |
-| **승률** | > 60% | 50-60% | < 50% |
-| **Sharpe Ratio** | > 2.0 | 1.0-2.0 | < 1.0 |
-| **Profit Factor** | > 2.0 | 1.5-2.0 | < 1.5 |
-
-### 주의사항
-
-⚠️ **과최적화 (Overfitting) 주의**
-- 너무 많은 파라미터 조정은 과거 데이터에만 최적화될 위험
-- 백테스팅 기간을 여러 구간으로 나누어 검증
-
-⚠️ **생존 편향 (Survivorship Bias)**
-- 상장폐지 종목 제외 시 수익률이 과대평가됨
-- 전체 종목군 또는 상장폐지 종목 포함 필요
-
-⚠️ **미래 정보 유출 (Look-Ahead Bias)**
-- 시뮬레이션 시점에 알 수 없는 정보 사용 금지
-- 예: 당일 종가를 기준으로 당일 매수 주문
-
-⚠️ **거래 비용 고려**
-- 수수료 (약 0.015% 매수/매도)
-- 세금 (증권거래세 약 0.23%)
-- 슬리피지 (호가 스프레드)
-
-## 🔧 백테스팅 시스템 아키텍처
-
-```mermaid
-graph TB
-    subgraph "Data Layer"
-        A[KIS API]
-        B[CSV Files]
-        C[Database]
-    end
-
-    subgraph "Backtest Engine"
-        D[Data Loader]
-        E[Indicator Calculator]
-        F[Signal Generator]
-        G[Position Manager]
-        H[Order Executor]
-    end
-
-    subgraph "Analysis Layer"
-        I[Performance Calculator]
-        J[Statistics]
-        K[Visualization]
-    end
-
-    A --> D
-    B --> D
-    C --> D
-    D --> E
-    E --> F
-    F --> G
-    G --> H
-    H --> I
-    I --> J
-    I --> K
-```
-
-## 📖 각 문서 개요
-
-### WORK_PLAN.md
-구현 로드맵과 일정
-
-- **Phase 1**: 데이터 수집 인프라 (2-3일)
-- **Phase 2**: 백테스팅 엔진 (3-4일)
-- **Phase 3**: 성과 분석 (2-3일)
-- **Phase 4**: API 및 UI (2일)
-- **Phase 5**: 테스트 및 검증 (2-3일)
-
-**총 예상 기간**: 11-15일
-
-### DATA_VALIDATION.md
-데이터 품질 보장
-
-주요 검증 항목:
-- ✅ 결측치 0% 달성
-- ✅ 가격 이상치 탐지
-- ✅ 분할/병합 조정
-- ✅ 거래량 검증
-- ✅ 휴장일 처리
-
-### PERFORMANCE_METRICS.md
-정량적 평가 방법
-
-계산 지표:
-- 📈 수익률 (총, 연환산, 월별)
-- 📉 리스크 (MDD, 변동성, VaR)
-- 🎯 승률 & Profit Factor
-- 📊 Sharpe/Sortino Ratio
-- 📈 벤치마크 대비 성과
-
-## 🎓 학습 경로
-
-### 초급 (백테스팅 입문)
-1. **WORK_PLAN.md** - 전체 흐름 파악
-2. **간단한 예제 실행** - 기본 사용법 익히기
-3. **PERFORMANCE_METRICS.md** - 결과 해석 방법
-
-### 중급 (전략 최적화)
-1. **DATA_VALIDATION.md** - 데이터 품질 관리
-2. **파라미터 튜닝** - 그리드 서치
-3. **다양한 종목 테스트** - 일반화 확인
-
-### 고급 (시스템 구축)
-1. **백테스팅 엔진 커스터마이징**
-2. **자동화된 최적화 파이프라인**
-3. **실시간 성과 모니터링**
 
 ## 🔗 관련 문서
-
-- [전략 가이드](../strategy_guide.md) - 볼린저 밴드 + 엔벨로프 전략 설명
-- [아키텍처 문서](../base/ARCHITECTURE.md) - 전체 시스템 구조
-- [API 문서](../base/SERVICE.md) - 서비스 구현 가이드
-
-## 💡 Best Practices
-
-### 1. 충분한 데이터 사용
-```python
-# 최소 1년, 권장 3-5년
-start_date = "2020-01-01"  # 5년 데이터
-end_date = "2024-12-31"
-```
-
-### 2. Out-of-Sample 테스트
-```python
-# 70% 훈련, 30% 검증
-train_period = ("2020-01-01", "2023-06-30")
-test_period = ("2023-07-01", "2024-12-31")
-```
-
-### 3. 거래 비용 포함
-```python
-commission = 0.015 / 100  # 0.015%
-tax = 0.23 / 100  # 0.23%
-slippage = 0.05 / 100  # 0.05%
-```
-
-### 4. 다양한 시장 환경 테스트
-- 상승장: 2020-2021
-- 하락장: 2022
-- 횡보장: 2023
-
-### 5. 여러 종목 테스트
-```python
-symbols = [
-    "005930",  # 삼성전자 (대형주)
-    "000660",  # SK하이닉스 (반도체)
-    "035420",  # NAVER (IT)
-    "051910",  # LG화학 (화학)
-]
-```
-
-## 🆘 트러블슈팅
-
-### 문제: 백테스팅 결과가 너무 좋음
-**원인**: 과최적화, 미래 정보 유출
-**해결**: Out-of-sample 테스트, 코드 리뷰
-
-### 문제: 데이터 결측치 발생
-**원인**: KIS API 오류, 휴장일
-**해결**: DATA_VALIDATION.md 참고
-
-### 문제: 실전과 백테스팅 성과 차이
-**원인**: 슬리피지, 수수료 미반영
-**해결**: 거래 비용 정확히 반영
-
-## 📞 문의 및 지원
-
-백테스팅 시스템 관련 문의사항이나 개선 제안은 다음 경로로 연락 주시기 바랍니다:
-
-- GitHub Issues: [프로젝트 이슈](https://github.com/isinthesky/envelope-stock-fastapi/issues)
-- Email: 프로젝트 관리자
-
-## 📄 라이선스
-
-MIT License
+- [아키텍처](../base/ARCHITECTURE.md), [서비스 가이드](../base/SERVICE.md)
 
 ---
 
-**마지막 업데이트**: 2025-10-22
-**문서 버전**: 1.0
+**마지막 업데이트**: 2026-11-07

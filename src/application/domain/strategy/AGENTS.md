@@ -20,7 +20,10 @@ notifications, OHLCV loading, and universe analysis.
 | Notifications (wiring) | `notification_scheduler.py` | scheduler wiring + thin job orchestrators |
 | Alert payloads | `alert_builders.py` | ETF leader summary, buy/sell alert assembly (pure functions) |
 | Notification dedupe | `notification_dedupe.py` | freshness/signature/dedupe cache |
-| Golden-cross execution | `golden_cross_engine.py`, `state_machine.py` | state transition and dry-run/live execution |
+| Golden-cross execution | `golden_cross_engine.py`, `state_machine.py` | state transition and dry-run/live execution; live orders default to after-hours closing price (`STRATEGY_ORDER_PRICE_TYPE=closing`, ORD_DVSN 06) and stay `PENDING` until `reconcile_open_orders` (16:10 `daily_order_reconcile`) |
+| Market regime gate | `market_regime.py` | `build_regime_filter`/`market_regime_ok`; ADX14>=20 on `GC_REGIME_BENCHMARK` (069500); scan/alerts fail-open, live engine fail-closed (blocks new buys only) |
+| Peak-drawdown contract | `risk_contract.py` | shared peak-drawdown stop helpers |
+| Public portal service | `public_strategy_service.py`, `public_dto.py` | rate-limited public scan / sell analysis |
 | OHLCV for strategies | `ohlcv_data_loader.py` | DB cache plus KIS/Naver loading for strategy services |
 | Shared DTOs | `dto.py` | large contract surface; check router/template consumers |
 | Presets/signals | `presets.py`, `signal_evaluator.py`, `stock_screener.py` | reusable strategy calculations |
@@ -33,7 +36,8 @@ notifications, OHLCV loading, and universe analysis.
 - Reuse canonical constants from `strategy_contract.py` (`GOLDEN_CROSS_SCAN_STATE_ORDER`,
   `DEFAULT_GOLDEN_CROSS_PULLBACK`, `SELL_STAGE_ORDER`) — do not redefine state/order literals.
 - Add sell-score weights/thresholds to `SellScoreSettings`/`PeakRuleThresholds`
-  (`src/settings/sell_score_settings.py`); model a new sell-score component as a `ScoreRule` so
+  (`src/settings/sell_score_settings.py`, the stage-threshold SSOT: REDUCE_1 28 / REDUCE_2 49 /
+  EXIT_ALL 70 since 2026-11-06); model a new sell-score component as a `ScoreRule` so
   points and max stay a single source.
 - Treat `dto.py` as a cross-interface contract. Router responses, templates, scripts, and tests may
   depend on field names.
@@ -42,6 +46,8 @@ notifications, OHLCV loading, and universe analysis.
 - Settings-backed thresholds belong in `src/settings/config.py` or `sell_score_settings.py`, with
   `.env.example` updated when environment-controlled.
 - For scheduler changes, verify both status endpoints and Telegram-disabled behavior.
+- Golden-cross MA periods are 55/165 everywhere (settings defaults, `.env`, live strategy DB config);
+  the engine logs `MA drift` (`_warn_if_ma_drift`) if the strategy config disagrees with settings.
 
 ## ANTI-PATTERNS
 - No live KIS order side effects in scan, research, or notification paths.
@@ -53,6 +59,8 @@ notifications, OHLCV loading, and universe analysis.
 ## TESTING NOTES
 - Existing focused tests live in `tests/domain/test_buy_strategy_*`,
   `tests/domain/test_sell_strategy_*`, `tests/domain/test_notification_scheduler*`,
-  `tests/domain/test_golden_cross_*`, and `tests/domain/test_personal_flow_cache.py`.
+  `tests/domain/test_golden_cross_*`, `tests/domain/test_live_order_path_fixes.py`,
+  `tests/domain/test_regime_entry_gate.py`, `tests/test_golden_cross_live_parity.py`, and
+  `tests/domain/test_personal_flow_cache.py`.
 - Favor deterministic fixtures for OHLCV DataFrames and provider clients; avoid network-dependent
   assertions unless a test is explicitly an integration check.

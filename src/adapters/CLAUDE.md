@@ -7,7 +7,7 @@
 ```text
 adapters/
   database/
-    connection.py        # Async engine/session, get_db/close_db
+    connection.py        # Async engine/session, get_db/get_async_session/close_db
     models/              # SQLAlchemy ORM models
     repositories/        # Repository 패턴
   cache/
@@ -33,6 +33,7 @@ adapters/
   - `order_repository.py`, `strategy_repository.py`
   - `strategy_signal_repository.py`, `strategy_symbol_state_repository.py`
   - `stock_universe_repository.py`, `ohlcv_repository.py`, `analysis_history_repository.py`
+  - `OHLCVRepository.save_candles_bulk`는 15:31 KST 이전의 당일 일봉(잠정 봉)을 저장하지 않고(`common/trading_calendar.is_provisional_daily_bar`), 업서트 시 `updated_at`을 갱신한다
 
 ## cache/
 - `redis_client.py`는 애플리케이션 전역에서 재사용되는 Redis 연결/명령 래퍼를 제공합니다.
@@ -40,8 +41,8 @@ adapters/
 
 ## external/
 - **kis_api/**
-  - `auth.py`: 토큰 발급/갱신/캐시(환경(prod/vps)은 `settings`로 결정)
-  - `client.py`: REST 호출(타임아웃/레이트리밋/재시도/백오프)
+  - `auth.py`: 토큰 발급/갱신/캐시(환경(prod/vps)은 `settings`로 결정). 캐시 디렉터리(`Path.home()/KIS/config`)의 모든 `KIS{YYYYMMDD}` 파일 중 유효하고 가장 늦게 만료되는 토큰을 재사용, 만료 시각은 KST aware, KIS가 거부한 토큰은 `refresh_token(rejected_token=...)`으로 후보 제외, 저장은 임시 파일 + `os.replace`(0600)
+  - `client.py`: REST 호출(`KISAPIClient`, httpx) — `SlidingWindowRateLimiter`, 타임아웃/재시도, EGW00201 지수 백오프(0.5→1.0→2.0초)
   - `exceptions.py`: KIS 연동 예외 정의
 - **websocket/**
   - `kis_websocket.py`: WS 연결/송수신
