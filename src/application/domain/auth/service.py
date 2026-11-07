@@ -3,8 +3,6 @@
 Auth Service - 인증 및 토큰 관리 서비스
 """
 
-from datetime import datetime
-
 from src.adapters.external.kis_api.auth import KISAuth
 from src.application.common.exceptions import AuthenticationError, InvalidTokenError
 from src.application.domain.auth.dto import (
@@ -98,8 +96,6 @@ class AuthService:
             raise InvalidTokenError()
 
         remaining_seconds = token_info.remaining_seconds
-        if remaining_seconds is None:
-            remaining_seconds = int((token_info.expires_at - datetime.now()).total_seconds())
 
         return TokenStatusDTO(
             is_valid=token_info.is_valid,

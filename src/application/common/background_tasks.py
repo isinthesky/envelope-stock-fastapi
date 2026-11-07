@@ -67,7 +67,8 @@ class TokenRefreshTask:
                         print(
                             f"🔄 Token will expire in {minutes_remaining} minutes. Refreshing..."
                         )
-                        await self.kis_auth.refresh_token()
+                        # 같은 토큰을 캐시에서 다시 집지 않도록 1시간 이상 남은 토큰만 재사용한다.
+                        await self.kis_auth.refresh_token(min_valid_seconds=3600)
                         refreshed_expires_in = format_token_expires_in(self.kis_auth.token_info)
                         print(
                             f"✅ Token refreshed successfully (expires in {refreshed_expires_in})"

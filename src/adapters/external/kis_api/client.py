@@ -206,7 +206,9 @@ class KISAPIClient:
                         mapped_error, attempt=1 if token_refreshed else 0
                     ):
                         token_refreshed = True
-                        await self.auth.refresh_token()
+                        await self.auth.refresh_token(
+                            rejected_token=self._bearer_token(auth_headers)
+                        )
                         continue
                     if self._should_retry_rate_limited(mapped_error, rate_limit_retries):
                         await asyncio.sleep(self._rate_limit_backoff_seconds(rate_limit_retries))
@@ -220,7 +222,9 @@ class KISAPIClient:
                         e, attempt=1 if token_refreshed else 0
                     ):
                         token_refreshed = True
-                        await self.auth.refresh_token()
+                        await self.auth.refresh_token(
+                            rejected_token=self._bearer_token(auth_headers)
+                        )
                         continue
                     if self._should_retry_rate_limited(e, rate_limit_retries):
                         await asyncio.sleep(self._rate_limit_backoff_seconds(rate_limit_retries))
@@ -294,7 +298,9 @@ class KISAPIClient:
                         mapped_error, attempt=1 if token_refreshed else 0
                     ):
                         token_refreshed = True
-                        await self.auth.refresh_token()
+                        await self.auth.refresh_token(
+                            rejected_token=self._bearer_token(auth_headers)
+                        )
                         continue
                     if self._should_retry_rate_limited(mapped_error, rate_limit_retries):
                         await asyncio.sleep(self._rate_limit_backoff_seconds(rate_limit_retries))
@@ -308,7 +314,9 @@ class KISAPIClient:
                         e, attempt=1 if token_refreshed else 0
                     ):
                         token_refreshed = True
-                        await self.auth.refresh_token()
+                        await self.auth.refresh_token(
+                            rejected_token=self._bearer_token(auth_headers)
+                        )
                         continue
                     if self._should_retry_rate_limited(e, rate_limit_retries):
                         await asyncio.sleep(self._rate_limit_backoff_seconds(rate_limit_retries))
@@ -360,6 +368,12 @@ class KISAPIClient:
             )
 
         return data
+
+    @staticmethod
+    def _bearer_token(auth_headers: dict[str, str]) -> str | None:
+        """요청에 실제로 실린 토큰 — 거부된 토큰을 캐시에서 다시 집지 않도록 refresh에 넘긴다."""
+        value = auth_headers.get("authorization", "")
+        return value.removeprefix("Bearer ") or None
 
     def _should_retry_with_token_refresh(self, error: KISAPIError, attempt: int) -> bool:
         """토큰 만료(EGW00123/401) 계열 오류는 1회 강제 refresh 후 재시도"""
