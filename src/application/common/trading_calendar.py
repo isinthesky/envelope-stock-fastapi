@@ -5,7 +5,7 @@ Trading Calendar - 한국 주식시장 거래일 계산
 python holidays 라이브러리 기반 공휴일 관리
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 try:
@@ -118,3 +118,24 @@ def get_trading_calendar(country: str = "KR") -> TradingCalendar:
         _calendar_instance = TradingCalendar(country=country)
 
     return _calendar_instance
+
+
+# ==================== 일봉 확정 판정 ====================
+
+KST_ZONE = timezone(timedelta(hours=9), "KST")
+# 정규장 15:30 종가(동시호가) 확정 직후. 이 시각 전의 당일 일봉은 잠정(장중/장전) 값이다(15:35 전략 실행은 확정 봉 사용).
+DAILY_BAR_FINAL_TIME_KST = (15, 31)
+
+
+def is_provisional_daily_bar(bar_timestamp: datetime, now: datetime | None = None) -> bool:
+    """당일(KST) 일봉이 아직 확정 전인지.
+
+    장중·장전에 받은 당일 일봉(현재가·누적거래량)을 확정 봉처럼 캐시하면, 이후 증분 업데이트가
+    "오늘 봉이 이미 있음"으로 보고 덮어쓰지 않아 지표·신호가 잠정값으로 계산된다.
+    naive timestamp는 UTC로 간주한다(일봉 캐시 관례: 00:00 UTC).
+    """
+    now_kst = (now or datetime.now(KST_ZONE)).astimezone(KST_ZONE)
+    ts = bar_timestamp if bar_timestamp.tzinfo else bar_timestamp.replace(tzinfo=timezone.utc)
+    if ts.astimezone(KST_ZONE).date() != now_kst.date():
+        return False
+    return (now_kst.hour, now_kst.minute) < DAILY_BAR_FINAL_TIME_KST

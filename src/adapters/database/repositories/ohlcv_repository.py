@@ -5,6 +5,7 @@ OHLCV Repository - 캔들 데이터 캐시 저장소
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Sequence
 
@@ -14,10 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.database.models.ohlcv import OHLCVModel
 from src.adapters.database.repositories.base_repository import BaseRepository
+from src.application.common.trading_calendar import is_provisional_daily_bar
 
 if TYPE_CHECKING:
     from src.application.domain.market_data.dto import CandleDTO
 
+
+logger = logging.getLogger(__name__)
 
 class OHLCVRepository(BaseRepository[OHLCVModel]):
     """OHLCV 캔들 데이터 Repository"""
@@ -130,8 +134,22 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
         # symbol/interval은 호출당 상수이므로 timestamp 기준 dedup(최신 우선). 어떤 호출자가
         # 중복을 넘겨도 심볼 전체 저장이 통째로 실패(saved=0)하는 것을 방지.
         deduped: dict = {}
+        skipped_provisional = 0
         for candle in candles:
+            # 장 마감 전 당일 일봉은 잠정값이다. 저장하면 16:00 증분 업데이트가 "오늘 봉 있음"으로
+            # 보고 덮어쓰지 않아 15:35 전략·스캔이 장중값으로 계산된다(2026-11-06 발견).
+            if interval == "1d" and is_provisional_daily_bar(candle.timestamp):
+                skipped_provisional += 1
+                continue
             deduped[candle.timestamp] = candle
+        if skipped_provisional:
+            logger.debug(
+                "[OHLCVRepo] %s: skipped %d provisional same-day daily bar(s)",
+                symbol,
+                skipped_provisional,
+            )
+        if not deduped:
+            return 0
         rows = [
             {
                 "symbol": symbol,
@@ -160,6 +178,9 @@ class OHLCVRepository(BaseRepository[OHLCVModel]):
                     "close": stmt.excluded.close,
                     "volume": stmt.excluded.volume,
                     "source": stmt.excluded.source,
+                    # Core INSERT ... ON CONFLICT는 ORM onupdate를 타지 않으므로 명시적으로 갱신한다
+                    # (이전엔 최초 저장 시각에 고정돼 잠정 봉 덮어쓰기 여부를 추적할 수 없었다).
+                    "updated_at": func.now(),
                 },
             )
             await self.session.execute(stmt)
