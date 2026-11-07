@@ -124,9 +124,11 @@ POST /api/v1/strategies/universe/financial-filter
 | 정규화 점수 | 단계 | 청산 비율 |
 |:-----------:|------|:---------:|
 | **≥ 70** | EXIT_ALL | 전량 (100%) |
-| **≥ 50** | REDUCE_2 | 30~40% |
-| **≥ 30** | REDUCE_1 | 20~30% |
-| < 30 | HOLD | — |
+| **≥ 49** | REDUCE_2 | 30~40% |
+| **≥ 28** | REDUCE_1 | 20~30% |
+| < 28 | HOLD | — |
+
+> 임계값의 단일 출처는 `src/settings/sell_score_settings.py`(`SellScoreSettings`, env `SELL_SCORE_*`)다. 2026-11-06 정규화 분모 수정 후 **기존 Stage 발생 빈도를 보존하도록** 30/50/70 → 28/49/70으로 재보정했다. 수익 검증값이 아니며, 같은 재생에서 점수와 20일 선행수익률은 양(+)의 관계였다(높은 점수 = 매도 신호로서 근거 없음).
 
 주요 규칙(가중치): Stoch 30 · RSI 25 · Volume 20 · ADX 15 · 개인수급 12 · MA 10 · 데드크로스 10 · 신용 8 · risk_combo 6 · ADX강세 페널티(감점)
 

@@ -13,6 +13,9 @@
 
 ## 핵심 운영 포인트
 
+- **접속 주소**: `https://stock.lgetech.co.kr` (nginx-proxy 경유, Let's Encrypt). api 포트는 `127.0.0.1:10131` 전용이라 `http://<IP>:10131` 직접 접근은 불가합니다(2026-11-06 제거).
+- **로그인**: `/page/*` 공개 포털·`/api/v1/public/*`·`/static`·`/health`를 제외한 모든 화면/API(`/mypage/*`, `/ops`, `/api/v1/*`, `/ws`)는 `/mypage/login/`에서 관리자 로그인해야 열립니다(`AdminSessionGateMiddleware`).
+
 - FastAPI 기본 Swagger/ReDoc/OpenAPI는 모든 환경에서 의도적으로 비활성화되어 있습니다.
   - API 문서는 운영 인증으로 우회 노출하지 않습니다. 재노출은 별도 보안 검토와 정책 변경을 거쳐야 합니다.
   - `docs_url=None`
@@ -64,7 +67,9 @@ kis-strategy-alert-server/
 - `GET /api/v1/orders`
 - ⚠️ `POST /api/v1/orders` — **수동 실주문 API**입니다. `TRADING_ENVIRONMENT=prod`에서는 KIS 실전 주문(`TTTC0802U`/`TTTC0801U`)이 나갑니다.
   `STRATEGY_LIVE_TRADING_ENABLED` kill-switch를 **거치지 않으며**, 보호 장치는 `ADMIN_ALLOWED_IPS` IP allowlist와
-  쓰기 요청용 `X-Requested-With: XMLHttpRequest` 헤더 검사(`verify_admin_access`)뿐입니다.
+  쓰기 요청용 `X-Requested-With: XMLHttpRequest` 헤더 검사(`verify_admin_access`), 그리고 **관리자 로그인 세션**입니다.
+  `/api/v1/orders/*`와 `/mypage/order`는 `/mypage/login/`에서 로그인해야 열립니다(`ADMIN_USERNAME`/`ADMIN_PASSWORD_HASH`, 미설정 시 전부 거부).
+  비밀번호 해시 생성/교체: `python3 scripts/ops/hash_admin_password.py` → `.env` 반영 → `docker compose up -d --build`.
 
 ### 전략/분석
 - `GET /api/v1/strategies`
@@ -303,7 +308,7 @@ docker run --rm -v /Users/m2-dev/Apps/kis-strategy-alert-server:/work -w /work -
 ## 알려진 함정
 
 - ⚠️ 월~금 `15:35` 활성 `golden_cross` 전략 실행은 `STRATEGY_LIVE_TRADING_ENABLED=true`일 때만 실주문한다. 기본값은 `false`이며 운영 검증과 명시적 승인 뒤에만 켠다.
-- ⚠️ **`STRATEGY_LIVE_TRADING_ENABLED`는 서버 전체의 주문 차단기가 아니다.** 강제 지점은 `GoldenCrossEngine.execute`(`domain/strategy/golden_cross_engine.py:137`) **한 곳**뿐이므로, 이 스위치가 막는 것은 전략 자동 실행(15:35 스케줄러)과 `POST /api/v1/strategies/{id}/execute` 경로다. `POST /api/v1/orders`(`order_router` → `OrderService.create_order`)는 이 검사를 전혀 거치지 않는 **별개의 실주문 경로**이며, 관리자 IP allowlist를 통과한 요청은 스위치가 OFF여도 KIS 실전 주문을 낼 수 있다. 즉 실질 방어선은 `ADMIN_ALLOWED_IPS` 범위다.
+- ⚠️ **`STRATEGY_LIVE_TRADING_ENABLED`는 서버 전체의 주문 차단기가 아니다.** 강제 지점은 `GoldenCrossEngine.execute`(`domain/strategy/golden_cross_engine.py:137`) **한 곳**뿐이므로, 이 스위치가 막는 것은 전략 자동 실행(15:35 스케줄러)과 `POST /api/v1/strategies/{id}/execute` 경로다. `POST /api/v1/orders`(`order_router` → `OrderService.create_order`)는 이 검사를 전혀 거치지 않는 **별개의 실주문 경로**이며, 관리자 IP allowlist를 통과한 요청은 스위치가 OFF여도 KIS 실전 주문을 낼 수 있다. 즉 실질 방어선은 `ADMIN_ALLOWED_IPS` 범위 + 관리자 로그인 세션(`require_admin_session`)이다.
 - ⚠️ `analysis_history`의 종목코드 칸에는 `MEMO-BROADCAST-1` 같은 메모 행을 넣지 않는다. 파이프라인이 `^[0-9A-Z]{6}$`로 자동 필터하지만, 종목코드 칸은 종목코드 전용이다.
 - ⚠️ 실운영 `KIS_API_RATE_LIMIT=8`은 KIS 실전 한도 `20/s`의 40%로 설정한 보수값이다. `EGW00201`은 `0.5 → 1.0 → 2.0`초 지수 백오프로 최대 3회 재시도한다.
 - ⚠️ 알림은 `09:20/11:20/12:20/14:20` 데이터 갱신 뒤 `09:30/11:30/12:30/14:30`에 전송한다. 20분 내 성공 갱신이 없으면 조용히 skip하고, 동일 시그니처는 6시간 동안 중복 차단한다.

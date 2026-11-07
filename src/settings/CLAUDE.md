@@ -44,7 +44,7 @@ settings/
 - 전략 실행/유니버스 스케줄 (`strategy_execution_hour/minute`, `strategy_execution_misfire_grace_seconds`(≥1), `universe_refresh_hour/minute`)
 - 전략 실행 경로 kill-switch (`strategy_live_trading_enabled`, env `STRATEGY_LIVE_TRADING_ENABLED`, 기본 `False`) — 강제 지점은 `domain/strategy/golden_cross_engine.py:137` 한 곳이다.
   - ⚠️ **서버 전체의 실주문 차단기가 아니다.** 이 스위치가 덮는 범위는 골든크로스 엔진을 타는 경로(15:35 스케줄러 실행, `POST /api/v1/strategies/{id}/execute`)뿐이다.
-  - `POST /api/v1/orders`(`interface/api/order_router.py` → `domain/order/service.py`)는 이 검사를 거치지 않고 KIS `order-cash`(`TTTC0802U`/`TTTC0801U`)를 직접 호출하는 **별개의 실주문 경로**이며, 보호 장치는 `AdminAccessDep`(`ADMIN_ALLOWED_IPS` + 쓰기용 `X-Requested-With` 헤더)뿐이다. 스위치를 "마스터"로 서술하지 말 것.
+  - `POST /api/v1/orders`(`interface/api/order_router.py` → `domain/order/service.py`)는 이 검사를 거치지 않고 KIS `order-cash`(`TTTC0802U`/`TTTC0801U`)를 직접 호출하는 **별개의 실주문 경로**이며, 보호 장치는 `AdminAccessDep`(`ADMIN_ALLOWED_IPS` + 쓰기용 `X-Requested-With` 헤더)와 관리자 로그인 세션(`ADMIN_USERNAME`/`ADMIN_PASSWORD_HASH`, 미설정 시 fail-closed)이다. 스위치를 "마스터"로 서술하지 말 것.
 - 알림 스케줄러 (`buy_notification_slots`/`sell_notification_slots`(시/분 범위 validator), `etf_leader_map`, `buy_notification_stoch_threshold`, `buy_notification_top_n`/`top_industries_n`/`scan_limit`)
 
 > 매도 점수 관련 설정(가중치·거래량 구간·개인수급/신용 피크 임계값)은 `sell_score_settings.py`의 `SellScoreSettings`/`PeakRuleThresholds`에 있다.

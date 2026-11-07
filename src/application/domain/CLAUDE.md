@@ -13,6 +13,7 @@
 ```
 domain/
 ├── access_log/           # 접근 로그 조회/통계/정리
+├── admin_auth/           # 관리자 ID/PW 로그인·Redis 세션·실패 잠금 (주문 경로 게이트)
 ├── account/              # 계좌 잔고/포지션 조회
 ├── auth/                 # KIS 인증/토큰/승인키 관리
 ├── backtest/             # 백테스트 엔진/데이터 로더
@@ -33,6 +34,10 @@ domain/
 ### access_log/
 - `dto.py`: 접근 로그 목록/통계/고유 IP/정리 결과 DTO (프론트 `templates/page/access_logs.html` 응답 계약)
 - `service.py`: `AccessLogRepository` 호출, `@transaction`으로 세션/트랜잭션 경계 소유
+
+### admin_auth/
+- `dto.py`: 로그인 요청/세션/로그인 결과 DTO
+- `service.py`: `AdminAuthService` — scrypt 검증(`common/password_hash.py`), 세션 토큰은 SHA-256만 Redis 키로 저장, IP별 실패 잠금, 자격증명 교체 시 세션 무효화. 미설정·Redis 장애는 fail-closed
 
 ### account/
 - `dto.py`: 계좌/포지션 DTO

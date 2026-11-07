@@ -21,6 +21,7 @@ src/
 - **모듈 로드(import 시점)**
   - `settings.logging_config.setup_logging()` 호출 — dictConfig 로 콘솔(stdout) 로깅을 설정하고, `LOG_TO_FILE=true` 면 회전 파일 핸들러를 추가한다. 라우터/서비스 import 보다 반드시 앞서야 한다.
   - `AccessLoggingMiddleware` 등록(`/page` 경로만 DB 기록, 클라이언트 IP는 `common/client_ip.py` 규칙).
+  - `AdminSessionGateMiddleware` 등록(최외곽): 공개 경로 외 전 HTTP/WS 요청에 관리자 로그인 세션 요구(`interface/admin_session_gate.py`).
 - **lifespan(startup)**
   - DB 연결 점검(`SELECT 1`)
   - Redis 연결 점검(`ping`)
@@ -34,7 +35,8 @@ src/
     - `/api/v1/auth` (Auth)
     - `/api/v1/market` (MarketData)
     - `/api/v1/accounts` (Account)
-    - `/api/v1/orders` (Order)
+    - `/api/v1/orders` (Order: 엔드포인트별 `AdminAccessDep` + include-level `require_admin_session` 로그인 세션)
+    - `/api/v1/admin-auth` (AdminAuth: 관리자 ID/PW 로그인/로그아웃/me, 라우터 내부 prefix)
     - `/api/v1/strategies` (Strategy: 라우터 단위 `verify_admin_access` 보호. 전략 CRUD admin 라우터는 `enable_admin_strategy_routes=True` 일 때만 추가 마운트)
     - `/api/v1/strategies` (SellRuleResearch: 라우터 내부 prefix)
     - `/api/v1/ops` (Operations: `AdminAccessDep` 보호)
