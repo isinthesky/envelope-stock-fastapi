@@ -81,7 +81,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             kis_auth = get_kis_auth()
             await kis_auth.get_access_token()
             expires_in = format_token_expires_in(kis_auth.token_info)
-            print(f"✅ KIS API token issued (expires in {expires_in})")
+            print(
+                f"✅ KIS API token ready (source={kis_auth.last_token_source}, expires in {expires_in})"
+            )
 
             # 토큰 자동 갱신 백그라운드 태스크 시작
             token_refresh_task = get_token_refresh_task()
@@ -237,6 +239,12 @@ from src.application.common.middleware import AccessLoggingMiddleware
 
 app.add_middleware(AccessLoggingMiddleware)
 
+# 관리자 로그인 게이트 (가장 바깥쪽): 공개 경로(/page, /static, /api/v1/public, 로그인, /health) 외 전부
+# 로그인 세션을 요구한다. 목록은 src/application/interface/admin_session_gate.py 참고.
+from src.application.interface.admin_session_gate import AdminSessionGateMiddleware
+
+app.add_middleware(AdminSessionGateMiddleware)
+
 
 # 보안 헤더: 클릭재킹 방지. frame-ancestors 'self'로 동일 출처 프레임만 허용
 # (mypage 전략 센터 iframe은 동작, 외부 사이트의 admin 프레임 삽입은 차단).
@@ -312,8 +320,9 @@ register_exception_handlers(app)
 
 # ==================== Router 등록 ====================
 
-from src.application.common.dependencies import verify_admin_access
+from src.application.common.dependencies import require_admin_session, verify_admin_access
 from src.application.interface.api.access_log_router import router as access_log_router
+from src.application.interface.api.admin_auth_router import router as admin_auth_router
 from src.application.interface.api.account_router import router as account_router
 from src.application.interface.api.auth_router import router as auth_router
 from src.application.interface.api.backtest_router import router as backtest_router
@@ -336,7 +345,14 @@ from src.application.interface.page import mypage_routers, public_page_routers
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(market_data_router, prefix="/api/v1/market", tags=["MarketData"])
 app.include_router(account_router, prefix="/api/v1/accounts", tags=["Account"])
-app.include_router(order_router, prefix="/api/v1/orders", tags=["Order"])
+# 실계좌 주문 경로: 엔드포인트별 IP 게이트(AdminAccessDep)에 더해 관리자 로그인 세션을 요구한다.
+app.include_router(
+    order_router,
+    prefix="/api/v1/orders",
+    tags=["Order"],
+    dependencies=[Depends(require_admin_session)],
+)
+app.include_router(admin_auth_router)  # 내부 prefix: /api/v1/admin-auth
 app.include_router(ops_router)
 app.include_router(sell_rule_research_router)
 # 기존 범용 전략 API는 관리자 전용 (외부 사용자는 /api/v1/public/strategies/*만 사용)

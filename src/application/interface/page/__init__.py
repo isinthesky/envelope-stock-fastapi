@@ -11,6 +11,9 @@ from src.application.interface.page.access_logs_page_router import (
 from src.application.interface.page.account_page_router import (
     router as account_page_router,
 )
+from src.application.interface.page.admin_login_page_router import (
+    router as admin_login_page_router,
+)
 from src.application.interface.page.auth_page_router import router as auth_page_router
 from src.application.interface.page.backtest_page_router import (
     router as backtest_page_router,
@@ -51,6 +54,7 @@ from src.application.interface.page.websocket_page_router import (
 # /mypage/* 관리자 페이지 라우터 (nav bar 포함)
 mypage_routers = [
     main_page_router,
+    admin_login_page_router,
     auth_page_router,
     account_page_router,
     market_data_page_router,
@@ -79,6 +83,7 @@ page_routers = mypage_routers + public_page_routers
 
 __all__ = [
     "main_page_router",
+    "admin_login_page_router",
     "auth_page_router",
     "account_page_router",
     "market_data_page_router",

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex" />
+  <title>관리자 로그인 - Stock API Admin</title>
+  <link rel="stylesheet" href="/static/styles/mypage.css?v={{ static_version|default('') }}" />
+  <style>
+    .login-wrap { max-width: 360px; margin: 12vh auto; padding: 0 16px; }
+    .login-wrap form { display: flex; flex-direction: column; gap: 10px; }
+    .login-wrap input { width: 100%; box-sizing: border-box; }
+    .login-error { color: #dc2626; min-height: 1.2em; margin: 0; }
+  </style>
+</head>
+<body>
+  <main class="login-wrap">
+    <h1>관리자 로그인</h1>
+    <p>실계좌 주문 화면은 로그인 후 이용할 수 있습니다.</p>
+    <form id="login_form" autocomplete="on">
+      <label for="login_username">아이디</label>
+      <input id="login_username" name="username" autocomplete="username" required maxlength="64" />
+      <label for="login_password">비밀번호</label>
+      <input id="login_password" name="password" type="password" autocomplete="current-password" required maxlength="256" />
+      <p id="login_error" class="login-error" role="alert"></p>
+      <button type="submit" id="login_submit">로그인</button>
+    </form>
+  </main>
+  <script>
+    const NEXT_PATH = {{ next_path|tojson }};
+    const form = document.getElementById("login_form");
+    const errorEl = document.getElementById("login_error");
+    const submitBtn = document.getElementById("login_submit");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      errorEl.textContent = "";
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch("/api/v1/admin-auth/login", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+          body: JSON.stringify({
+            username: document.getElementById("login_username").value,
+            password: document.getElementById("login_password").value,
+          }),
+        });
+        if (res.ok) {
+          window.location.replace(NEXT_PATH);
+          return;
+        }
+        const messages = {
+          401: "아이디 또는 비밀번호가 올바르지 않습니다.",
+          429: "로그인 실패가 많아 잠시 잠겼습니다. 잠시 후 다시 시도하세요.",
+          403: "허용되지 않은 접근입니다.",
+          503: "로그인을 사용할 수 없습니다. 서버 설정을 확인하세요.",
+        };
+        errorEl.textContent = messages[res.status] || `로그인 실패 (HTTP ${res.status})`;
+      } catch (e) {
+        errorEl.textContent = "서버에 연결할 수 없습니다.";
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

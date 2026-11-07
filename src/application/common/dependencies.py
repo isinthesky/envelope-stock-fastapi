@@ -7,7 +7,7 @@ FastAPI Dependency Injection을 위한 공통 의존성 함수 정의
 
 from collections.abc import AsyncIterator
 from functools import lru_cache
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,11 @@ from src.adapters.external.kis_api.auth import KISAuth, get_kis_auth
 from src.adapters.external.kis_api.client import KISAPIClient, get_kis_client
 from src.adapters.external.websocket.kis_websocket import KISWebSocket, get_kis_websocket
 from src.application.common.client_ip import get_client_ip, is_ip_allowed
-from src.application.common.exceptions import AuthorizationError
+from src.application.common.exceptions import AuthenticationError, AuthorizationError
+
+if TYPE_CHECKING:
+    from src.application.domain.admin_auth.dto import AdminSessionDTO
+    from src.application.domain.admin_auth.service import AdminAuthService
 
 # ==================== Database Session ====================
 
@@ -370,3 +374,44 @@ async def verify_admin_access(request: Request) -> str:
 
 # Type alias for Admin Access
 AdminAccessDep = Annotated[str, Depends(verify_admin_access)]
+
+
+# ==================== Admin Login Session ====================
+# 주문 페이지/주문 API는 IP allowlist(verify_admin_access)에 더해 ID/PW 로그인 세션을 요구한다.
+
+ADMIN_SESSION_COOKIE = "kis_admin_session"
+
+
+async def get_admin_auth_service() -> "AdminAuthService":
+    """AdminAuthService Dependency (Redis 세션 저장소)"""
+    from src.application.domain.admin_auth.service import AdminAuthService
+
+    redis_client = await get_redis_client()
+    return AdminAuthService(redis_client)
+
+
+AdminAuthServiceDep = Annotated["AdminAuthService", Depends(get_admin_auth_service)]
+
+
+async def get_admin_session(
+    request: Request,
+    auth_service: AdminAuthServiceDep,
+) -> "AdminSessionDTO | None":
+    """쿠키의 세션 토큰을 검증한다. 미로그인/만료/Redis 장애는 None(fail-closed)."""
+    token = request.cookies.get(ADMIN_SESSION_COOKIE)
+    if not token:
+        return None
+    return await auth_service.get_session(token)
+
+
+async def require_admin_session(
+    session: Annotated["AdminSessionDTO | None", Depends(get_admin_session)],
+) -> "AdminSessionDTO":
+    """API용: 로그인 세션이 없으면 401"""
+    if session is None:
+        raise AuthenticationError("Admin login required")
+    return session
+
+
+AdminSessionDep = Annotated["AdminSessionDTO", Depends(require_admin_session)]
+OptionalAdminSessionDep = Annotated["AdminSessionDTO | None", Depends(get_admin_session)]

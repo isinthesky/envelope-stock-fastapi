@@ -121,6 +121,22 @@ class RedisClient:
         res = await self.redis.set(key, value, ex=ttl, nx=True)
         return bool(res)
 
+    async def incr_with_ttl(self, key: str, ttl: int) -> int:
+        """INCR 후 첫 증가(=1)일 때만 TTL을 건다 (고정 윈도우 카운터 전용)
+
+        로그인 실패 집계처럼 fail-closed가 필요한 카운터용이므로 set_nx와 같이
+        Redis 오류를 삼키지 않고 전파한다.
+
+        Raises:
+            Exception: Redis 미연결/통신 오류
+        """
+        if not self.redis:
+            raise ConnectionError("Redis is not connected")
+        count = int(await self.redis.incr(key))
+        if count == 1:
+            await self.redis.expire(key, ttl)
+        return count
+
     async def compare_and_delete(self, key: str, expected_value: str) -> bool:
         """값이 소유 토큰과 같을 때만 키를 원자적으로 삭제한다.
 

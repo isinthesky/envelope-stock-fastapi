@@ -79,9 +79,10 @@ services:
       DEBUG: ${DEBUG:-false}
       HOST: 0.0.0.0
       PORT: "8000"
-    # api 는 공개 포털을 겸하므로 의도적으로 0.0.0.0 바인딩을 유지한다(postgres/redis 와 비대칭).
+    # 2026-11-06: 공개 포털 포함 모든 외부 접근은 https://stock.lgetech.co.kr(nginx-proxy) 경유로 일원화했다.
     ports:
-      - "${API_PORT:-10131}:8000"
+      # 외부 진입은 https://stock.lgetech.co.kr (nginx-proxy) 경유만 허용. 호스트 루프백에만 게시한다.
+      - "${API_BIND_HOST:-127.0.0.1}:${API_PORT:-10131}:8000"
     security_opt:
       - no-new-privileges:true
     volumes:

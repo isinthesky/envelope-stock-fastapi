@@ -5,6 +5,10 @@
 {% block content %}
 <h1>Order 관리</h1>
 <p>주문 생성, 조회, 취소, 정정</p>
+<p class="admin-session-bar">
+  로그인: <strong id="admin_session_user">{{ admin_username }}</strong>
+  <button type="button" onclick="adminLogout()" class="secondary">로그아웃</button>
+</p>
 
 <section>
   <h2>주문 생성</h2>
@@ -64,6 +68,14 @@
 {% endblock %}
 
 {% block extra_scripts %}
+const adminLogout = async () => {
+  try {
+    await fetch("/api/v1/admin-auth/logout", { method: "POST", credentials: "same-origin" });
+  } finally {
+    window.location.replace("/mypage/login/?next=%2Fmypage%2Forder%2F");
+  }
+};
+
 const createOrder = () => {
   const payload = {
     symbol: document.getElementById("order_symbol").value,
