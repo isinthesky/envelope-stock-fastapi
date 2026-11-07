@@ -225,24 +225,6 @@ class BootstrapCI:
     n_boot: int
 
 
-def bootstrap_mean_ci(
-    returns: list[float],
-    n_boot: int = 2000,
-    ci: float = 0.95,
-    seed: int = 12345,
-) -> BootstrapCI:
-    """일별 수익 평균의 부트스트랩 신뢰구간(단순 재표집)."""
-    r = np.asarray([x for x in returns if x == x], dtype=float)
-    if r.size < 2:
-        return BootstrapCI(0.0, 0.0, 0.0, 0)
-    rng = np.random.default_rng(seed)
-    idx = rng.integers(0, r.size, size=(n_boot, r.size))
-    boot_means = r[idx].mean(axis=1)
-    lo = float(np.quantile(boot_means, (1.0 - ci) / 2.0))
-    hi = float(np.quantile(boot_means, 1.0 - (1.0 - ci) / 2.0))
-    return BootstrapCI(point=float(r.mean()), low=lo, high=hi, n_boot=n_boot)
-
-
 def bootstrap_sharpe_ci(
     returns: list[float],
     n_boot: int = 2000,

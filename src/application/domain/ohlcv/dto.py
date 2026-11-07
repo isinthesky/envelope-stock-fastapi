@@ -177,40 +177,6 @@ class CleanupResultDTO(BaseDTO):
 # ==================== 결측 구간 ====================
 
 
-class GapInfoDTO(BaseDTO):
-    """
-    결측 구간 정보 DTO
-
-    Attributes:
-        symbol: 종목코드
-        start_date: 결측 시작일
-        end_date: 결측 종료일
-        trading_days_missing: 누락된 거래일 수 (추정)
-    """
-
-    symbol: str = Field(description="종목코드")
-    start_date: datetime = Field(description="결측 시작일")
-    end_date: datetime = Field(description="결측 종료일")
-    trading_days_missing: int = Field(default=0, description="누락된 거래일 수 (추정)")
-
-
-class SymbolGapsDTO(BaseDTO):
-    """
-    종목 결측 구간 DTO
-
-    Attributes:
-        symbol: 종목코드
-        gaps: 결측 구간 목록
-        total_missing_days: 총 누락 거래일 수 (추정)
-        has_gaps: 결측 여부
-    """
-
-    symbol: str = Field(description="종목코드")
-    gaps: list[GapInfoDTO] = Field(default_factory=list, description="결측 구간 목록")
-    total_missing_days: int = Field(default=0, description="총 누락 거래일 수")
-    has_gaps: bool = Field(default=False, description="결측 여부")
-
-
 # ==================== API 호출 예상치 ====================
 
 

@@ -83,35 +83,6 @@ class TechnicalIndicators:
         return {"upper": upper, "middle": middle, "lower": lower}
 
     @classmethod
-    def calculate_envelope(
-        cls, prices: list[float], period: int = 20, percentage: float = 2.0
-    ) -> dict[str, float | None]:
-        """
-        Envelope (이동평균 채널) 계산
-
-        Args:
-            prices: 가격 데이터 리스트
-            period: 이동평균 기간 (기본: 20)
-            percentage: 채널 폭 비율 (기본: 2.0%)
-
-        Returns:
-            dict: {"upper": 상단, "middle": 중간, "lower": 하단}
-        """
-        if len(prices) < period:
-            return {"upper": None, "middle": None, "lower": None}
-
-        middle = cls.calculate_sma(prices, period)
-
-        if middle is None:
-            return {"upper": None, "middle": None, "lower": None}
-
-        multiplier = 1 + (percentage / 100)
-        upper = middle * multiplier
-        lower = middle / multiplier
-
-        return {"upper": upper, "middle": middle, "lower": lower}
-
-    @classmethod
     def calculate_rsi(cls, prices: list[float], period: int = 14) -> float | None:
         """
         RSI (Relative Strength Index) 계산
@@ -191,73 +162,6 @@ class TechnicalIndicators:
         quantity = int(target_amount / current_price)
 
         return quantity
-
-    @classmethod
-    def get_signal_strength(
-        cls,
-        current_price: float,
-        bb_bands: dict[str, float | None],
-        envelope_bands: dict[str, float | None],
-    ) -> dict[str, float]:
-        """
-        시그널 강도 계산
-
-        현재가가 밴드에서 얼마나 벗어났는지 비율로 계산
-
-        Args:
-            current_price: 현재가
-            bb_bands: 볼린저 밴드
-            envelope_bands: 엔벨로프
-
-        Returns:
-            dict: {"bb_position": 볼린저 위치 (-1~1), "env_position": 엔벨로프 위치 (-1~1)}
-        """
-        if (
-            bb_bands["upper"] is None
-            or bb_bands["middle"] is None
-            or bb_bands["lower"] is None
-            or envelope_bands["upper"] is None
-            or envelope_bands["middle"] is None
-            or envelope_bands["lower"] is None
-        ):
-            return {"bb_position": 0.0, "env_position": 0.0}
-
-        bb_middle: float = bb_bands["middle"]
-        bb_upper: float = bb_bands["upper"]
-        bb_lower: float = bb_bands["lower"]
-
-        env_middle: float = envelope_bands["middle"]
-        env_upper: float = envelope_bands["upper"]
-        env_lower: float = envelope_bands["lower"]
-
-        # 볼린저 밴드 포지션 (-1: 하단, 0: 중간, 1: 상단)
-        if current_price >= bb_middle:
-            bb_position = (
-                (current_price - bb_middle) / (bb_upper - bb_middle) if bb_upper != bb_middle else 0
-            )
-        else:
-            bb_position = (
-                (current_price - bb_middle) / (bb_middle - bb_lower) if bb_middle != bb_lower else 0
-            )
-
-        # 엔벨로프 포지션
-        if current_price >= env_middle:
-            env_position = (
-                (current_price - env_middle) / (env_upper - env_middle)
-                if env_upper != env_middle
-                else 0
-            )
-        else:
-            env_position = (
-                (current_price - env_middle) / (env_middle - env_lower)
-                if env_middle != env_lower
-                else 0
-            )
-
-        return {
-            "bb_position": max(-2.0, min(2.0, bb_position)),  # -2 ~ 2 범위로 제한
-            "env_position": max(-2.0, min(2.0, env_position)),
-        }
 
     # ==================== Golden Cross Strategy Indicators ====================
 
@@ -913,15 +817,3 @@ class TechnicalIndicators:
             if TechnicalIndicators.is_market_fear_by_bollinger(closes[:end], period, std_mult):
                 return True
         return False
-
-    @staticmethod
-    def is_market_uptrend(closes: list[float], ma_period: int = 200) -> bool:
-        """시장 상승 레짐 여부 (마지막 종가 > MA(ma_period)).
-
-        추세추종 진입의 시장 게이트. 백테스트상 KOSPI>MA200일 때만 골든크로스
-        진입 시 약세·횡보장 whipsaw를 회피(승률·수익 개선). 데이터 부족 시 True(fail-open).
-        """
-        if len(closes) < ma_period:
-            return True
-        ma = sum(closes[-ma_period:]) / ma_period
-        return closes[-1] > ma

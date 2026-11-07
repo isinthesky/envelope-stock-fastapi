@@ -318,49 +318,15 @@ def calculate_volatility(equity_curve: pd.DataFrame) -> float:
 
 위험 대비 수익률 (무위험 수익률 고려)
 
-#### 계산식
+#### 계산식 (2026-11-06 변경)
 
 ```
-Sharpe Ratio = (연환산 수익률 - 무위험 수익률) / 연환산 변동성
+Sharpe = mean(r_d − rf_d) / std(r_d, ddof=1) × √252,   rf_d = (1 + rf_연)^(1/252) − 1  (기본 rf_연 = 3%)
 ```
 
-#### Python 구현
-
-```python
-def calculate_sharpe_ratio(
-    annualized_return: float,
-    volatility: float,
-    risk_free_rate: float = 3.0  # 무위험 이자율 3%
-) -> float:
-    """
-    Sharpe Ratio 계산
-
-    Args:
-        annualized_return: 연환산 수익률 (%)
-        volatility: 연환산 변동성 (%)
-        risk_free_rate: 무위험 이자율 (%)
-
-    Returns:
-        float: Sharpe Ratio
-    """
-    if volatility == 0:
-        return 0.0
-
-    sharpe = (annualized_return - risk_free_rate) / volatility
-
-    return sharpe
-```
-
-#### 예제
-
-```python
-sharpe = calculate_sharpe_ratio(
-    annualized_return=15.0,  # 15% 수익률
-    volatility=10.0,         # 10% 변동성
-    risk_free_rate=3.0       # 3% 무위험 이자율
-)
-print(f"Sharpe Ratio: {sharpe:.2f}")  # 1.20
-```
+- 구현: `src/application/common/performance_metrics.py` `calculate_daily_sharpe_ratio`
+- 결과·walk-forward 리포트는 `sharpe`(rf 3%)와 `sharpe_rf0`(DSR과 같은 rf=0 기준)를 함께 낸다.
+- 이전 정의 `(CAGR − 3%) / 연 변동성`(`calculate_sharpe_ratio`)은 DSR과 기준이 달라 제거했다.
 
 #### 해석 가이드
 
@@ -1011,7 +977,7 @@ class PerformanceAnalyzer:
         # 리스크 지표
         mdd_info = calculate_mdd(self.equity_curve['equity'].tolist())
         volatility = calculate_volatility(self.equity_curve)
-        sharpe = calculate_sharpe_ratio(annualized_return, volatility)
+        sharpe = calculate_daily_sharpe_ratio(daily_returns)  # rf 3%, 일별 초과수익 기준
         sortino = calculate_sortino_ratio(self.equity_curve, annualized_return)
         calmar = calculate_calmar_ratio(annualized_return, mdd_info["mdd"])
         var_95 = calculate_var(self.equity_curve)

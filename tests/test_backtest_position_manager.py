@@ -41,16 +41,6 @@ class TestPosition:
         self.position.update_highest_price(Decimal("72000"))
         assert self.position.highest_price == Decimal("75000")
 
-    def test_get_unrealized_profit(self):
-        """평가 손익 계산 테스트"""
-        # 수익
-        profit = self.position.get_unrealized_profit(Decimal("75000"))
-        assert profit == Decimal("50000")  # (75000 - 70000) * 10
-
-        # 손실
-        loss = self.position.get_unrealized_profit(Decimal("65000"))
-        assert loss == Decimal("-50000")  # (65000 - 70000) * 10
-
     def test_get_unrealized_profit_rate(self):
         """평가 손익률 계산 테스트"""
         # 수익률

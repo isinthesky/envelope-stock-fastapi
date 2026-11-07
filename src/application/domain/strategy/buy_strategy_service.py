@@ -28,8 +28,7 @@ from src.adapters.database.repositories.stock_universe_repository import (
 from src.adapters.external.dart_api import FinancialScreeningDTO, get_dart_client
 from src.application.common.decorators import transaction
 from src.application.common.indicators import TechnicalIndicators
-from src.application.domain.backtest.regime_filter import RegimeEntryFilter
-from src.application.domain.strategy.market_regime import build_regime_filter, market_regime_ok
+from src.application.domain.strategy.market_regime import market_regime_ok
 from src.application.domain.strategy.dto import (
     GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
@@ -58,11 +57,6 @@ logger = logging.getLogger(__name__)
 GC_SCAN_STATE_ORDER: dict[str, int] = {
     state.value: idx for idx, state in enumerate(GOLDEN_CROSS_SCAN_STATE_ORDER)
 }
-
-
-def _build_regime_filter() -> RegimeEntryFilter:
-    """하위호환 별칭 — 구현은 `market_regime.build_regime_filter`."""
-    return build_regime_filter()
 
 
 def _market_regime_ok(bench_df) -> bool:

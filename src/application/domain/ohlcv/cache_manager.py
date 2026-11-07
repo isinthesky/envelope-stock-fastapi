@@ -15,8 +15,6 @@ from src.application.common.trading_calendar import get_trading_calendar
 from src.application.domain.ohlcv.dto import (
     CacheRetentionPolicyDTO,
     CleanupResultDTO,
-    GapInfoDTO,
-    SymbolGapsDTO,
 )
 
 logger = logging.getLogger(__name__)
@@ -218,120 +216,6 @@ class OHLCVCacheManager:
         }
 
     # ==================== 결측 구간 탐지 ====================
-
-    async def detect_gaps(
-        self,
-        symbol: str,
-        start_date: datetime,
-        end_date: datetime,
-        interval: str = "1d",
-    ) -> SymbolGapsDTO:
-        """
-        결측 구간 탐지 (거래일 기준)
-
-        주말/공휴일을 고려한 실제 결측 구간만 반환
-
-        Args:
-            symbol: 종목코드
-            start_date: 시작일
-            end_date: 종료일
-            interval: 캔들 간격
-
-        Returns:
-            SymbolGapsDTO: 결측 구간 정보
-        """
-        candles = await self.ohlcv_repo.get_candles_by_date_range(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval,
-        )
-
-        if not candles:
-            # 전체 구간이 결측
-            trading_days = self.get_trading_days_between(start_date, end_date)
-            return SymbolGapsDTO(
-                symbol=symbol,
-                gaps=[
-                    GapInfoDTO(
-                        symbol=symbol,
-                        start_date=start_date,
-                        end_date=end_date,
-                        trading_days_missing=len(trading_days),
-                    )
-                ],
-                total_missing_days=len(trading_days),
-                has_gaps=True,
-            )
-
-        # 캐시된 날짜 집합
-        cached_dates = {
-            candle.timestamp.replace(tzinfo=None).date()
-            if candle.timestamp.tzinfo
-            else candle.timestamp.date()
-            for candle in candles
-        }
-
-        # 기대되는 거래일
-        trading_days = self.get_trading_days_between(start_date, end_date)
-        expected_dates = {day.date() for day in trading_days}
-
-        # 결측 날짜
-        missing_dates = sorted(expected_dates - cached_dates)
-
-        if not missing_dates:
-            return SymbolGapsDTO(
-                symbol=symbol,
-                gaps=[],
-                total_missing_days=0,
-                has_gaps=False,
-            )
-
-        # 연속된 결측 구간으로 그룹화
-        gaps = []
-        if missing_dates:
-            gap_start = missing_dates[0]
-            gap_end = missing_dates[0]
-
-            for i in range(1, len(missing_dates)):
-                current = missing_dates[i]
-                prev = missing_dates[i - 1]
-
-                # 연속 여부 확인 (거래일 기준 1일 차이)
-                if (current - prev).days <= 3:  # 주말 고려
-                    gap_end = current
-                else:
-                    gaps.append(
-                        GapInfoDTO(
-                            symbol=symbol,
-                            start_date=datetime.combine(gap_start, datetime.min.time()),
-                            end_date=datetime.combine(gap_end, datetime.min.time()),
-                            trading_days_missing=self._count_trading_days_in_range(
-                                gap_start, gap_end, missing_dates
-                            ),
-                        )
-                    )
-                    gap_start = current
-                    gap_end = current
-
-            # 마지막 구간 추가
-            gaps.append(
-                GapInfoDTO(
-                    symbol=symbol,
-                    start_date=datetime.combine(gap_start, datetime.min.time()),
-                    end_date=datetime.combine(gap_end, datetime.min.time()),
-                    trading_days_missing=self._count_trading_days_in_range(
-                        gap_start, gap_end, missing_dates
-                    ),
-                )
-            )
-
-        return SymbolGapsDTO(
-            symbol=symbol,
-            gaps=gaps,
-            total_missing_days=len(missing_dates),
-            has_gaps=len(gaps) > 0,
-        )
 
     def _count_trading_days_in_range(
         self,

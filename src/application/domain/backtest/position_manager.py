@@ -42,9 +42,6 @@ class Position:
         if price > self.highest_price:
             self.highest_price = price
 
-    def get_unrealized_profit(self, current_price: Decimal) -> Decimal:
-        return (current_price - self.entry_price) * self.quantity
-
     def get_unrealized_profit_rate(self, current_price: Decimal) -> float:
         if self.entry_price == 0:
             return 0.0
@@ -111,12 +108,6 @@ class PositionManager:
             return None
         total_cost = sum(p.entry_price * p.quantity for p in lots)
         return total_cost / total_qty
-
-    def get_latest_entry_date(self, symbol: str) -> datetime | None:
-        lots = self.positions.get(symbol, [])
-        if not lots:
-            return None
-        return min(p.entry_date for p in lots)
 
     def update_positions(self, current_prices: dict[str, Decimal]) -> Decimal:
         total_value = Decimal("0")

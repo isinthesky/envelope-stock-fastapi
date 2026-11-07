@@ -199,32 +199,6 @@ class PerformanceMetrics:
         return float(excess.mean() / sd * np.sqrt(TRADING_DAYS_PER_YEAR))
 
     @staticmethod
-    def calculate_sharpe_ratio(
-        annualized_return: float, volatility: float, risk_free_rate: float = 3.0
-    ) -> float:
-        """
-        (레거시) CAGR 기반 Sharpe = (연환산수익률 − rf) / 연환산변동성.
-
-        ⚠️ 기하평균(CAGR)과 산술 변동성을 섞은 비표준 정의라 DSR(일별 Sharpe)과
-        일관되지 않는다. 백테스트 결과/walk-forward는 `calculate_daily_sharpe_ratio`
-        를 사용한다. 하위호환용으로만 유지.
-
-        Args:
-            annualized_return: 연환산 수익률 (%)
-            volatility: 연환산 변동성 (%)
-            risk_free_rate: 무위험 이자율 (%)
-
-        Returns:
-            float: Sharpe Ratio
-        """
-        if volatility == 0:
-            return 0.0
-
-        sharpe = (annualized_return - risk_free_rate) / volatility
-
-        return sharpe
-
-    @staticmethod
     def calculate_sortino_ratio(
         equity_curve: pd.DataFrame,
         annualized_return: float | None = None,

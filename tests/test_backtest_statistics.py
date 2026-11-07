@@ -4,8 +4,6 @@
 import numpy as np
 
 from src.application.domain.backtest.statistics import (
-    bootstrap_mean_ci,
-    bootstrap_sharpe_ci,
     deflated_sharpe_ratio,
     expected_max_sharpe,
     norm_cdf,
@@ -74,18 +72,8 @@ def test_pbo_low_for_robust_config():
     assert pbo < 0.2
 
 
-def test_bootstrap_ci_contains_point_and_orders():
-    rng = np.random.default_rng(6)
-    r = list(rng.normal(0.001, 0.01, 400))
-    mci = bootstrap_mean_ci(r, n_boot=1000)
-    assert mci.low <= mci.point <= mci.high
-    sci = bootstrap_sharpe_ci(r, n_boot=1000)
-    assert sci.low <= sci.point <= sci.high
-
-
 def test_edge_cases_return_safe_defaults():
     assert deflated_sharpe_ratio([], [], 0).deflated_sharpe == 0.0
-    assert bootstrap_mean_ci([0.1]).n_boot == 0
     import math
 
     assert math.isnan(probability_of_backtest_overfitting([[1.0]], 8))

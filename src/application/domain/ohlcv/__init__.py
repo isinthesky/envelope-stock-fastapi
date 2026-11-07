@@ -12,9 +12,7 @@ from src.application.domain.ohlcv.dto import (
     CacheRetentionPolicyDTO,
     CacheStatisticsDTO,
     CleanupResultDTO,
-    GapInfoDTO,
     SymbolCacheInfoDTO,
-    SymbolGapsDTO,
     WarmupRequestDTO,
     WarmupResultDTO,
 )
@@ -30,8 +28,6 @@ __all__ = [
     "WarmupResultDTO",
     "SymbolCacheInfoDTO",
     "CleanupResultDTO",
-    "GapInfoDTO",
-    "SymbolGapsDTO",
     "ApiCallEstimateDTO",
     # Services
     "OHLCVCacheManager",
