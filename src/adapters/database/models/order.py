@@ -45,6 +45,7 @@ class PriceType(str, Enum):
     MARKET = "market"  # 시장가
     LIMIT = "limit"  # 지정가
     STOP = "stop"  # 조건부 지정가
+    CLOSING = "closing"  # 장후 시간외 종가 (KIS ORD_DVSN 06, 15:40~16:00 당일 종가 체결)
 
 
 class OrderModel(Base, BaseModel):
@@ -78,7 +79,7 @@ class OrderModel(Base, BaseModel):
     )
 
     price_type: Mapped[str] = mapped_column(
-        String(10), nullable=False, comment="가격 유형 (market/limit/stop)"
+        String(10), nullable=False, comment="가격 유형 (market/limit/stop/closing)"
     )
 
     order_price: Mapped[Decimal] = mapped_column(

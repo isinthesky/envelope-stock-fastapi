@@ -3,17 +3,19 @@
 Golden Cross Engine - 골든크로스 전략 실행 엔진
 
 장 마감 후 1회 실행 (15:35)
+0. 직전 주문 체결 대사(reconcile)
 1. 종목 스크리닝
 2. OHLCV 데이터 조회 (250일)
 3. 지표 계산 (configurable short/long MA, Stochastic)
 4. 상태 머신 업데이트 & 시그널 생성
-5. SafetyGuard 검증
-6. 주문 생성
+5. 시장 국면 게이트(신규 매수만, fail-closed) + SafetyGuard 검증
+6. 주문 접수 — 기본 장후 시간외 종가(ORD_DVSN 06). 시그널은 PENDING(order_no)으로 남고
+   체결 확인은 16:10 reconcile job(`reconcile_open_orders`)이 실제 체결가/수량으로 확정한다.
 """
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -42,7 +44,13 @@ from src.application.domain.strategy.dto import (
     StrategyExecuteResultDTO,
     StrategySignalDTO,
 )
-from src.application.domain.strategy.ohlcv_data_loader import OHLCVDataLoader
+from src.application.domain.backtest.cost_schedule import get_latest_backtest_cost_schedule
+from src.application.domain.order.order_id import split_order_id
+from src.application.domain.strategy.market_regime import market_regime_ok
+from src.application.domain.strategy.ohlcv_data_loader import (
+    OHLCVDataLoader,
+    get_regime_benchmark_ohlc,
+)
 from src.application.domain.strategy.state_machine import (
     GoldenCrossStateMachine,
     IndicatorSnapshot,
@@ -150,8 +158,16 @@ class GoldenCrossEngine:
                     strategy_id, executed_at, dry_run, 0, 0, 0, 0, signals, errors
                 )
 
+            # 0. 직전 실행 주문 체결 대사 (실주문 모드만)
+            if not dry_run:
+                await self.reconcile_open_orders(strategy_id)
+
             # 2. 전략 설정 파싱
             config = self._parse_config(strategy)
+            _warn_if_ma_drift(strategy_id, config)
+
+            # 2-1. 시장 국면 게이트(신규 매수 전용, 실행당 1회). 실주문은 fail-closed.
+            entry_regime_allowed = await self._evaluate_entry_regime(fail_open=dry_run)
 
             # 3. 상태 머신 초기화
             state_machine = GoldenCrossStateMachine(config)
@@ -181,18 +197,26 @@ class GoldenCrossEngine:
                         state_machine=state_machine,
                         safety_guard=safety_guard,
                         dry_run=dry_run,
+                        entry_regime_allowed=entry_regime_allowed,
                     )
 
                     if result:
                         signals.append(result)
+                        # 주문 접수 = order_no가 있는 PENDING(체결 대기) 또는 EXECUTED
+                        placed = (
+                            not dry_run
+                            and bool(result.order_no)
+                            and (
+                                result.signal_status
+                                in (SignalStatus.PENDING.value, SignalStatus.EXECUTED.value)
+                            )
+                        )
                         if result.signal_type == SignalType.BUY.value:
                             buy_count += 1
-                            if not dry_run and result.signal_status == SignalStatus.EXECUTED.value:
-                                orders_created += 1
                         elif result.signal_type == SignalType.SELL.value:
                             sell_count += 1
-                            if not dry_run and result.signal_status == SignalStatus.EXECUTED.value:
-                                orders_created += 1
+                        if placed:
+                            orders_created += 1
 
                 except Exception as e:
                     error_msg = f"Error processing {symbol}: {str(e)}"
@@ -232,6 +256,7 @@ class GoldenCrossEngine:
         state_machine: GoldenCrossStateMachine,
         safety_guard: SafetyGuard,
         dry_run: bool,
+        entry_regime_allowed: bool = True,
     ) -> StrategySignalDTO | None:
         """
         개별 종목 처리
@@ -379,6 +404,7 @@ class GoldenCrossEngine:
             config=config,
             safety_guard=safety_guard,
             dry_run=dry_run,
+            entry_regime_allowed=entry_regime_allowed,
         )
 
     async def _process_price_only_position(
@@ -458,15 +484,18 @@ class GoldenCrossEngine:
         config: GoldenCrossConfigDTO,
         safety_guard: SafetyGuard,
         dry_run: bool,
+        entry_regime_allowed: bool = True,
     ) -> StrategySignalDTO | None:
         """
         시그널 처리 (매수/매도)
         """
         signal_type = SignalType.BUY if transition.signal == Signal.BUY else SignalType.SELL
+        regime_blocked = signal_type == SignalType.BUY and not entry_regime_allowed
 
         if dry_run:
             logger.info(
                 f"[GC Engine DRY RUN] {symbol} {signal_type.value.upper()} @ {current_snapshot.close}"
+                + (" (regime_block)" if regime_blocked else "")
             )
             return self._create_dry_run_signal_dto(
                 strategy_id=strategy.id,
@@ -475,6 +504,7 @@ class GoldenCrossEngine:
                 transition=transition,
                 current_snapshot=current_snapshot,
                 prev_state=state.state,
+                note="regime_block: 시장 국면 게이트로 신규 매수 차단" if regime_blocked else None,
             )
 
         # 중복 주문 가드: 직전 실행에서 동일 전이가 이미 EXECUTED로 기록됐다면
@@ -530,6 +560,17 @@ class GoldenCrossEngine:
             note=transition.reason,
         )
 
+        # 시장 국면 게이트: 신규 매수만 차단(백테스트 regime_block과 동일하게 WAITING으로 리셋)
+        if regime_blocked:
+            logger.info(f"[GC Engine] {symbol} BUY blocked by market regime gate")
+            await self.signal_repo.update_execution(
+                signal_model.id,
+                status=SignalStatus.SKIPPED,
+                exit_reason="regime_block",
+            )
+            await self.symbol_state_repo.reset_to_waiting(strategy.id, symbol)
+            return self._model_to_dto(signal_model)
+
         # SafetyGuard 체크
         can_trade, _, block_message = safety_guard.can_trade(
             is_risk_reducing=signal_type == SignalType.SELL
@@ -569,8 +610,9 @@ class GoldenCrossEngine:
             updated_signal = await self.signal_repo.get_by_id(signal_model.id)
             return self._model_to_dto(updated_signal)
 
-        # 주문은 이미 체결됨(_execute_*가 EXECUTED로 마킹). 이후 상태 동기화 실패는
-        # 시그널 상태를 되돌리지 않고(이중 주문 방지) 별도로 로깅만 한다.
+        # 주문은 브로커에 접수됨(_execute_*가 order_no와 함께 PENDING으로 durable 마킹).
+        # 상태는 체결을 가정해 전이하고(시간외 종가 = 신호봉 종가), 미체결이면 reconcile이 되돌린다.
+        # 이후 상태 동기화 실패는 시그널 상태를 되돌리지 않고(이중 주문 방지) 별도로 로깅만 한다.
         try:
             await self._update_state_after_signal(strategy.id, symbol, transition, current_snapshot)
         except Exception as e:
@@ -591,67 +633,19 @@ class GoldenCrossEngine:
         config: GoldenCrossConfigDTO,
         signal_model,
     ):
-        """매수 주문 실행"""
-        # 계좌 잔고 조회
+        """매수 주문 접수 (체결 확정은 reconcile_open_orders)"""
         account_service = await self._get_account_service()
-        balance = await account_service.get_account_balance(strategy.account_no)
+        balance = await account_service.get_account_balance(strategy.account_no, use_cache=False)
 
-        # 포지션 사이즈 계산
-        allocation = float(balance.cash_balance) * config.position.allocation_ratio
+        # 포지션 사이즈: 주문가능현금 × allocation_ratio (백테스트 order_manager와 같은 모델)
+        allocation = float(balance.available_amount) * config.position.allocation_ratio
         quantity = int(allocation / float(price))
 
         if quantity <= 0:
             raise ValueError("Insufficient cash for buy order")
 
-        # 주문 생성
-        order_service = OrderService(self.kis_client, self.session)
-        order_request = OrderCreateRequestDTO(
-            symbol=symbol,
-            order_type="buy",
-            price_type="limit",
-            price=price,
-            quantity=quantity,
-            account_no=strategy.account_no,
-        )
-
-        order_result = await order_service.create_order(self.session, order_request)
-        order_no = getattr(order_result, "order_no", None)
-
-        # 주문은 이미 브로커에 접수됨(order placed). 이후 durable 마킹이 실패해도
-        # 예외를 전파해 FAILED로 오기록하면 안 된다(가드가 EXECUTED만 보면 이중주문).
-        # 1단계: order_no를 우선 durable 커밋 — proof-of-placement 확보(상태는 PENDING 유지).
-        try:
-            await self.signal_repo.update_execution(
-                signal_model.id, status=SignalStatus.PENDING, order_no=order_no
-            )
-            await self.session.commit()
-        except Exception as e:
-            await self._safe_rollback()
-            logger.critical(
-                f"[GC Engine] ORDER PLACED BUT order_no NOT DURABLY RECORDED — 수동 대사 필요: "
-                f"symbol={symbol} signal_id={signal_model.id} order_no={order_no}: {e}"
-            )
-            logger.info(f"[GC Engine] BUY {symbol} x {quantity} @ {price}")
-            return
-
-        # 2단계: 체결 상세 반영(EXECUTED). 실패해도 order_no가 durable하므로 가드가 재주문 차단.
-        try:
-            await self.signal_repo.update_execution(
-                signal_model.id,
-                status=SignalStatus.EXECUTED,
-                executed_price=price,
-                executed_quantity=quantity,
-                order_no=order_no,
-            )
-            await self.session.commit()
-        except Exception as e:
-            await self._safe_rollback()
-            logger.critical(
-                f"[GC Engine] ORDER PLACED (order_no={order_no}) BUT SIGNAL NOT MARKED EXECUTED "
-                f"— 수동 대사 필요: symbol={symbol} signal_id={signal_model.id}: {e}"
-            )
-
-        logger.info(f"[GC Engine] BUY {symbol} x {quantity} @ {price}")
+        await self._place_order(strategy, symbol, "buy", price, quantity, signal_model, metadata={})
+        logger.info(f"[GC Engine] BUY {symbol} x {quantity} submitted (signal close {price})")
 
     async def _execute_sell(
         self,
@@ -661,79 +655,225 @@ class GoldenCrossEngine:
         state,
         signal_model,
     ):
-        """매도 주문 실행"""
-        # 보유 수량 조회
+        """매도 주문 접수 (체결 확정·실현손익은 reconcile_open_orders)"""
         account_service = await self._get_account_service()
         positions = await account_service.get_position_list(strategy.account_no)
-        target_position = None
-        for pos in positions.positions:
-            if pos.symbol == symbol:
-                target_position = pos
-                break
-
-        if not target_position or target_position.quantity <= 0:
+        target_position = next(
+            (pos for pos in positions.positions if pos.symbol == symbol and pos.quantity > 0),
+            None,
+        )
+        if target_position is None:
             raise ValueError("No position to sell")
 
-        # 수익률 계산
-        realized_pnl = None
-        realized_pnl_ratio = None
-        if state.entry_price:
-            realized_pnl = (price - state.entry_price) * target_position.quantity
-            realized_pnl_ratio = (price - state.entry_price) / state.entry_price
+        quantity = target_position.available_quantity or target_position.quantity
+        # 상태는 접수 직후 WAITING으로 리셋되므로 실현손익 계산용 진입가를 시그널에 보존한다.
+        entry_price = state.entry_price or target_position.avg_purchase_price
+        await self._place_order(
+            strategy,
+            symbol,
+            "sell",
+            price,
+            quantity,
+            signal_model,
+            metadata={"entry_price": str(entry_price)},
+        )
+        logger.info(f"[GC Engine] SELL {symbol} x {quantity} submitted (signal close {price})")
 
-        # 주문 생성
+    async def _place_order(
+        self,
+        strategy: StrategyModel,
+        symbol: str,
+        side: str,
+        price: Decimal,
+        quantity: int,
+        signal_model,
+        metadata: dict,
+    ) -> None:
+        """주문 접수 후 order_no를 durable 커밋한다(시그널은 PENDING = 체결 대기).
+
+        이전 구현은 접수 직후 신호가로 EXECUTED를 기록했다(체결 확인 없음). 이제 EXECUTED와
+        실제 체결가/수량/실현손익은 reconcile_open_orders가 KIS 체결조회로 확정한다.
+        """
+        price_type = settings.strategy_order_price_type
         order_service = OrderService(self.kis_client, self.session)
         order_request = OrderCreateRequestDTO(
             symbol=symbol,
-            order_type="sell",
-            price_type="limit",
-            price=price,
-            quantity=target_position.quantity,
+            order_type=side,
+            price_type=price_type,
+            price=price if price_type == "limit" else Decimal("0"),
+            quantity=quantity,
             account_no=strategy.account_no,
         )
 
         order_result = await order_service.create_order(self.session, order_request)
         order_no = getattr(order_result, "order_no", None)
 
-        # 주문 접수 후 durable 마킹(2단계). 실패해도 예외를 전파하지 않는다(이중주문 방지).
-        # 1단계: order_no 우선 durable 커밋(상태 PENDING 유지).
-        try:
-            await self.signal_repo.update_execution(
-                signal_model.id, status=SignalStatus.PENDING, order_no=order_no
-            )
-            await self.session.commit()
-        except Exception as e:
-            await self._safe_rollback()
-            logger.critical(
-                f"[GC Engine] SELL ORDER PLACED BUT order_no NOT DURABLY RECORDED — 수동 대사 필요: "
-                f"symbol={symbol} signal_id={signal_model.id} order_no={order_no}: {e}"
-            )
-            return
-
-        # 2단계: 체결 상세 반영(EXECUTED + 실현손익).
+        # 주문은 이미 브로커에 접수됨. 이후 durable 마킹이 실패해도 예외를 전파해 FAILED로
+        # 오기록하면 안 된다(가드가 order_no를 못 보면 이중주문).
         try:
             await self.signal_repo.update_execution(
                 signal_model.id,
-                status=SignalStatus.EXECUTED,
-                executed_price=price,
-                executed_quantity=target_position.quantity,
+                status=SignalStatus.PENDING,
                 order_no=order_no,
-                realized_pnl=realized_pnl,
-                realized_pnl_ratio=realized_pnl_ratio,
+                target_quantity=quantity,
+                metadata={**metadata, "broker_order_id": getattr(order_result, "order_id", None)},
             )
             await self.session.commit()
         except Exception as e:
             await self._safe_rollback()
             logger.critical(
-                f"[GC Engine] SELL ORDER PLACED (order_no={order_no}) BUT SIGNAL NOT MARKED EXECUTED "
-                f"— 수동 대사 필요: symbol={symbol} signal_id={signal_model.id}: {e}"
+                f"[GC Engine] {side.upper()} ORDER PLACED BUT order_no NOT DURABLY RECORDED — "
+                f"수동 대사 필요: symbol={symbol} signal_id={signal_model.id} order_no={order_no}: {e}"
             )
 
-        pnl_text = f"{realized_pnl_ratio:.2%}" if realized_pnl_ratio is not None else "n/a"
-        logger.info(
-            f"[GC Engine] SELL {symbol} x {target_position.quantity} @ {price} "
-            f"(PnL: {pnl_text})"
+    # ==================== 체결 대사 ====================
+
+    async def reconcile_open_orders(self, strategy_id: int) -> dict[str, int]:
+        """체결 대기(PENDING + order_no) 시그널을 KIS 체결조회로 확정한다.
+
+        - 체결 수량 > 0: EXECUTED + 실제 평균체결가/수량. 매수는 진입가를 체결가로 보정,
+          매도는 수수료·매도세를 뺀 실현손익을 기록한다. 매도 일부 체결이면 잔량을 위해
+          IN_POSITION을 복원한다.
+        - 체결 0 + 주문 세션 종료(주문일 다음 날 이후, 또는 당일 16:00 KST 이후): CANCELLED.
+          매수는 WAITING으로, 매도는 브로커 잔고 기준 IN_POSITION으로 되돌린다.
+        - 그 외(세션 진행 중): 그대로 둔다.
+        """
+        summary = {"executed": 0, "cancelled": 0, "open": 0, "errors": 0}
+        pending = await self.signal_repo.get_pending_signals(strategy_id)
+        order_service = OrderService(self.kis_client, self.session)
+        now_kst = datetime.now(KST)
+
+        for signal in pending:
+            if not signal.order_no:
+                continue
+            try:
+                order_id = _signal_meta(signal).get("broker_order_id") or (
+                    await self._find_broker_order_id(signal)
+                )
+                if not order_id:
+                    logger.critical(
+                        f"[GC Reconcile] signal_id={signal.id} order_no={signal.order_no}: "
+                        "주문 레코드를 찾을 수 없음 — 수동 대사 필요"
+                    )
+                    summary["errors"] += 1
+                    continue
+                status = await order_service.update_order_status(self.session, order_id)
+                filled_qty = int(status.filled_quantity or 0)
+                if filled_qty > 0:
+                    await self._confirm_fill(
+                        strategy_id, signal, Decimal(str(status.filled_avg_price)), filled_qty
+                    )
+                    summary["executed"] += 1
+                elif _order_session_closed(signal.signal_at, now_kst):
+                    await self._cancel_unfilled(strategy_id, signal)
+                    summary["cancelled"] += 1
+                else:
+                    summary["open"] += 1
+                await self.session.commit()
+            except Exception as e:  # noqa: BLE001 - 한 건 실패가 나머지 대사를 막지 않게
+                await self._safe_rollback()
+                summary["errors"] += 1
+                logger.error(f"[GC Reconcile] signal_id={signal.id} reconcile failed: {e}")
+
+        if any(summary.values()):
+            logger.info(f"[GC Reconcile] strategy={strategy_id} {summary}")
+        return summary
+
+    async def _find_broker_order_id(self, signal) -> str | None:
+        """레거시 시그널(broker_order_id 미기록)용: 주문 테이블에서 ODNO로 주문 ID를 찾는다."""
+        from src.adapters.database.repositories.order_repository import OrderRepository
+
+        orders = await OrderRepository(self.session).get_by_symbol(signal.symbol)
+        for order in orders:
+            if split_order_id(order.order_id)[1] == signal.order_no:
+                return order.order_id
+        return None
+
+    async def _confirm_fill(
+        self, strategy_id: int, signal, avg_price: Decimal, filled_qty: int
+    ) -> None:
+        realized_pnl = None
+        realized_pnl_ratio = None
+        state = await self.symbol_state_repo.get_by_strategy_and_symbol(strategy_id, signal.symbol)
+
+        if signal.signal_type == SignalType.BUY.value:
+            # 상태는 접수 시 신호봉 종가로 IN_POSITION 전이됨 → 실제 체결가로 보정
+            if state and state.state == SymbolState.IN_POSITION.value:
+                await self.symbol_state_repo.update_state(
+                    strategy_id=strategy_id,
+                    symbol=signal.symbol,
+                    new_state=SymbolState.IN_POSITION,
+                    entry_price=avg_price,
+                )
+        else:
+            entry_price = _signal_entry_price(signal)
+            if entry_price and entry_price > 0:
+                realized_pnl, realized_pnl_ratio = estimate_realized_pnl(
+                    entry_price, avg_price, filled_qty, signal.symbol
+                )
+            target = int(signal.target_quantity or filled_qty)
+            if filled_qty < target:
+                logger.critical(
+                    f"[GC Reconcile] {signal.symbol} SELL partially filled {filled_qty}/{target} "
+                    "— 잔량 재매도를 위해 IN_POSITION 복원"
+                )
+                await self._restore_position_from_broker(strategy_id, signal)
+
+        await self.signal_repo.update_execution(
+            signal.id,
+            status=SignalStatus.EXECUTED,
+            executed_price=avg_price,
+            executed_quantity=filled_qty,
+            realized_pnl=realized_pnl,
+            realized_pnl_ratio=realized_pnl_ratio,
         )
+
+    async def _cancel_unfilled(self, strategy_id: int, signal) -> None:
+        logger.warning(
+            f"[GC Reconcile] {signal.symbol} {signal.signal_type} order_no={signal.order_no} "
+            "unfilled after session close → CANCELLED, state reverted"
+        )
+        if signal.signal_type == SignalType.BUY.value:
+            await self.symbol_state_repo.reset_to_waiting(strategy_id, signal.symbol)
+        else:
+            await self._restore_position_from_broker(strategy_id, signal)
+        await self.signal_repo.update_execution(
+            signal.id, status=SignalStatus.CANCELLED, exit_reason="unfilled"
+        )
+
+    async def _restore_position_from_broker(self, strategy_id: int, signal) -> None:
+        """매도 미체결/일부체결 시 브로커 잔고(평균매입가)를 진실로 IN_POSITION을 복원한다."""
+        account_service = await self._get_account_service()
+        positions = await account_service.get_position_list()
+        held = next(
+            (p for p in positions.positions if p.symbol == signal.symbol and p.quantity > 0),
+            None,
+        )
+        if held is None:
+            await self.symbol_state_repo.reset_to_waiting(strategy_id, signal.symbol)
+            return
+        entry_price = _signal_entry_price(signal) or held.avg_purchase_price
+        await self.symbol_state_repo.update_state(
+            strategy_id=strategy_id,
+            symbol=signal.symbol,
+            new_state=SymbolState.IN_POSITION,
+            entry_price=entry_price,
+        )
+
+    async def _evaluate_entry_regime(self, *, fail_open: bool) -> bool:
+        """신규 매수 시장 국면 게이트(실행당 1회). 비활성이면 항상 허용."""
+        if not settings.gc_regime_filter_enabled:
+            return True
+        try:
+            bench = await get_regime_benchmark_ohlc(
+                self.session, settings.gc_regime_benchmark, days=500
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[GC Engine] regime benchmark load failed: {e}")
+            return fail_open
+        allowed = market_regime_ok(bench, fail_open=fail_open)
+        logger.info(f"[GC Engine] entry regime allowed={allowed} (fail_open={fail_open})")
+        return allowed
 
     async def _update_state_after_signal(
         self,
@@ -809,8 +949,12 @@ class GoldenCrossEngine:
         """SafetyGuard 초기화"""
         try:
             account_service = await self._get_account_service()
-            balance = await account_service.get_account_balance(strategy.account_no)
-            initial_capital = Decimal(str(balance.cash_balance + balance.stock_balance))
+            balance = await account_service.get_account_balance(
+                strategy.account_no, use_cache=False
+            )
+            initial_capital = Decimal(str(balance.total_balance))
+            if initial_capital <= 0:
+                raise ValueError("account total balance is zero")
         except Exception:
             initial_capital = Decimal("10_000_000")
 
@@ -881,14 +1025,24 @@ class GoldenCrossEngine:
         if not same_transition:
             return None
 
-        # EXECUTED면 명백한 중복.
+        # EXECUTED면 명백한 중복. 단 매도 일부 체결(잔량 재매도 대상)은 중복이 아니다.
         if latest.signal_status == SignalStatus.EXECUTED.value:
-            return latest
+            target = getattr(latest, "target_quantity", None)
+            executed = getattr(latest, "executed_quantity", None)
+            partial_sell = (
+                latest.signal_type == SignalType.SELL.value
+                and target is not None
+                and executed is not None
+                and executed < target
+            )
+            return None if partial_sell else latest
 
-        # status가 EXECUTED로 못 넘어갔어도(2단계 마킹 실패) order_no가 있으면 주문은 이미
-        # 브로커에 접수된 것이 durable하게 증명된다 → 재주문 차단. order_no가 없으면(진짜
-        # 미주문) 정상 재시도를 허용한다.
-        if getattr(latest, "order_no", None):
+        # EXECUTED가 아니어도 order_no가 있으면 주문은 이미 브로커에 접수된 것이 durable하게
+        # 증명된다 → 재주문 차단(체결 대기 PENDING, 마킹 실패 FAILED 포함). 예외는 reconcile이
+        # KIS 체결조회로 "미체결 확정"한 CANCELLED뿐이다 — 이때만 정상 재시도를 허용한다.
+        if latest.signal_status != SignalStatus.CANCELLED.value and getattr(
+            latest, "order_no", None
+        ):
             logger.critical(
                 f"[GC Engine] {symbol} signal_id={latest.id} order_no={latest.order_no} but "
                 f"status={latest.signal_status}(≠EXECUTED) — 주문 접수됨·마킹 실패 → 재주문 차단, 수동 대사 필요"
@@ -946,4 +1100,81 @@ class GoldenCrossEngine:
             orders_created=orders_created,
             signals=signals,
             errors=errors,
+        )
+
+
+KST = timezone(timedelta(hours=9), "KST")
+# 장후 시간외 종가 세션 종료(16:00) + 여유. 이 시각 이후 체결 0이면 미체결 확정.
+ORDER_SESSION_CLOSE_KST = time(16, 5)
+
+
+def _order_session_closed(signal_at: datetime, now_kst: datetime) -> bool:
+    """주문이 나간 거래일(KST)의 주문 세션이 끝났는지.
+
+    signal_at은 DB(timestamptz)에서 aware로 오며, naive면 프로세스 로컬 시각으로 해석한다
+    (create_signal이 datetime.now()로 기록).
+    """
+    placed_day = signal_at.astimezone(KST).date()
+    if now_kst.date() > placed_day:
+        return True
+    return now_kst.time() >= ORDER_SESSION_CLOSE_KST
+
+
+def _signal_meta(signal) -> dict:
+    raw = getattr(signal, "metadata_json", None)
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _signal_entry_price(signal) -> Decimal | None:
+    value = _signal_meta(signal).get("entry_price")
+    try:
+        return Decimal(str(value)) if value not in (None, "", "None") else None
+    except (ArithmeticError, ValueError):
+        return None
+
+
+def estimate_realized_pnl(
+    entry_price: Decimal, exit_price: Decimal, quantity: int, symbol: str
+) -> tuple[Decimal, Decimal]:
+    """수수료(양방향)·매도세를 반영한 실현손익과 비용기준 수익률.
+
+    매도세율은 백테스트 비용 스케줄의 최신 값을 쓴다(국내 ETF 면제 등은 스케줄이 결정).
+    """
+    schedule = get_latest_backtest_cost_schedule()
+    commission = Decimal(str(settings.live_commission_rate))
+    tax_rate = _sell_tax_rate_for(schedule, symbol)
+    buy_amount = entry_price * quantity
+    sell_amount = exit_price * quantity
+    costs = buy_amount * commission + sell_amount * (commission + tax_rate)
+    pnl = sell_amount - buy_amount - costs
+    basis = buy_amount * (1 + commission)
+    ratio = pnl / basis if basis > 0 else Decimal("0")
+    return pnl.quantize(Decimal("1")), ratio.quantize(Decimal("0.000001"))
+
+
+def _sell_tax_rate_for(schedule, symbol: str) -> Decimal:
+    """국내 상장 ETF는 증권거래세 면제(백테스트 OrderManager.is_tax_exempt와 같은 목록)."""
+    exempt = {s.strip() for s in settings.etf_universe_symbols if s and s.strip()}
+    if symbol in exempt:
+        return Decimal("0")
+    return Decimal(str(schedule.sell_tax_rate))
+
+
+def _warn_if_ma_drift(strategy_id: int, config: GoldenCrossConfigDTO) -> None:
+    """스캔/매도분석(settings.gc_*_ma_period)과 실주문 전략 config의 MA가 다르면 경고한다.
+
+    2026-11-06 이전에 스캔은 .env 50/200, 실주문은 DB config 55/165로 서로 다른 신호를 냈다.
+    """
+    live = (config.ma_config.short_period, config.ma_config.long_period)
+    scan = (settings.gc_short_ma_period, settings.gc_long_ma_period)
+    if live != scan:
+        logger.error(
+            f"[GC Engine] MA drift: strategy {strategy_id} config MA{live[0]}/{live[1]} "
+            f"!= scan/sell settings MA{scan[0]}/{scan[1]} — 알림·매도분석과 실주문 신호가 달라진다"
         )

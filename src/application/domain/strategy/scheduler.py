@@ -123,6 +123,17 @@ class StrategyScheduler:
                 misfire_grace_time=settings.strategy_execution_misfire_grace_seconds,
             )
 
+            # 전략 주문 체결 대사 (월~금 16:10, 장후 시간외 종가 세션 종료 뒤).
+            # 주문을 내지 않고 체결조회·DB 확정만 하므로 kill-switch와 무관하게 돈다.
+            register_cron_job(
+                self.scheduler,
+                self._reconcile_orders_job,
+                hour=settings.strategy_reconcile_hour,
+                minute=settings.strategy_reconcile_minute,
+                job_id="daily_order_reconcile",
+                name="Daily Order Reconcile",
+            )
+
             # 유니버스 갱신 (B-1: 기존 유니버스 데이터 갱신 + 스크리닝 재적용)
             # 월~금 08:00 (장 시작 전)
             register_cron_job(
@@ -224,6 +235,28 @@ class StrategyScheduler:
             except Exception as e:
                 logger.exception(f"[Scheduler] Strategy execution job failed: {e}")
 
+    async def _reconcile_orders_job(self) -> None:
+        """체결 대기 주문 대사 작업 — paused 전략의 잔여 주문도 확정해야 하므로 상태와 무관하게 순회."""
+        if self._execution_lock.locked():
+            logger.warning("[Scheduler] Strategy execution in progress. Skipping reconcile.")
+            return
+        async with self._execution_lock:
+            try:
+                async with get_async_session() as session:
+                    strategies = await StrategyRepository(session).get_many(
+                        limit=1000, strategy_type="golden_cross"
+                    )
+                    engine = GoldenCrossEngine(session, get_kis_client())
+                    for strategy in strategies:
+                        try:
+                            await engine.reconcile_open_orders(strategy.id)
+                        except Exception as e:  # noqa: BLE001
+                            logger.exception(
+                                f"[Scheduler] Reconcile failed for strategy {strategy.id}: {e}"
+                            )
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"[Scheduler] Order reconcile job failed: {e}")
+
     async def _refresh_universe_job(self) -> None:
         """유니버스 갱신 작업 (B-1)"""
         logger.info("[Scheduler] Starting daily universe refresh...")
@@ -235,8 +268,19 @@ class StrategyScheduler:
             result = await service.refresh_universe()
             logger.info(
                 "[Scheduler] Universe refresh completed: "
-                f"target={result.get('target')}, updated={result.get('updated')}, screened={result.get('screened')}, errors={len(result.get('errors', []))}"
+                f"target={result.get('target')}, updated={result.get('updated')}, "
+                f"screened={result.get('screened')}, errors={result.get('error_count', 0)}, "
+                # 소스별 부분 실패(현재가/네이버/OHLCV)는 errors가 아니라 warnings로 집계된다.
+                # 이전 로그는 이를 빠뜨려 KIS 장애일에도 errors=0으로만 보였다.
+                f"warnings={result.get('warning_counts', {})}"
             )
+            warning_counts = result.get("warning_counts") or {}
+            target = result.get("target") or 0
+            if target and warning_counts.get("price", 0) > target * 0.1:
+                logger.error(
+                    "[Scheduler] Universe refresh degraded: price fetch failed for "
+                    f"{warning_counts['price']}/{target} symbols (stale current_price kept)"
+                )
             if result.get("errors"):
                 for err in result["errors"][:20]:
                     logger.warning(f"[Scheduler] Universe refresh error: {err}")

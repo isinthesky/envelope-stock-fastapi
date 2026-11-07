@@ -12,7 +12,7 @@ Buy Strategy Service - 매수 전략 서비스
 import asyncio
 import logging
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from decimal import Decimal
 
 import pandas as pd
@@ -28,10 +28,8 @@ from src.adapters.database.repositories.stock_universe_repository import (
 from src.adapters.external.dart_api import FinancialScreeningDTO, get_dart_client
 from src.application.common.decorators import transaction
 from src.application.common.indicators import TechnicalIndicators
-from src.application.domain.backtest.regime_filter import (
-    RegimeEntryFilter,
-    is_entry_allowed_latest,
-)
+from src.application.domain.backtest.regime_filter import RegimeEntryFilter
+from src.application.domain.strategy.market_regime import build_regime_filter, market_regime_ok
 from src.application.domain.strategy.dto import (
     GoldenCrossScanItemDTO,
     GoldenCrossScanListDTO,
@@ -63,41 +61,14 @@ GC_SCAN_STATE_ORDER: dict[str, int] = {
 
 
 def _build_regime_filter() -> RegimeEntryFilter:
-    """운영 설정(gc_regime_mode/ma/adx)으로 진입 국면 필터를 구성한다.
-    walk-forward A/B가 검증한 것과 동일한 RegimeEntryFilter를 사용해 라이브·백테스트
-    수식을 일치시킨다. 알 수 없는 mode는 권장값(adx)로 폴백."""
-    mode = settings.gc_regime_mode
-    use_ma = mode in ("ma", "ma_adx")
-    use_adx = mode in ("adx", "ma_adx")
-    if not use_ma and not use_adx:  # 방어: 미지의 mode → ADX(권장)
-        use_adx = True
-    return RegimeEntryFilter(
-        use_ma=use_ma,
-        ma_period=settings.gc_regime_ma,
-        use_adx=use_adx,
-        adx_period=settings.gc_regime_adx_period,
-        adx_min=settings.gc_regime_adx_min,
-    )
+    """하위호환 별칭 — 구현은 `market_regime.build_regime_filter`."""
+    return build_regime_filter()
 
 
 def _market_regime_ok(bench_df) -> bool:
-    """시장 레짐 진입 허용 판정(하드 게이트). 실 OHLC 벤치가 없거나(프록시 불가)
-    최신 바가 stale/미래이면 신뢰불가 → fail-open(True). 그 외에는 검증된
-    `is_entry_allowed_latest`(라이브·백테스트 공용)로 최신 바를 판정한다."""
-    if bench_df is None or getattr(bench_df, "empty", True):
-        return True
-    try:
-        last = bench_df["timestamp"].iloc[-1]
-        if getattr(last, "tzinfo", None) is None:
-            last = last.replace(tzinfo=timezone.utc)
-        age = datetime.now(timezone.utc) - last
-        # 오래됨(>7일) 또는 미래(음수 age, 데이터 오류)면 신뢰불가 → fail-open
-        if age > timedelta(days=7) or age < -timedelta(days=1):
-            logger.warning("[GC Scan] regime benchmark stale/future (last=%s), fail-open", last)
-            return True
-    except Exception:  # noqa: BLE001
-        return True
-    return is_entry_allowed_latest(bench_df, _build_regime_filter())
+    """스캔/알림용 레짐 판정: 데이터 불량 시 fail-open(후보를 숨기지 않는다).
+    실주문 엔진은 같은 판정을 fail-closed로 쓴다(`market_regime.market_regime_ok`)."""
+    return market_regime_ok(bench_df, fail_open=True)
 
 
 class BuyStrategyService:

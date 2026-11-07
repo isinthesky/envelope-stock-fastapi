@@ -4,7 +4,7 @@ Account Service - 계좌 관리 서비스
 """
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from src.adapters.cache.redis_client import RedisClient
 from src.adapters.external.kis_api.client import KISAPIClient
@@ -15,6 +15,25 @@ from src.application.domain.account.dto import (
     PositionResponseDTO,
 )
 from src.settings.config import settings
+
+
+def _to_decimal(value: object) -> Decimal:
+    """KIS 숫자 문자열(빈 문자열 포함)을 Decimal로. 해석 불가 값은 0."""
+    try:
+        return Decimal(str(value).strip() or "0")
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def _to_int(value: object) -> int:
+    return int(_to_decimal(value))
+
+
+def _first_row(output: object) -> dict:
+    """KIS output2는 1행짜리 리스트(또는 dict)로 온다."""
+    if isinstance(output, list):
+        return output[0] if output else {}
+    return output if isinstance(output, dict) else {}
 
 
 class AccountService:
@@ -52,31 +71,55 @@ class AccountService:
                 return AccountBalanceResponseDTO(**cached_data)
 
         # API 호출
+        # 잔고 합계는 주식잔고조회(TTTC8434R) output2, 주문가능현금만 매수가능조회(TTTC8908R)에서 읽는다.
+        # (이전 구현은 TTTC8908R 응답에서 tot_evlu_amt 등 TTTC8434R 전용 필드를 읽어 전부 0이 됐다.)
         try:
-            path = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
-            params = {
-                "CANO": account_no,
-                "ACNT_PRDT_CD": settings.kis_product_code,
-                "PDNO": "",
-                "ORD_UNPR": "",
-                "ORD_DVSN": "01",
-                "CMA_EVLU_AMT_ICLD_YN": "Y",
-                "OVRS_ICLD_YN": "N",
-            }
-            headers = {"tr_id": "TTTC8908R" if not settings.is_paper_trading else "VTTC8908R"}
+            balance_response = await self.kis_client.get(
+                "/uapi/domestic-stock/v1/trading/inquire-balance",
+                params=self._inquire_balance_params(account_no),
+                headers={"tr_id": "VTTC8434R" if settings.is_paper_trading else "TTTC8434R"},
+            )
+            summary = _first_row(balance_response.get("output2"))
+            holdings = [
+                item
+                for item in balance_response.get("output1") or []
+                if _to_int(item.get("hldg_qty")) > 0
+            ]
 
-            response = await self.kis_client.get(path, params=params, headers=headers)
-            output = response.get("output", {})
+            orderable_response = await self.kis_client.get(
+                "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+                params={
+                    "CANO": account_no,
+                    "ACNT_PRDT_CD": settings.kis_product_code,
+                    "PDNO": "",
+                    "ORD_UNPR": "",
+                    "ORD_DVSN": "01",
+                    "CMA_EVLU_AMT_ICLD_YN": "Y",
+                    "OVRS_ICLD_YN": "N",
+                },
+                headers={"tr_id": "VTTC8908R" if settings.is_paper_trading else "TTTC8908R"},
+            )
+            orderable = orderable_response.get("output") or {}
+
+            purchase_total = _to_decimal(summary.get("pchs_amt_smtl_amt"))
+            profit_loss = _to_decimal(summary.get("evlu_pfls_smtl_amt"))
+            profit_loss_rate = (
+                (profit_loss / purchase_total * 100).quantize(Decimal("0.01"))
+                if purchase_total > 0
+                else Decimal("0")
+            )
 
             balance_data = AccountBalanceResponseDTO(
                 account_no=account_no,
-                total_balance=Decimal(output.get("tot_evlu_amt", "0")),
-                cash_balance=Decimal(output.get("nxdy_excc_amt", "0")),
-                stock_balance=Decimal(output.get("scts_evlu_amt", "0")),
-                available_amount=Decimal(output.get("ord_psbl_cash", "0")),
-                total_profit_loss=Decimal(output.get("evlu_pfls_smtl_amt", "0")),
-                total_profit_loss_rate=Decimal(output.get("tot_evlu_pfls_rt", "0")),
-                position_count=int(output.get("pchs_amt_smtl_amt", "0")),
+                total_balance=_to_decimal(summary.get("tot_evlu_amt")),
+                # D+2 예수금(가수도정산금액): 결제 예정분까지 반영한 현금
+                cash_balance=_to_decimal(summary.get("prvs_rcdl_excc_amt")),
+                stock_balance=_to_decimal(summary.get("scts_evlu_amt")),
+                # 주문가능현금 — 매수 사이징은 이 값을 기준으로 한다
+                available_amount=_to_decimal(orderable.get("ord_psbl_cash")),
+                total_profit_loss=profit_loss,
+                total_profit_loss_rate=profit_loss_rate,
+                position_count=len(holdings),
                 timestamp=datetime.now(),
             )
 
@@ -89,11 +132,25 @@ class AccountService:
         except Exception as e:
             raise KISAPIServiceError(f"Failed to get account balance: {e}")
 
+    @staticmethod
+    def _inquire_balance_params(account_no: str) -> dict[str, str]:
+        return {
+            "CANO": account_no,
+            "ACNT_PRDT_CD": settings.kis_product_code,
+            "AFHR_FLPR_YN": "N",
+            "OFL_YN": "",
+            "INQR_DVSN": "02",
+            "UNPR_DVSN": "01",
+            "FUND_STTL_ICLD_YN": "N",
+            "FNCG_AMT_AUTO_RDPT_YN": "N",
+            "PRCS_DVSN": "01",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+
     # ==================== 포지션 조회 ====================
 
-    async def get_position_list(
-        self, account_no: str | None = None
-    ) -> PositionListResponseDTO:
+    async def get_position_list(self, account_no: str | None = None) -> PositionListResponseDTO:
         """
         포지션 목록 조회
 
@@ -107,19 +164,7 @@ class AccountService:
 
         try:
             path = "/uapi/domestic-stock/v1/trading/inquire-balance"
-            params = {
-                "CANO": account_no,
-                "ACNT_PRDT_CD": settings.kis_product_code,
-                "AFHR_FLPR_YN": "N",
-                "OFL_YN": "",
-                "INQR_DVSN": "02",
-                "UNPR_DVSN": "01",
-                "FUND_STTL_ICLD_YN": "N",
-                "FNCG_AMT_AUTO_RDPT_YN": "N",
-                "PRCS_DVSN": "01",
-                "CTX_AREA_FK100": "",
-                "CTX_AREA_NK100": "",
-            }
+            params = self._inquire_balance_params(account_no)
             headers = {"tr_id": "TTTC8434R" if not settings.is_paper_trading else "VTTC8434R"}
 
             response = await self.kis_client.get(path, params=params, headers=headers)

@@ -3,6 +3,7 @@
 Strategy Signal Repository - 전략 시그널 Repository
 """
 
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Sequence
@@ -140,11 +141,23 @@ class StrategySignalRepository(BaseRepository[StrategySignalModel], PaginationMi
         exit_reason: str | None = None,
         realized_pnl: Decimal | None = None,
         realized_pnl_ratio: Decimal | None = None,
+        target_quantity: int | None = None,
+        metadata: dict | None = None,
     ) -> StrategySignalModel | None:
-        """시그널 실행 결과 업데이트"""
+        """시그널 실행 결과 업데이트 (metadata는 기존 metadata_json에 병합)"""
         signal = await self.get_by_id(signal_id)
         if not signal:
             return None
+
+        if target_quantity is not None:
+            signal.target_quantity = target_quantity
+        if metadata:
+            try:
+                merged = json.loads(signal.metadata_json) if signal.metadata_json else {}
+            except (TypeError, ValueError):
+                merged = {}
+            merged.update(metadata)
+            signal.metadata_json = json.dumps(merged, ensure_ascii=False, default=str)
 
         signal.signal_status = status.value
         if executed_price is not None:

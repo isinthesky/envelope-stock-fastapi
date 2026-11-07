@@ -268,7 +268,7 @@ async def ops_summary(
             "active_count": len(active_strategies),
             "items": [
                 {
-                    "strategy_id": item.strategy_id,
+                    "strategy_id": item.id,
                     "name": item.name,
                     "status": item.status,
                     "symbols": item.symbols[:5],

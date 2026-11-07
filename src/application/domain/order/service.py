@@ -27,6 +27,24 @@ from src.application.domain.order.order_id import build_order_id, split_order_id
 from src.settings.config import settings
 
 
+# KIS 주문구분(ORD_DVSN). 매수/매도 공통.
+ORD_DVSN_BY_PRICE_TYPE: dict[str, str] = {
+    PriceType.LIMIT.value: "00",  # 지정가
+    PriceType.MARKET.value: "01",  # 시장가
+    PriceType.CLOSING.value: "06",  # 장후 시간외 (당일 종가, 15:40~16:00 체결)
+}
+# 주문단가를 "0"으로 보내는 유형 (가격이 거래소에서 정해짐)
+ZERO_PRICE_TYPES = frozenset({PriceType.MARKET.value, PriceType.CLOSING.value})
+
+
+def resolve_ord_dvsn(price_type: str) -> str:
+    """가격 유형 → KIS ORD_DVSN. 알 수 없는 유형은 주문하지 않는다(이전: 조용히 지정가로 폴백)."""
+    try:
+        return ORD_DVSN_BY_PRICE_TYPE[price_type]
+    except KeyError as exc:
+        raise OrderError(f"Unsupported price_type for KIS order: {price_type}") from exc
+
+
 class OrderService:
     """
     주문 서비스
@@ -70,14 +88,7 @@ class OrderService:
             # KIS API 주문 요청
             path = "/uapi/domestic-stock/v1/trading/order-cash"
 
-            # 주문 구분 코드 매핑
-            ord_dvsn_map = {
-                ("buy", "market"): "01",  # 시장가 매수
-                ("buy", "limit"): "00",  # 지정가 매수
-                ("sell", "market"): "01",  # 시장가 매도
-                ("sell", "limit"): "00",  # 지정가 매도
-            }
-            ord_dvsn = ord_dvsn_map.get((request.order_type, request.price_type), "00")
+            ord_dvsn = resolve_ord_dvsn(request.price_type)
 
             payload = {
                 "CANO": account_no,
@@ -86,7 +97,7 @@ class OrderService:
                 "ORD_DVSN": ord_dvsn,
                 "ORD_QTY": str(request.quantity),
                 "ORD_UNPR": (
-                    "0" if request.price_type == PriceType.MARKET.value else str(int(request.price))
+                    "0" if request.price_type in ZERO_PRICE_TYPES else str(int(request.price))
                 ),
             }
 
@@ -172,14 +183,7 @@ class OrderService:
             org_no, parsed_odno = split_order_id(order.order_id)
             odno = request.order_no or parsed_odno
 
-            # 주문 구분 코드 매핑
-            ord_dvsn_map = {
-                ("buy", "market"): "01",
-                ("buy", "limit"): "00",
-                ("sell", "market"): "01",
-                ("sell", "limit"): "00",
-            }
-            ord_dvsn = ord_dvsn_map.get((order.order_type, order.price_type), "00")
+            ord_dvsn = resolve_ord_dvsn(order.price_type)
 
             payload = {
                 "CANO": order.account_no,
@@ -271,14 +275,7 @@ class OrderService:
             # 원주문번호 추출
             org_no, odno = split_order_id(order.order_id)
 
-            # 주문 구분 코드 매핑
-            ord_dvsn_map = {
-                ("buy", "market"): "01",
-                ("buy", "limit"): "00",
-                ("sell", "market"): "01",
-                ("sell", "limit"): "00",
-            }
-            ord_dvsn = ord_dvsn_map.get((order.order_type, order.price_type), "00")
+            ord_dvsn = resolve_ord_dvsn(order.price_type)
 
             payload = {
                 "CANO": order.account_no,
@@ -290,7 +287,7 @@ class OrderService:
                 "ORD_QTY": str(new_quantity or order.order_quantity),
                 "ORD_UNPR": (
                     "0"
-                    if order.price_type == PriceType.MARKET.value
+                    if order.price_type in ZERO_PRICE_TYPES
                     else str(int(new_price or order.order_price))
                 ),
             }
@@ -379,7 +376,8 @@ class OrderService:
             tr_id = "VTTC8001R" if settings.is_paper_trading else "TTTC8001R"
             headers = {"tr_id": tr_id}
 
-            response = await self.kis_client.post(path, json=payload, headers=headers)
+            # 주식일별주문체결조회는 GET(query string) API다(이전: POST+json으로 호출해 항상 실패).
+            response = await self.kis_client.get(path, params=payload, headers=headers)
             output = response.get("output1", [])
 
             # 해당 주문 찾기

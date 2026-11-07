@@ -21,7 +21,8 @@ class OrderCreateRequestDTO(BaseDTO):
     Attributes:
         symbol: 종목코드
         order_type: 주문 유형 (buy/sell)
-        price_type: 가격 유형 (market/limit)
+        price_type: 가격 유형 (market/limit/closing)
+            - closing: 장후 시간외 종가(KIS ORD_DVSN 06). 당일 종가로 15:40~16:00에 체결되며 가격은 0.
         price: 주문 가격
         quantity: 주문 수량
         account_no: 계좌번호 (없으면 기본)
@@ -29,7 +30,9 @@ class OrderCreateRequestDTO(BaseDTO):
 
     symbol: str = Field(description="종목코드", min_length=6, max_length=20)
     order_type: str = Field(description="주문 유형 (buy/sell)", pattern="^(buy|sell)$")
-    price_type: str = Field(description="가격 유형 (market/limit)", pattern="^(market|limit)$")
+    price_type: str = Field(
+        description="가격 유형 (market/limit/closing)", pattern="^(market|limit|closing)$"
+    )
     price: Decimal = Field(description="주문 가격", ge=0)
     quantity: int = Field(description="주문 수량", gt=0)
     account_no: str | None = Field(default=None, description="계좌번호")
@@ -47,8 +50,8 @@ class OrderCreateRequestDTO(BaseDTO):
         price_type = info.data.get("price_type")
         if price_type == "limit" and v <= 0:
             raise ValueError("Price must be positive for limit order")
-        if price_type == "market" and v < 0:
-            raise ValueError("Price must be zero or positive for market order")
+        if price_type in ("market", "closing") and v < 0:
+            raise ValueError("Price must be zero or positive for market/closing order")
         return v
 
 
