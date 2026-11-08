@@ -62,9 +62,12 @@ class BacktestOrderManager:
         return schedule.sell_tax_rate
 
     def _slippage_rate(self, schedule: BacktestCostSchedule) -> Decimal:
-        if self.config.slippage_rate is not None:
-            return Decimal(str(self.config.slippage_rate))
-        return schedule.default_slippage_rate
+        base = (
+            Decimal(str(self.config.slippage_rate))
+            if self.config.slippage_rate is not None
+            else schedule.default_slippage_rate
+        )
+        return base * Decimal(str(self.config.slippage_multiplier))
 
     def _round_execution_price(
         self,

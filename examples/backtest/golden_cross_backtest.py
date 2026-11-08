@@ -24,6 +24,8 @@ from src.adapters.external.kis_api.client import KISAPIClient
 from src.application.common.indicators import TechnicalIndicators
 from src.application.domain.backtest.cost_schedule import get_backtest_cost_schedule
 from src.application.domain.backtest.data_loader import BacktestDataLoader
+from src.application.domain.backtest.dto import BacktestConfigDTO
+from src.application.domain.backtest.order_manager import BacktestOrderManager
 from src.application.domain.market_data.service import MarketDataService
 
 
@@ -52,6 +54,9 @@ class BacktestConfig:
     tax_rate: float | None = None
     slippage_rate: float | None = None
     cost_source_label: str = ""
+    # 국내 ETF 증권거래세 면제(도메인 BacktestOrderManager.is_tax_exempt와 같은 규칙·목록).
+    etf_tax_exempt: bool = True
+    tax_exempt_symbols: list[str] | None = None  # None이면 settings.etf_universe_symbols
 
     def __post_init__(self) -> None:
         schedule = get_backtest_cost_schedule(self.cost_schedule_date)
@@ -121,6 +126,13 @@ class GoldenCrossBacktester:
     ):
         self.strategy_config = strategy_config
         self.backtest_config = backtest_config
+        # 세금 면제 판정은 도메인 비용 모델을 그대로 쓴다(예제에서 ETF 판정 규칙을 복제하지 않음).
+        self._order_manager = BacktestOrderManager(
+            BacktestConfigDTO(
+                etf_tax_exempt=backtest_config.etf_tax_exempt,
+                tax_exempt_symbols=backtest_config.tax_exempt_symbols,
+            )
+        )
 
     async def run(
         self,
@@ -135,6 +147,7 @@ class GoldenCrossBacktester:
         cash = self.backtest_config.initial_capital
         position_quantity = 0
         position_entry_price = Decimal("0")
+        position_entry_cost = Decimal("0")  # 매수 총비용(체결금액+수수료+슬리피지)
         position_entry_date: datetime | None = None
         trade_id = 0
 
@@ -225,6 +238,8 @@ class GoldenCrossBacktester:
                         current_date,
                         current_trade,
                         "stop_loss",
+                        entry_cost=position_entry_cost,
+                        symbol=symbol,
                     )
                     trades.append(current_trade)
                     position_quantity = 0
@@ -241,6 +256,8 @@ class GoldenCrossBacktester:
                         current_date,
                         current_trade,
                         "take_profit",
+                        entry_cost=position_entry_cost,
+                        symbol=symbol,
                     )
                     trades.append(current_trade)
                     position_quantity = 0
@@ -267,6 +284,7 @@ class GoldenCrossBacktester:
                         if total_cost <= cash:
                             cash -= total_cost
                             position_quantity = quantity
+                            position_entry_cost = total_cost
                             position_entry_price = current_price
                             position_entry_date = current_date
 
@@ -289,6 +307,8 @@ class GoldenCrossBacktester:
                         current_date,
                         current_trade,
                         "death_cross",
+                        entry_cost=position_entry_cost,
+                        symbol=symbol,
                     )
                     trades.append(current_trade)
                     position_quantity = 0
@@ -322,11 +342,20 @@ class GoldenCrossBacktester:
                 last_date,
                 current_trade,
                 "end_of_period",
+                entry_cost=position_entry_cost,
+                symbol=symbol,
             )
             trades.append(current_trade)
 
-        # 결과 계산
-        final_capital = equity_curve[-1] if equity_curve else self.backtest_config.initial_capital
+        # 결과 계산 — 기간말 청산 후 현금이 최종 자본이다(이전: 청산 전 시가평가 equity를 써서
+        # 청산비용이 빠졌다). 마지막 자산 기록도 청산 후 값으로 맞춘다.
+        if position_quantity > 0 and equity_curve:
+            equity_curve[-1] = cash
+            if daily_equity:
+                daily_equity[-1].update(equity=float(cash), cash=float(cash), position_value=0.0)
+        final_capital = cash if position_quantity > 0 else (
+            equity_curve[-1] if equity_curve else self.backtest_config.initial_capital
+        )
         result = self._calculate_result(
             symbol, name, start_date, end_date, final_capital, trades, equity_curve, daily_equity
         )
@@ -351,18 +380,31 @@ class GoldenCrossBacktester:
         exit_date: datetime,
         trade: Trade,
         exit_reason: str,
+        *,
+        entry_cost: Decimal,
+        symbol: str,
     ) -> tuple[Decimal, Trade]:
-        """매도 실행"""
+        """매도 실행.
+
+        손익은 매수 총비용(수수료·슬리피지 포함) 대비 순매도대금으로 계산한다
+        (이전: 매수 비용 누락, 수익률은 비용 전부 누락). 국내 ETF는 매도세 면제.
+        """
         sell_amount = price * quantity
         commission = sell_amount * Decimal(str(self.backtest_config.commission_rate))
-        tax = sell_amount * Decimal(str(self.backtest_config.tax_rate))
+        tax_rate = (
+            Decimal("0")
+            if self._order_manager.is_tax_exempt(symbol)
+            else Decimal(str(self.backtest_config.tax_rate))
+        )
+        tax = sell_amount * tax_rate
         slippage = sell_amount * Decimal(str(self.backtest_config.slippage_rate))
         net_proceeds = sell_amount - commission - tax - slippage
 
         cash += net_proceeds
 
-        profit_loss = (price - entry_price) * quantity - commission - tax - slippage
-        profit_rate = float((price - entry_price) / entry_price) if entry_price > 0 else 0.0
+        basis = entry_cost if entry_cost > 0 else entry_price * quantity
+        profit_loss = net_proceeds - basis
+        profit_rate = float(profit_loss / basis) if basis > 0 else 0.0
         holding_days = (exit_date - entry_date).days if entry_date else 0
 
         trade.exit_date = exit_date

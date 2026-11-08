@@ -24,6 +24,7 @@ DB/외부 의존 없음 → 완전 단위 테스트 가능. WalkForwardReport에
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -106,8 +107,8 @@ def _is_nan(x: float | None) -> bool:
 
 
 def _num(x: float | None) -> float | None:
-    """유효한 실수면 그대로, None/NaN이면 None(mypy narrowing용)."""
-    if x is None or x != x:
+    """유한한 실수면 그대로, None/NaN/±Infinity면 None(판정 불가 → NA)."""
+    if x is None or not math.isfinite(x):
         return None
     return x
 
@@ -158,10 +159,14 @@ def evaluate_gates(inp: GateInputs, thresholds: GateThresholds | None = None) ->
 
     # G3 벤치 대비 초과수익 > 0
     bench_ret = _num(inp.benchmark_oos_return_pct)
+    strat_ret = _num(inp.oos_total_return_pct)
     if bench_ret is None:
         checks.append(GateCheck("G3", "벤치 초과수익 > 0", "NA", "벤치 OOS 수익 미제공"))
+    elif strat_ret is None:
+        # 이전: None → TypeError, +inf → PASS. 비유한 값은 판정 불가로 본다.
+        checks.append(GateCheck("G3", "벤치 초과수익 > 0", "NA", "전략 OOS 수익 미산출/비유한"))
     else:
-        excess = inp.oos_total_return_pct - bench_ret
+        excess = strat_ret - bench_ret
         ok = excess > t.min_excess_return
         checks.append(
             GateCheck(
@@ -291,6 +296,15 @@ def gate_inputs_from_report(
     test_sharpes = [s for s in test_sharpes if s is not None]
     mean_train = sum(train_sharpes) / len(train_sharpes) if train_sharpes else None
     mean_test = sum(test_sharpes) / len(test_sharpes) if test_sharpes else None
+
+    # 러너가 측정한 값(평가 날짜 정렬 벤치, G7 비용 민감도)을 명시 인자가 없을 때 사용한다.
+    if benchmark_oos_return_pct is None:
+        benchmark_oos_return_pct = getattr(report, "benchmark_oos_return_pct", None)
+    if slippage_2x_positive is None:
+        cost = getattr(report, "cost_sensitivity", None) or {}
+        measured = cost.get("slippage_2x_positive")
+        if cost.get("status") == "measured" and isinstance(measured, bool):
+            slippage_2x_positive = measured
 
     return GateInputs(
         dsr=stats.get("deflated_sharpe", float("nan")),

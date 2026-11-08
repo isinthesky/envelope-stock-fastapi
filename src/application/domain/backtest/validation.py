@@ -92,6 +92,15 @@ class WalkForwardConfig(BaseModel):
     period: WalkForwardPeriod
     candidates: list[CandidateRule] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def _unique_candidate_ids(self) -> "WalkForwardConfig":
+        # 선택 후보 해시는 candidate_id로 찾는다 — 중복 ID면 선택된 규칙과 다른 해시가 보고될 수 있다.
+        ids = [c.candidate_id for c in self.candidates]
+        duplicates = sorted({i for i in ids if ids.count(i) > 1})
+        if duplicates:
+            raise WalkForwardValidationError(f"duplicate candidate_id: {duplicates}")
+        return self
+
 
 def load_walk_forward_config(yaml_text: str) -> WalkForwardConfig:
     try:

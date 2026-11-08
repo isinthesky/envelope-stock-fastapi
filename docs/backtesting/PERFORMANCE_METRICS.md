@@ -91,6 +91,17 @@
 - 게이트(`gates.GateThresholds`): DSR ≥ 0.95, OOS Sharpe ≥ 1.0, 벤치 초과수익 ≥ 0%p,
   PBO ≤ 0.2, IS→OOS Sharpe 감쇠 ≤ 30%, OOS 거래일 ≥ 250. 판정 `evaluate_gates`.
   게이트의 OOS Sharpe는 리포트 `sharpe`(rf 3%) 값을 사용한다.
+- **G3/G4 벤치 기준(2026-11-08)**: 벤치 수익·약세장 MDD는 전략이 **실제로 평가된 OOS 날짜**(편입 종목이 없어
+  건너뛴 fold·공백 기간 제외)에서 직전 거래일 대비 일수익을 복리로 계산한다(`WalkForwardRunner._benchmark_return_over`,
+  `report.benchmark_oos_return_pct`). 날짜가 하나라도 맞지 않으면 NA. 전략·벤치 수익이 None/NaN/±Inf면 G3 = NA.
+- **G7 비용 민감도(2026-11-08)**: `WalkForwardRunner(measure_slippage_sensitivity=True)`(CLI 기본 ON, `--no-cost-sensitivity`로 끔)가
+  fold마다 **선택된 후보의 OOS만** 슬리피지 정확히 2배(`BacktestConfigDTO.slippage_multiplier`)로 1회 재실행한다(재선택 없음).
+  판정 = 스트레스 누적수익 − 같은 날짜 벤치 누적수익 > 0. 미요청·벤치 없음·슬리피지 0·날짜 불일치는 NA(→ INCOMPLETE, GO 불가).
+  결과는 `report.cost_sensitivity`.
+- **실행 명세 동결(2026-11-08)**: fold의 `selected_spec_hash`(64자리, `run_spec.digest`, schema v2)는 후보 config·국면 필터·
+  실행 옵션(체결·사이징·현금이자·청산 오버레이·진입 가드 입력 포함)·제약·비용(실행 시작 시 확정한 면세 목록 포함)·
+  선택 규칙을 해시하고, 선택 직후·OOS 전후로 재검증해 달라지면 예외다. `selected_hash`(16자리, label+config)는 하위호환
+  식별자. 같은 후보 라벨 중복은 거부(구형 `WalkForwardConfig`도 `candidate_id` 중복 거부).
 
 ## 벤치마크 비교
 

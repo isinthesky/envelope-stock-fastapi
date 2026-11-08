@@ -51,7 +51,13 @@ from src.application.domain.backtest.statistics import (
     probability_of_backtest_overfitting,
 )
 from src.application.domain.backtest.walk_forward_windows import WalkForwardWindow
+from src.application.domain.backtest.run_spec import HASH_SCHEMA_VERSION
+from src.application.domain.backtest.run_spec import digest as spec_digest
 from src.application.domain.strategy.dto import GoldenCrossConfigDTO
+
+
+# G7 게이트 정의('슬리피지 2배에도 초과수익 유지')의 고정 배율
+G7_SLIPPAGE_MULTIPLIER = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +79,9 @@ class FoldOutcome:
     excluded_symbols: int = 0
     excluded_sample: tuple[str, ...] = ()  # 제외 종목 일부(무음 누락 방지)
     test_eligible_symbols: int | None = None  # pit 모드: test 시작 시점 편입 수
+    # 실행 명세 digest(64자리, run_spec.HASH_SCHEMA_VERSION): 후보+국면+실행옵션+제약+비용 전체.
+    # selected_hash(16자리)는 하위호환용 legacy 식별자(label+config만)다.
+    selected_spec_hash: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +96,12 @@ class WalkForwardReport:
     # 연구 진단(추가 필드): 날짜가 붙은 연속 OOS 수익 / 일별 투자비중(포지션가치/자산)
     oos_dated_returns: list[tuple[datetime, float]] = field(default_factory=list)
     oos_exposure: list[tuple[datetime, float]] = field(default_factory=list)
+    # 실제 평가된 OOS 날짜와 같은 날짜집합의 벤치 누적수익(%) — 건너뛴 fold 기간을 포함하지 않는다.
+    benchmark_oos_return_pct: float | None = None
+    # G7 비용 민감도(선택 후보 OOS를 슬리피지 배율로 재실행): status measured|na, reason, ...
+    cost_sensitivity: dict = field(default_factory=dict)
+    # 실행 명세 메타: hash_schema_version, run_digest, candidate_spec_hashes
+    spec: dict = field(default_factory=dict)
 
 
 def _metrics(result: BacktestResultDTO) -> dict:
@@ -216,6 +231,7 @@ class WalkForwardRunner:
         n_trials: int | None = None,
         execution: PortfolioExecutionOptions | None = None,
         eligibility: str = "legacy",
+        measure_slippage_sensitivity: bool = False,
     ) -> None:
         """
         Args:
@@ -232,6 +248,13 @@ class WalkForwardRunner:
         """
         if not candidates:
             raise ValueError("at least one candidate config required")
+        labels = [c.label for c in candidates]
+        if len(set(labels)) != len(labels):
+            # 선택은 라벨로 식별·보고되므로 중복 라벨은 다른 후보의 결과/해시를 가리킬 수 있다.
+            raise ValueError(
+                f"duplicate candidate labels: {sorted({x for x in labels if labels.count(x) > 1})}"
+            )
+        self.measure_slippage_sensitivity = measure_slippage_sensitivity
         self.candidates = candidates
         self.constraints = constraints or PortfolioConstraints()
         self.backtest_config = backtest_config or BacktestConfigDTO()
@@ -272,6 +295,18 @@ class WalkForwardRunner:
     ) -> WalkForwardReport:
         if not panels or not windows:
             raise ValueError("panels and windows required")
+
+        # 실행 명세 동결: 면세 목록을 실제 값으로 확정한 뒤 후보별 명세 digest를 고정한다.
+        # 선택 직후·OOS 전후로 재계산해 달라지면 예외(선택 당시와 같은 조건의 OOS임을 보장).
+        run_config = self._resolved_backtest_config()  # 원본은 보존, 실행 단위 스냅샷만 사용
+        spec_hashes = {
+            c.label: spec_digest(self._candidate_spec(c, run_config)) for c in self.candidates
+        }
+        run_digest = spec_digest(
+            {"candidates": [spec_hashes[c.label] for c in self.candidates], "windows": windows}
+        )
+        stress_config = self._stress_config(run_config)
+        stress_segments: list[list[DailyStatsDTO]] = []
 
         days = sorted(set(trading_days))
         day_index = {d: i for i, d in enumerate(days)}
@@ -315,7 +350,7 @@ class WalkForwardRunner:
                 engine = PortfolioParityEngine(cand.config, self.constraints, self.execution)
                 res = engine.run(
                     train_slice,
-                    self.backtest_config,
+                    run_config,
                     active_from=w.train_start,
                     entry_allowed_dates=self._allowed_dates_for(cand.regime_filter),
                 )
@@ -331,6 +366,8 @@ class WalkForwardRunner:
 
             assert best_candidate is not None and best_result is not None
             selected_hash = self._freeze(best_candidate)
+            selected_spec_hash = spec_hashes[best_candidate.label]
+            self._verify_spec(best_candidate, selected_spec_hash, run_config)
 
             # 2) 동결 config로 OOS test (fold마다 플랫 시작)
             test_lb_start = self._lookback_start(days, day_index, w.test_start)
@@ -347,10 +384,22 @@ class WalkForwardRunner:
             )
             test_res = test_engine.run(
                 test_slice,
-                self.backtest_config,
+                run_config,
                 active_from=w.test_start,
                 entry_allowed_dates=self._allowed_dates_for(best_candidate.regime_filter),
             )
+            self._verify_spec(best_candidate, selected_spec_hash, run_config)
+            if stress_config is not None:
+                # 사전 정의 진단: 같은 선택 후보·같은 OOS 창을 슬리피지 배율로 1회 재실행(재선택 없음)
+                stress_res = PortfolioParityEngine(
+                    best_candidate.config, self.constraints, self.execution
+                ).run(
+                    test_slice,
+                    stress_config,
+                    active_from=w.test_start,
+                    entry_allowed_dates=self._allowed_dates_for(best_candidate.regime_filter),
+                )
+                stress_segments.append(stress_res.result.daily_stats)
 
             folds.append(
                 FoldOutcome(
@@ -358,6 +407,7 @@ class WalkForwardRunner:
                     eligible_symbols=len(eligible),
                     selected_label=best_candidate.label,
                     selected_hash=selected_hash,
+                    selected_spec_hash=selected_spec_hash,
                     train=_metrics(best_result),
                     test=_metrics(test_res.result),
                     excluded_symbols=len(excluded),
@@ -369,8 +419,12 @@ class WalkForwardRunner:
             )
             oos_segments.append(test_res.result.daily_stats)
 
-        oos, oos_dated = self._stitch_oos(oos_segments, self.backtest_config.initial_capital)
+        oos, oos_dated = self._stitch_oos(oos_segments, run_config.initial_capital)
         oos_returns = [r for _, r in oos_dated]
+        bench_ret = self._benchmark_return_over([d for d, _ in oos_dated])
+        cost_sensitivity = self._cost_sensitivity(
+            run_config, stress_config, stress_segments, oos_dated, bench_ret
+        )
         stats = self._overfitting_stats(oos_returns, trial_sharpes, cand_fold_matrix, trials)
         # 국면 분해(벤치마크 제공 시): 2022 약세장 OOS 성과 격리
         if self.benchmark is not None and oos_dated:
@@ -388,6 +442,13 @@ class WalkForwardRunner:
             stats=stats,
             oos_dated_returns=oos_dated,
             oos_exposure=stitch_oos_exposure(oos_segments),
+            benchmark_oos_return_pct=bench_ret,
+            cost_sensitivity=cost_sensitivity,
+            spec={
+                "hash_schema_version": HASH_SCHEMA_VERSION,
+                "run_digest": run_digest,
+                "candidate_spec_hashes": dict(spec_hashes),
+            },
         )
 
     # ==================== helpers ====================
@@ -451,8 +512,117 @@ class WalkForwardRunner:
 
     @staticmethod
     def _freeze(candidate: WalkForwardCandidate) -> str:
+        """legacy 식별자(label+config, 16자리). 실행 조건 전체는 `_candidate_spec`/`selected_spec_hash`."""
         payload = f"{candidate.label}:{candidate.config.model_dump_json()}"
         return sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+    def _resolved_backtest_config(self) -> BacktestConfigDTO:
+        """면세 목록이 None(=운영 settings 참조)이면 실행 시작 시 실제 목록으로 확정한다.
+
+        실행 도중 settings가 바뀌어도 결과가 달라지지 않게 하고, 그 목록을 명세 digest에 포함하기 위함.
+        """
+        cfg = self.backtest_config
+        if cfg.etf_tax_exempt and cfg.tax_exempt_symbols is None:
+            from src.settings.config import settings
+
+            resolved = sorted({s.strip() for s in settings.etf_universe_symbols if s and s.strip()})
+            cfg = BacktestConfigDTO.model_validate(
+                {**cfg.model_dump(), "tax_exempt_symbols": resolved}
+            )
+        return cfg
+
+    def _candidate_spec(self, candidate: WalkForwardCandidate, config: BacktestConfigDTO) -> dict:
+        """선택~OOS 사이에 바뀌면 안 되는 실행 명세(결과 지표는 포함하지 않는다)."""
+        return {
+            "hash_schema_version": HASH_SCHEMA_VERSION,
+            "candidate": candidate,
+            "execution": self.execution,
+            "constraints": self.constraints,
+            "backtest_config": config,
+            "selection_metric": self.selection_metric,
+            "eligibility": self.eligibility,
+            "lookback_trading_days": self.lookback_trading_days,
+            "min_fold_coverage": self.min_fold_coverage,
+        }
+
+    def _verify_spec(
+        self, candidate: WalkForwardCandidate, expected: str, config: BacktestConfigDTO
+    ) -> None:
+        actual = spec_digest(self._candidate_spec(candidate, config))
+        if actual != expected:
+            raise RuntimeError(
+                f"walk-forward spec changed between selection and OOS for '{candidate.label}' "
+                f"({expected[:12]} → {actual[:12]})"
+            )
+
+    def _stress_config(self, cfg: BacktestConfigDTO) -> BacktestConfigDTO | None:
+        """G7 정의 그대로 슬리피지 정확히 2배(배율 가변을 허용하면 1.1배 결과가 '2배 통과'로 둔갑)."""
+        if not self.measure_slippage_sensitivity:
+            return None
+        return BacktestConfigDTO.model_validate(
+            {
+                **cfg.model_dump(),
+                "slippage_multiplier": cfg.slippage_multiplier * G7_SLIPPAGE_MULTIPLIER,
+            }
+        )
+
+    def _benchmark_return_over(self, oos_dates: list[Any]) -> float | None:
+        """평가된 OOS 날짜 각각의 벤치 일수익(직전 거래일 종가 대비)을 복리로 누적한 %.
+
+        전략 OOS(평가 fold의 test 일만 이어붙임)와 같은 날짜집합이라 건너뛴 fold·공백 기간이 섞이지 않는다.
+        """
+        if self.benchmark is None or not oos_dates:
+            return None
+        bench = self.benchmark.sort_values("timestamp")
+        closes = [float(c) for c in bench["close"]]
+        days = [self._row_date(ts) for ts in bench["timestamp"]]
+        index = {d: i for i, d in enumerate(days)}
+        growth = 1.0
+        used = 0
+        for raw in oos_dates:
+            i = index.get(self._row_date(raw))
+            if i is None or i == 0 or closes[i - 1] <= 0:
+                return None  # 벤치 날짜 불일치 → 비교 불가(NA)
+            growth *= closes[i] / closes[i - 1]
+            used += 1
+        return (growth - 1.0) * 100.0 if used else None
+
+    def _cost_sensitivity(
+        self,
+        cfg: BacktestConfigDTO,
+        stress_config: BacktestConfigDTO | None,
+        stress_segments: list[list[DailyStatsDTO]],
+        oos_dated: list[tuple[datetime, float]],
+        bench_ret: float | None,
+    ) -> dict:
+        if stress_config is None:
+            return {"status": "na", "reason": "not_requested"}
+        if not cfg.use_slippage or (cfg.slippage_rate is not None and cfg.slippage_rate == 0):
+            return {"status": "na", "reason": "no_effective_slippage"}
+        if not oos_dated:
+            return {"status": "na", "reason": "no_oos"}
+        if bench_ret is None:
+            return {"status": "na", "reason": "benchmark_unavailable"}
+        _, stress_dated = self._stitch_oos(stress_segments, cfg.initial_capital)
+        if [d for d, _ in stress_dated] != [d for d, _ in oos_dated]:
+            return {"status": "na", "reason": "stress_dates_mismatch"}
+        baseline = 1.0
+        for _, r in oos_dated:
+            baseline *= 1.0 + r
+        stressed = 1.0
+        for _, r in stress_dated:
+            stressed *= 1.0 + r
+        stress_ret = (stressed - 1.0) * 100.0
+        excess = stress_ret - bench_ret
+        return {
+            "status": "measured",
+            "slippage_multiplier": G7_SLIPPAGE_MULTIPLIER,
+            "baseline_return_pct": (baseline - 1.0) * 100.0,
+            "stress_return_pct": stress_ret,
+            "benchmark_return_pct": bench_ret,
+            "stress_excess_pct": excess,
+            "slippage_2x_positive": excess > 0,
+        }
 
     @staticmethod
     def _daily_sharpe(daily_stats: list[DailyStatsDTO]) -> float:

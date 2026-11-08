@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -218,37 +219,41 @@ async def _load_panels(
     return panels, bench_df
 
 
-def _benchmark_oos_metrics(bench_df, trading_days, windows) -> tuple[float | None, float | None]:
-    """OOS 창(union)에서 벤치 buy&hold 수익%와 약세장 MDD%를 산출한다(G3/G4 근거).
+def _benchmark_oos_metrics(bench_df, report) -> tuple[float | None, float | None]:
+    """전략이 **실제로 평가된** OOS 날짜에서 벤치 수익%와 약세장 MDD%를 산출한다(G3/G4 근거).
 
-    - buy&hold 수익: OOS 첫 거래일 종가 → 마지막 거래일 종가.
-    - 약세장 MDD: 벤치 자체 국면 라벨로 OOS 일별수익을 분해한 bear MDD.
-    두 값 모두 전략 OOS와 동일 날짜집합·동일 국면라벨을 써 apples-to-apples 비교.
+    - 수익: 러너가 같은 날짜집합으로 복리 누적한 `report.benchmark_oos_return_pct`.
+    - 약세장 MDD: 같은 날짜들의 벤치 일수익을 벤치 국면 라벨로 분해한 bear MDD.
+    이전에는 요청한 모든 창의 union(편입 종목이 없어 건너뛴 fold 기간 포함)을 써서 전략과 기간이 달랐다.
     """
-    # OOS 날짜집합(fold test 창 union ∩ 거래일)
-    oos_dates = sorted(
-        {d for d in trading_days if any(w.test_start <= d <= w.test_end for w in windows)}
-    )
+    oos_dates = sorted({ts.date() if hasattr(ts, "date") else ts for ts, _ in report.oos_dated_returns})
     if len(oos_dates) < 2:
         return None, None
-    close_by_date = {
-        ts.date(): (ts, float(c)) for ts, c in zip(bench_df["timestamp"], bench_df["close"])
-    }
-    oos_dates = [d for d in oos_dates if d in close_by_date]
-    if len(oos_dates) < 2:
-        return None, None
+    bench = bench_df.sort_values("timestamp")
+    bench_ts = list(bench["timestamp"])
+    bench_close = [float(c) for c in bench["close"]]
+    index = {ts.date(): i for i, ts in enumerate(bench_ts)}
 
-    first_c = close_by_date[oos_dates[0]][1]
-    last_c = close_by_date[oos_dates[-1]][1]
-    oos_return_pct = (last_c / first_c - 1.0) * 100.0 if first_c > 0 else None
+    oos_return_pct = report.benchmark_oos_return_pct
 
-    # 벤치 일별수익(연속 OOS 거래일 기준) → 국면 분해 → bear MDD
+    # 평가된 OOS 날짜마다 벤치의 직전 거래일 대비 수익(건너뛴 fold·공백 구간을 한 번에 잇지 않음)
     pairs: list[tuple] = []
-    for i in range(1, len(oos_dates)):
-        prev_c = close_by_date[oos_dates[i - 1]][1]
-        cur_ts, cur_c = close_by_date[oos_dates[i]]
-        if prev_c > 0:
-            pairs.append((cur_ts, cur_c / prev_c - 1.0))
+    for d in oos_dates:
+        i = index.get(d)
+        prev_c = bench_close[i - 1] if i else None
+        cur_c = bench_close[i] if i is not None else None
+        if (
+            i is None
+            or i == 0
+            or prev_c is None
+            or cur_c is None
+            or not (math.isfinite(prev_c) and math.isfinite(cur_c))
+            or prev_c <= 0
+            or cur_c <= 0
+        ):
+            # 비교 기간이 불완전하면 판정하지 않는다(부분 날짜로 G4를 내지 않음 → NA)
+            return oos_return_pct, None
+        pairs.append((bench_ts[i], cur_c / prev_c - 1.0))
     bear_mdd = None
     if pairs:
         regimes = classify_regimes(bench_df, long_ma=200)
@@ -340,17 +345,17 @@ async def run(args) -> None:
         benchmark=bench_df,  # 국면 분해 활성화
         regime_long_ma=200,
         n_trials=args.n_trials,
+        measure_slippage_sensitivity=not args.no_cost_sensitivity,
     )
     print(f"[wf] running {len(candidates)} candidates × {len(windows)} folds …", flush=True)
     report = runner.run(panels, trading_days, windows)
 
-    # ── P5 Go/No-Go 게이트: 벤치 OOS 수익·약세장 MDD를 채워 판정
-    bench_oos_ret, bench_bear_mdd = _benchmark_oos_metrics(bench_df, trading_days, windows)
+    # ── P5 Go/No-Go 게이트: 평가 날짜 정렬 벤치 수익·약세장 MDD + G7 비용 민감도(러너 측정)
+    bench_oos_ret, bench_bear_mdd = _benchmark_oos_metrics(bench_df, report)
     gate_inputs = gate_inputs_from_report(
         report,
         benchmark_oos_return_pct=bench_oos_ret,
         benchmark_bear_mdd=bench_bear_mdd,
-        slippage_2x_positive=None,  # 비용 민감도는 별도 실행 필요 → NA(미측정)
     )
     gate_result = evaluate_gates(gate_inputs)
     # 게이트 판정을 리포트 상단(headline 다음)에 삽입
@@ -385,6 +390,8 @@ async def run(args) -> None:
                 "use_tax": not args.no_tax,
                 "oos": report.oos,
                 "stats": report.stats,
+                "spec": report.spec,
+                "cost_sensitivity": report.cost_sensitivity,
                 "gate": {
                     "verdict": gate_result.verdict,
                     "reason": gate_result.reason,
@@ -405,6 +412,8 @@ async def run(args) -> None:
                         "eligible": f.eligible_symbols,
                         "excluded": f.excluded_symbols,
                         "selected": f.selected_label,
+                        "selected_hash": f.selected_hash,
+                        "selected_spec_hash": f.selected_spec_hash,
                         "train_metrics": f.train,
                         "test_metrics": f.test,
                     }
@@ -481,7 +490,6 @@ async def run_regime_ab(args) -> None:
         max_positions=args.max_positions, allocation_ratio=args.alloc
     )
     backtest_config = BacktestConfigDTO(execution_timing="same_close", use_tax=not args.no_tax)
-    bench_oos_ret, bench_bear_mdd = _benchmark_oos_metrics(bench_df, trading_days, windows)
 
     results: list[dict] = []
     for name, filt in REGIME_VARIANTS.items():
@@ -494,14 +502,15 @@ async def run_regime_ab(args) -> None:
             benchmark=bench_df,
             regime_long_ma=200,
             n_trials=args.n_trials,
+            measure_slippage_sensitivity=not args.no_cost_sensitivity,
         )
         print(f"[wf-ab] variant={name} ({filt.describe() if filt else 'no-filter'}) …", flush=True)
         report = runner.run(panels, trading_days, windows)
+        bench_oos_ret, bench_bear_mdd = _benchmark_oos_metrics(bench_df, report)
         gate_inputs = gate_inputs_from_report(
             report,
             benchmark_oos_return_pct=bench_oos_ret,
             benchmark_bear_mdd=bench_bear_mdd,
-            slippage_2x_positive=None,
         )
         gate = evaluate_gates(gate_inputs)
         o, st = report.oos, report.stats
@@ -525,8 +534,17 @@ async def run_regime_ab(args) -> None:
                 "trades": trades,
                 "stats": {
                     k: st.get(k)
-                    for k in ("deflated_sharpe", "pbo", "oos_sharpe_ci_low", "oos_sharpe_ci_high")
+                    for k in (
+                        "deflated_sharpe",
+                        "pbo",
+                        "oos_sharpe_ci_low",
+                        "oos_sharpe_ci_high",
+                        "n_trials",
+                        "n_trials_source",
+                    )
                 },
+                "spec": report.spec,
+                "cost_sensitivity": report.cost_sensitivity,
                 "regime": regime,
                 "gate": {
                     "verdict": gate.verdict,
@@ -732,6 +750,11 @@ def main() -> None:
         help="symbol->sector JSON 파일. 섹터 캡 활성화 시 필수",
     )
     ap.add_argument("--no-tax", action="store_true")
+    ap.add_argument(
+        "--no-cost-sensitivity",
+        action="store_true",
+        help="G7 비용 민감도(선택 후보 OOS를 슬리피지 2배로 재실행) 측정 생략 → G7=NA(INCOMPLETE)",
+    )
     ap.add_argument(
         "--output-dir",
         type=str,

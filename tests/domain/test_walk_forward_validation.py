@@ -139,3 +139,9 @@ def test_overlapping_train_and_test_windows_fail_validation() -> None:
             ),
             candidates=[_candidate("baseline", train_cagr=8.0, test_cagr=7.0)],
         )
+
+
+def test_duplicate_candidate_ids_are_rejected() -> None:
+    # 선택 후보 해시는 candidate_id로 찾으므로 중복 ID면 다른 후보의 해시가 보고될 수 있다(2026-11-08).
+    with pytest.raises(WalkForwardValidationError, match="duplicate candidate_id"):
+        _config([_candidate("same", 10.0, 5.0), _candidate("same", 12.0, 1.0)])

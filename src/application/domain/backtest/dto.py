@@ -58,6 +58,12 @@ class BacktestConfigDTO(BaseDTO):
         ge=0.0,
         le=0.01,
     )
+    slippage_multiplier: float = Field(
+        default=1.0,
+        gt=0.0,
+        le=10.0,
+        description="적용 슬리피지율 배수(비용 민감도 G7 스트레스용, 기본 1). 오버라이드·스케줄 기본값 모두에 곱한다",
+    )
     use_commission: bool = Field(default=True, description="수수료 사용 여부")
     use_tax: bool = Field(default=True, description="세금 사용 여부")
     use_slippage: bool = Field(default=True, description="슬리피지 사용 여부")
